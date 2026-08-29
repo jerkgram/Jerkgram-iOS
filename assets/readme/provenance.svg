@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 620" role="img" aria-labelledby="title desc">
+<title id="title">Jerkgram release provenance</title>
+<desc id="desc">Official Telegram flows into the exact materialized Jerkgram source, which produces both the Stable IPA and public source snapshot.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#070b12"/><stop offset="1" stop-color="#0b121d"/></linearGradient>
+  <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff" stop-opacity=".095"/><stop offset="1" stop-color="#fff" stop-opacity=".025"/></linearGradient>
+</defs>
+<rect width="1600" height="620" rx="40" fill="url(#bg)"/>
+<g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+  <text x="90" y="105" fill="#f2efe8" opacity=".58" font-size="26" font-weight="700" letter-spacing="6">RELEASE PROVENANCE</text>
+  <g transform="translate(80 195)">
+    <rect width="380" height="220" rx="34" fill="url(#card)" stroke="#fff" stroke-opacity=".11"/>
+    <text x="190" y="92" text-anchor="middle" fill="#f2efe8" font-size="48" font-weight="730">UPSTREAM</text>
+    <text x="190" y="148" text-anchor="middle" fill="#f2efe8" opacity=".52" font-size="31">Telegram iOS 12.9.2</text>
+  </g>
+  <path d="M485 305 H610" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round"/><path d="M592 287 L614 305 L592 323" fill="none" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(635 170)">
+    <rect width="430" height="270" rx="38" fill="#f2efe8"/>
+    <text x="215" y="108" text-anchor="middle" fill="#10161e" font-size="54" font-weight="760">JERKGRAM</text>
+    <text x="215" y="170" text-anchor="middle" fill="#10161e" opacity=".62" font-size="32" font-weight="650">EXACT RELEASE SOURCE</text>
+    <text x="215" y="218" text-anchor="middle" fill="#10161e" opacity=".42" font-size="25">materialized · verified</text>
+  </g>
+  <path d="M1090 250 H1190" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round"/><path d="M1173 232 L1195 250 L1173 268" fill="none" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M1090 360 H1190" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round"/><path d="M1173 342 L1195 360 L1173 378" fill="none" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(1215 185)">
+    <rect width="305" height="130" rx="30" fill="url(#card)" stroke="#fff" stroke-opacity=".11"/>
+    <text x="152" y="82" text-anchor="middle" fill="#f2efe8" font-size="43" font-weight="730">STABLE IPA</text>
+  </g>
+  <g transform="translate(1215 335)">
+    <rect width="305" height="130" rx="30" fill="url(#card)" stroke="#fff" stroke-opacity=".11"/>
+    <text x="152" y="68" text-anchor="middle" fill="#f2efe8" font-size="38" font-weight="730">PUBLIC</text>
+    <text x="152" y="105" text-anchor="middle" fill="#f2efe8" opacity=".58" font-size="25">SOURCE SNAPSHOT</text>
+  </g>
+  <text x="80" y="535" fill="#f2efe8" opacity=".42" font-size="28">One Stable release · one source tag · one verifiable chain.</text>
+</g>
+</svg>

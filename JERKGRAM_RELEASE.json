@@ -1,0 +1,27 @@
+{
+  "$schema": "./docs/JERKGRAM_RELEASE.schema.json",
+  "schemaVersion": 1,
+  "project": "Jerkgram",
+  "repository": "jerkgram/Jerkgram-iOS",
+  "status": "pre-release",
+  "jerkgramVersion": null,
+  "buildNumber": null,
+  "upstream": {
+    "repository": "TelegramMessenger/Telegram-iOS",
+    "tag": "release-12.9.2",
+    "commit": "6ad963e5b62d354da79040f388ae2b9132fb17b8"
+  },
+  "publicSourceTag": null,
+  "ipa": {
+    "filename": null,
+    "sha256": null
+  },
+  "sourceSnapshot": {
+    "filename": null,
+    "sha256": null
+  },
+  "sourceManifest": {
+    "filename": null,
+    "sha256": null
+  }
+}

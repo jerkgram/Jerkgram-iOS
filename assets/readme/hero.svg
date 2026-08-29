@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
+<title id="title">Jerkgram — Telegram, with more control.</title>
+<desc id="desc">Dark Jerkgram brand banner with editorial typography and orbital source motif.</desc>
+<defs>
+  <radialGradient id="glow" cx="78%" cy="30%" r="68%"><stop offset="0" stop-color="#496686" stop-opacity=".34"/><stop offset=".62" stop-color="#172435" stop-opacity=".08"/><stop offset="1" stop-color="#070b12" stop-opacity="0"/></radialGradient>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#070b12"/><stop offset="1" stop-color="#0b121d"/></linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff" stop-opacity=".10"/><stop offset="1" stop-color="#ffffff" stop-opacity=".025"/></linearGradient>
+</defs>
+<rect width="1600" height="760" rx="42" fill="url(#bg)"/>
+<rect width="1600" height="760" rx="42" fill="url(#glow)"/>
+<g fill="none" stroke="#f2efe8" stroke-opacity=".055">
+  <circle cx="1308" cy="287" r="198"/><circle cx="1308" cy="287" r="292"/><circle cx="1308" cy="287" r="386"/>
+</g>
+<circle cx="1441" cy="143" r="9" fill="#f2efe8" fill-opacity=".86"/>
+<g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" fill="#f2efe8">
+  <text x="112" y="158" font-size="28" font-weight="700" letter-spacing="7" opacity=".62">ALTERNATIVE TELEGRAM CLIENT FOR iOS</text>
+  <text x="102" y="348" font-size="172" font-weight="760" letter-spacing="-12">JERKGRAM</text>
+  <text x="112" y="441" font-size="62" font-weight="650" letter-spacing="-2">Telegram, with more control.</text>
+  <text x="112" y="524" font-size="34" font-weight="500" opacity=".56">Context survives. Source stays verifiable.</text>
+</g>
+<g transform="translate(110 594)">
+  <rect width="268" height="72" rx="24" fill="url(#glass)" stroke="#fff" stroke-opacity=".12"/>
+  <text x="134" y="46" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="27" font-weight="700" fill="#f2efe8">iOS</text>
+</g>
+<g transform="translate(400 594)">
+  <rect width="390" height="72" rx="24" fill="url(#glass)" stroke="#fff" stroke-opacity=".12"/>
+  <text x="195" y="46" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="27" font-weight="700" fill="#f2efe8">TELEGRAM 12.9.2</text>
+</g>
+<g transform="translate(812 594)">
+  <rect width="412" height="72" rx="24" fill="url(#glass)" stroke="#fff" stroke-opacity=".12"/>
+  <text x="206" y="46" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="27" font-weight="700" fill="#f2efe8">GPL-2.0-OR-LATER</text>
+</g>
+</svg>

@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible Jerkgram problem
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not post private messages, credentials, tokens or sensitive user data.
+  - type: input
+    id: version
+    attributes:
+      label: Jerkgram version / build
+      placeholder: "e.g. Build 124 or v1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and iOS version
+      placeholder: "e.g. iPhone 14 Pro, iOS 26.x"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: "1. Open …
+2. Tap …
+3. Observe …"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional evidence
+      description: Add sanitized screenshots, recordings or logs only if useful.

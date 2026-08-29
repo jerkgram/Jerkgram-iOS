@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a focused Jerkgram improvement
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What user problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: telegram
+    attributes:
+      label: Relationship to Telegram behavior
+      description: If relevant, explain how Official Telegram behaves today.

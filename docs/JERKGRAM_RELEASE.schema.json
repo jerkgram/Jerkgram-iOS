@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Jerkgram Stable Release Provenance",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "project",
+    "repository",
+    "status",
+    "upstream",
+    "ipa",
+    "sourceSnapshot",
+    "sourceManifest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "project": {
+      "const": "Jerkgram"
+    },
+    "repository": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "pre-release",
+        "stable"
+      ]
+    },
+    "jerkgramVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "buildNumber": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
+    },
+    "upstream": {
+      "type": "object",
+      "required": [
+        "repository",
+        "tag",
+        "commit"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "publicSourceTag": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ipa": {
+      "$ref": "#/$defs/artifact"
+    },
+    "sourceSnapshot": {
+      "$ref": "#/$defs/artifact"
+    },
+    "sourceManifest": {
+      "$ref": "#/$defs/artifact"
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": [
+        "filename",
+        "sha256"
+      ],
+      "properties": {
+        "filename": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}
