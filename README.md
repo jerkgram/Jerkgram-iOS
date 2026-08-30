@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://jerkgram.github.io/"><strong>Website</strong></a> ·
+  <a href="https://github.com/jerkgram/Jerkgram-iOS/releases"><strong>Releases</strong></a> ·
   <a href="https://t.me/JerkgramApp"><strong>Stable channel</strong></a> ·
   <a href="https://t.me/JerkgramCommunity"><strong>Community</strong></a> ·
   <a href="docs/SOURCE_TRANSPARENCY.md"><strong>Source transparency</strong></a>
@@ -81,13 +82,15 @@ Read the full contract in [`docs/SOURCE_TRANSPARENCY.md`](docs/SOURCE_TRANSPAREN
 
 ## Releases
 
-**Stable builds are published through [@JerkgramApp](https://t.me/JerkgramApp).**
+Stable releases are distributed through both **[GitHub Releases](https://github.com/jerkgram/Jerkgram-iOS/releases)** and **[@JerkgramApp](https://t.me/JerkgramApp)**.
 
-GitHub is the canonical public source location. It is **not** used as a random IPA mirror.
+Each GitHub Stable release is the canonical release page for that version and is intended to contain the downloadable IPA, release notes, release provenance and links to the corresponding public source.
+
+The Jerkgram website may link its **Download IPA** action directly to the IPA asset attached to the matching GitHub Release, while **View on GitHub** opens the full release page.
 
 Beta testing, bug reports and feedback live in [@JerkgramCommunity](https://t.me/JerkgramCommunity).
 
-See [`docs/RELEASES.md`](docs/RELEASES.md) for the release/source relationship.
+See [`docs/RELEASES.md`](docs/RELEASES.md) for the release/source relationship and artifact naming.
 
 ## Building from source
 

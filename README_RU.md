@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://jerkgram.github.io/"><strong>Сайт</strong></a> ·
+  <a href="https://github.com/jerkgram/Jerkgram-iOS/releases"><strong>Релизы</strong></a> ·
   <a href="https://t.me/JerkgramApp"><strong>Stable-канал</strong></a> ·
   <a href="https://t.me/JerkgramCommunity"><strong>Сообщество</strong></a> ·
   <a href="docs/SOURCE_TRANSPARENCY.md"><strong>Прозрачность исходников</strong></a>
@@ -75,11 +76,15 @@ Source manifest
 
 ## Релизы
 
-**Stable-сборки публикуются через [@JerkgramApp](https://t.me/JerkgramApp).**
+Stable-релизы распространяются через **[GitHub Releases](https://github.com/jerkgram/Jerkgram-iOS/releases)** и **[@JerkgramApp](https://t.me/JerkgramApp)**.
 
-GitHub — каноническое место публичных исходников, а **не случайное зеркало IPA**.
+Страница конкретного Stable-релиза на GitHub является канонической страницей этой версии и предназначена для IPA, release notes, данных о соответствии релиза исходникам и ссылок на соответствующий public source.
+
+Кнопка **Download IPA** на сайте Jerkgram может вести напрямую на IPA asset соответствующего GitHub Release, а **View on GitHub** — на полную страницу релиза.
 
 Beta-тестирование, баг-репорты и обратная связь: [@JerkgramCommunity](https://t.me/JerkgramCommunity).
+
+Подробнее о связи релиза и исходников: [`docs/RELEASES.md`](docs/RELEASES.md).
 
 ## Сборка из исходников
 
