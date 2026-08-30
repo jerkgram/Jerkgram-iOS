@@ -53,6 +53,8 @@ The IPA asset name should stay predictable within a release so the website can l
 
 ## First Stable release checklist
 
+The detailed operator checklist and copy-ready GitHub Release body live in [`RELEASE_TEMPLATE.md`](RELEASE_TEMPLATE.md).
+
 Before a release is marked Stable:
 
 1. freeze the exact final public source snapshot;
