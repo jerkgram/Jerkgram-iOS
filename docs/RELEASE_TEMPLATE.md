@@ -137,6 +137,7 @@ See [`LICENSE`](https://github.com/jerkgram/Jerkgram-iOS/blob/v<VERSION>/LICENSE
 - [ ] Verify `JERKGRAM_RELEASE.json` validates against `docs/JERKGRAM_RELEASE.schema.json`.
 - [ ] Verify the release page contains no `<PLACEHOLDER>` text.
 - [ ] Verify there are no accidental internal/dev files in the tagged public tree.
+- [ ] Extract and verify the exact final IPA metadata required by the AltStore source, including bundle identifier, version/build, minimum OS and complete app permissions; do not infer entitlements or privacy usage descriptions.
 - [ ] Verify the release is not marked pre-release if this is the intended Stable.
 
 ### 7. Publish and distribute
@@ -144,8 +145,14 @@ See [`LICENSE`](https://github.com/jerkgram/Jerkgram-iOS/blob/v<VERSION>/LICENSE
 - [ ] Publish the GitHub Release.
 - [ ] Open the public release page in a logged-out/private browser session.
 - [ ] Test the IPA asset download without GitHub authentication.
-- [ ] Update the website **Download IPA** action to the exact GitHub Release IPA asset.
+- [ ] Update `jerkgram.github.io/latest.json` with the exact Stable release metadata and canonical GitHub Release IPA asset.
+- [ ] Update `jerkgram.github.io/altstore-source.json` from the verified final IPA metadata.
+- [ ] Update the canonical block in `jerkgram.github.io/mirrors.json`; do not add unverified mirrors.
+- [ ] Verify the website **Download IPA** action points to the exact GitHub Release IPA asset.
 - [ ] Verify **View on GitHub** opens this release.
+- [ ] Validate the AltStore source and test the same source URL in SideStore.
+- [ ] Verify the website repository contains no `.ipa` copy.
+- [ ] Verify `latest.json`, `JERKGRAM_RELEASE.json`, the GitHub Release, Telegram announcement and every verified mirror use the same IPA SHA-256.
 - [ ] Publish the matching Stable announcement in [@JerkgramApp](https://t.me/JerkgramApp).
 - [ ] Include the same version number and IPA SHA-256 in the Telegram announcement.
 - [ ] Verify the website, GitHub and Telegram all point to the same Stable version.

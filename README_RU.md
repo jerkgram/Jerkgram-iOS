@@ -82,6 +82,8 @@ Stable-релизы распространяются через **[GitHub Releas
 
 Кнопка **Download IPA** на сайте Jerkgram может вести напрямую на IPA asset соответствующего GitHub Release, а **View on GitHub** — на полную страницу релиза.
 
+**AltStore Classic** и **SideStore** используют единый официальный AltStore source Jerkgram: [`https://jerkgram.github.io/altstore-source.json`](https://jerkgram.github.io/altstore-source.json). Этот JSON содержит только metadata: обе системы устанавливают и обновляют тот же canonical IPA из GitHub Release, отдельного Jerkgram JSON для SideStore нет.
+
 Beta-тестирование, баг-репорты и обратная связь: [@JerkgramCommunity](https://t.me/JerkgramCommunity).
 
 Подробнее о связи релиза и исходников: [`docs/RELEASES.md`](docs/RELEASES.md).

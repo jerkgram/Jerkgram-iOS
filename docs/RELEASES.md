@@ -8,6 +8,9 @@ Jerkgram uses GitHub Releases and Telegram as complementary official Stable dist
 - **Stable announcements and Telegram distribution:** [@JerkgramApp](https://t.me/JerkgramApp)
 - **Public Stable source:** `jerkgram/Jerkgram-iOS`
 - **Beta discussion and feedback:** [@JerkgramCommunity](https://t.me/JerkgramCommunity)
+- **Product/download entry point:** [jerkgram.github.io](https://jerkgram.github.io/)
+- **AltStore Classic + SideStore source:** [`https://jerkgram.github.io/altstore-source.json`](https://jerkgram.github.io/altstore-source.json)
+- **Canonical/mirror metadata:** [`https://jerkgram.github.io/mirrors.json`](https://jerkgram.github.io/mirrors.json)
 
 The GitHub Release for a Stable version is the canonical public release page for that version. It should contain or link to the Stable IPA, release notes, release provenance and the corresponding public source tag/snapshot.
 
@@ -17,6 +20,10 @@ The Jerkgram website may expose two separate actions:
 - **View on GitHub** — link to the full GitHub Release page.
 
 Telegram remains an official release channel rather than a replacement for the GitHub release record.
+
+AltStore Classic and SideStore are installation/update channels over the same canonical GitHub Release IPA. Both consume one `altstore-source.json`; Jerkgram does not maintain a separate SideStore source. The source metadata must point to the exact GitHub Release asset rather than a copy stored in the website repository.
+
+`mirrors.json` records GitHub Releases as canonical. A future verified mirror must serve a byte-identical IPA with the same SHA-256; third-party catalogs are not official mirrors merely because they redistribute Jerkgram.
 
 ## Stable release record
 
@@ -65,8 +72,13 @@ Before a release is marked Stable:
 6. create the GitHub Release for that tag;
 7. attach the Stable IPA and source artifacts;
 8. publish release notes and provenance;
-9. update the website download action to the exact GitHub Release IPA asset;
-10. announce the same Stable version through [@JerkgramApp](https://t.me/JerkgramApp).
+9. update `jerkgram.github.io/latest.json` with the exact version, build, release URL, IPA URL, filename, byte size, SHA-256, minimum iOS, source tag/source URL and release date;
+10. populate `jerkgram.github.io/altstore-source.json` from the exact final IPA metadata, including the real bundle identifier, version/build, minimum OS and complete `appPermissions`;
+11. update the canonical block in `jerkgram.github.io/mirrors.json` while leaving `mirrors` empty unless a mirror has actually been verified;
+12. verify the website, release record, Telegram announcement and every verified mirror publish the same IPA SHA-256;
+13. validate the AltStore source and test the same source in SideStore;
+14. verify no `.ipa` copy exists in `jerkgram.github.io`;
+15. announce the same Stable version through [@JerkgramApp](https://t.me/JerkgramApp).
 
 ## Pre-release status
 
