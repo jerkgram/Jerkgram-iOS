@@ -80,6 +80,11 @@ Before a release is marked Stable:
 14. verify no `.ipa` copy exists in `jerkgram.github.io`;
 15. announce the same Stable version through [@JerkgramApp](https://t.me/JerkgramApp).
 
-## Pre-release status
+## Current Stable
 
-Until the first final Stable IPA exists, no release-specific SHA-256, source tag, download asset or release record is treated as canonical.
+Jerkgram 1.0.0 is the first Stable release.
+
+- **Canonical release:** [Jerkgram 1.0.0](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.0)
+- **Canonical source tag:** `v1.0.0`
+- **Canonical IPA:** `Jerkgram-1.0.0.ipa`, attached to the GitHub Release above
+- **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)
