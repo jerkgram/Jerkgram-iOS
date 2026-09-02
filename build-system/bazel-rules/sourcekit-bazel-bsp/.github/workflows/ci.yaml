@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Build and test
+    runs-on: macos-15
+    env:
+      XCODE_VERSION: ${{ '26.0' }}
+    steps:
+      - name: Select Xcode
+        run: "sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Lint Swift files
+        run: swift format lint Sources/ Tests/ Example/ --recursive --strict
+      - name: Build sourcekit-bazel-bsp (debug)
+        run: swift build
+      - name: Test sourcekit-bazel-bsp
+        run: swift test
+      - name: Build sourcekit-bazel-bsp (release)
+        run: swift build -c release
+      - name: Build sourcekit-bazel-bsp (Bazel)
+        run: bazelisk build //Sources:sourcekit-bazel-bsp
+      - name: Example project setup integration test
+        run: |
+          cd Example
+          bazelisk run //HelloWorld:vscode
+      - name: Build VSCode companion extension
+        run: |
+          cd ide/vscode
+          npm install
+          npm run compile
+      - name: Build release source archive
+        run: make release_source_archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release.tar.gz
+          path: archives/release.tar.gz
+          if-no-files-found: error

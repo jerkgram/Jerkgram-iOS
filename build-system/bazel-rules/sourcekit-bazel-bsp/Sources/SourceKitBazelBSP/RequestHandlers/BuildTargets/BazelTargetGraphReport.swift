@@ -1,0 +1,60 @@
+// Copyright (c) 2025 Spotify AB.
+//
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+import Foundation
+
+/// A report containing all parsed targets from the build graph.
+/// Written as JSON after buildTargets completes.
+struct BazelTargetGraphReport: Codable, Equatable {
+
+    struct TopLevelTarget: Codable, Equatable {
+        enum LaunchType: String, Codable, Equatable {
+            case app
+            case test
+        }
+        let label: String
+        let launchType: LaunchType?
+        let configMnemonic: String
+        let testSources: [String]?
+    }
+
+    struct DependencyTarget: Codable, Equatable {
+        let label: String
+        let configMnemonic: String
+        /// The top-level parent target to build. When using wrapper approach, this is the wrapper target
+        /// (e.g., //.bsp/skbsp_generated:wrapper_...). When compileTopLevel is true, this is the actual
+        /// top-level target (e.g., //HelloWorld:HelloWorld).
+        let topLevelParent: String
+        /// Extra build args (e.g., ["--output_groups=aspect_..."]). Empty when compileTopLevel is true.
+        let extraBuildArgs: [String]
+    }
+
+    struct Configuration: Codable, Equatable {
+        let mnemonic: String
+        let platform: String
+        let minimumOsVersion: String
+        let cpuArch: String
+        let sdkName: String
+    }
+
+    let topLevelTargets: [TopLevelTarget]
+    let dependencyTargets: [DependencyTarget]
+    let configurations: [Configuration]
+    let bazelWrapper: String
+}

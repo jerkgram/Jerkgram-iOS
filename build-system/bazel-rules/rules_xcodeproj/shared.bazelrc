@@ -1,0 +1,53 @@
+# Don't create convenience symlinks
+build --experimental_convenience_symlinks=ignore
+
+# Faster digest hashing with BLAKE3
+startup --digest_function=blake3
+
+build --remote_default_exec_properties=OSFamily=darwin
+build --remote_default_exec_properties=Arch=arm64
+build --remote_default_exec_properties=cache_bust=macOS_13.0/1
+
+# Use x86_64 instead of i386 for watchOS
+build --watchos_cpus=x86_64
+
+# Fix issues with Xcode 15 when on earlier macOS versions
+build --macos_minimum_os=13.0
+build --host_macos_minimum_os=13.0
+
+# In-repo output_base makes examples relative
+startup --output_base=bazel-output-base
+
+# Ensure we work with BwtB
+build --remote_download_outputs=minimal
+test --remote_download_outputs=toplevel
+
+# rules_xcodeproj needs toplevel to download needed outputs
+build:rules_xcodeproj --remote_download_outputs=toplevel
+
+# Build with --config=cache to use BuildBuddy Remote Cache
+build:cache --bes_backend=grpcs://remote.buildbuddy.io
+build:cache --bes_results_url=https://app.buildbuddy.io/invocation/
+build:cache --bes_upload_mode=nowait_for_upload_complete
+build:cache --jobs=100
+build:cache --modify_execution_info=^(AppleLipo|BitcodeSymbolsCopy|BundleApp|BundleTreeApp|DsymDwarf|DsymLipo|GenerateAppleSymbolsFile|ObjcBinarySymbolStrip|CppArchive|CppLink|ObjcLink|ProcessAndSign|SignBinary|SwiftArchive|SwiftStdlibCopy)$=+no-remote,^(BundleResources|ImportedDynamicFrameworkProcessor)$=+no-remote-exec
+build:cache --remote_cache=grpcs://remote.buildbuddy.io
+build:cache --@rules_xcodeproj//xcodeproj:extra_common_flags='--config=cache'
+
+# Build with --config=remote to use BuildBuddy RBE
+build:remote --config=cache
+build:remote --remote_executor=grpcs://remote.buildbuddy.io
+
+# Configuration used for BuildBuddy workflows
+build:workflows --config=cache
+build:workflows --bes_upload_mode=wait_for_upload_complete
+build:workflows --build_metadata=ROLE=CI
+build:workflows --build_metadata=VISIBILITY=PUBLIC
+build:workflows --remote_instance_name=buildbuddy-io/rules_xcodeproj/workflows
+build:workflows --color=yes
+build:workflows --terminal_columns=120
+build:workflows --disk_cache=
+build:workflows --@rules_xcodeproj//xcodeproj:extra_generator_flags='--config=workflows'
+
+# Show detailed errors for test failures
+test --test_output=errors --test_summary=detailed

@@ -1,0 +1,69 @@
+// Minimized proto file for sourcekit-bazel-bsp.
+// Only includes fields actually used by the BSP implementation.
+// Original: https://github.com/bazelbuild/bazel/blob/master/src/main/protobuf/analysis_v2.proto
+
+syntax = "proto3";
+
+package analysis;
+
+import "Sources/BazelProtobufBindings/protos/build.proto";
+
+// Container for the action graph properties.
+message ActionGraphContainer {
+  repeated Action actions = 2;
+  repeated Target targets = 3;
+  repeated Configuration configuration = 5;
+}
+
+// Represents a single action, which is a function from Artifact(s) to
+// Artifact(s).
+message Action {
+  // The target that was responsible for the creation of the action.
+  uint32 target_id = 1;
+
+  // The mnemonic for this kind of action.
+  string mnemonic = 4;
+
+  // The configuration under which this action is executed.
+  uint32 configuration_id = 5;
+
+  // The command line arguments of the action.
+  repeated string arguments = 6;
+}
+
+// Represents a single target (without configuration information) that is
+// associated with an action.
+message Target {
+  // Identifier for this target; this is a uint32, only valid for this
+  // particular dump of the analysis.
+  uint32 id = 1;
+
+  // Label of the target, e.g. //foo:bar.
+  string label = 2;
+}
+
+message Configuration {
+  // Identifier for this configuration; this is a uint32, only valid for
+  // the particular dump of the analysis.
+  uint32 id = 1;
+
+  // The mnemonic representing the build configuration.
+  string mnemonic = 2;
+}
+
+message ConfiguredTarget {
+  // The target.
+  blaze_query.Target target = 1;
+
+  // The id of the configuration this target is configured for.
+  uint32 configuration_id = 3;
+}
+
+// Container for cquery results
+message CqueryResult {
+  // All the configuredtargets returns by cquery
+  repeated ConfiguredTarget results = 1;
+
+  // All the Configurations referenced by results.
+  repeated Configuration configurations = 2;
+}

@@ -1,0 +1,23 @@
+# NOTE: These are mainly just for the BazelCI setup so they don't have
+# to be repeated multiple times in .bazelci/presubmit.yml.
+
+# Add the PATH to the test environment so that common macOS tools can be found
+# during a test run.
+build --test_env=PATH
+
+# `bazel test` tries to build everything also by default, so skip that so the
+# *_library targets in examples/... aren't built (and fail since they are
+# platform specific).
+test --build_tests_only
+
+# We don't need to bump some of our dependencies, just becuse our dev
+# dependencies cause us to use a newer version
+build --check_direct_dependencies=off
+
+# Disable the worker, which has sandboxing disabled by default, which can hide
+# issues with non-hermetic bugs.
+build --spawn_strategy=sandboxed,local
+build --worker_sandboxing=true
+
+# Use llvm-cov instead of gcov (default).
+coverage --experimental_use_llvm_covmap

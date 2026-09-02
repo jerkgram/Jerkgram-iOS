@@ -1,0 +1,46 @@
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "InstantPageUI",
+    module_name = "InstantPageUI",
+    srcs = glob([
+		"Sources/**/*.swift",
+    ]),
+    copts = [
+        "-warnings-as-errors",
+    ],
+    deps = [
+        "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
+        "//submodules/AsyncDisplayKit:AsyncDisplayKit",
+        "//submodules/CheckNode:CheckNode",
+        "//submodules/Display:Display",
+        "//submodules/Postbox:Postbox",
+        "//submodules/TelegramCore:TelegramCore",
+        "//submodules/TelegramPresentationData:TelegramPresentationData",
+        "//submodules/TelegramUIPreferences:TelegramUIPreferences",
+        "//submodules/TextFormat:TextFormat",
+        "//submodules/InvisibleInkDustNode:InvisibleInkDustNode",
+        "//submodules/TelegramUI/Components/EmojiTextAttachmentView:EmojiTextAttachmentView",
+        "//submodules/TelegramUI/Components/AnimationCache:AnimationCache",
+        "//submodules/TelegramUI/Components/MultiAnimationRenderer:MultiAnimationRenderer",
+        "//submodules/GalleryUI:GalleryUI",
+        "//submodules/MusicAlbumArtResources:MusicAlbumArtResources",
+        "//submodules/SemanticStatusNode:SemanticStatusNode",
+        "//submodules/LiveLocationPositionNode:LiveLocationPositionNode",
+        "//submodules/MosaicLayout:MosaicLayout",
+        "//submodules/LocationUI:LocationUI",
+        "//submodules/AppBundle:AppBundle",
+        "//submodules/LocationResources:LocationResources",
+        "//submodules/UndoUI:UndoUI",
+        "//submodules/TranslateUI:TranslateUI",
+        "//submodules/Pasteboard",
+        "//submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer",
+        "//submodules/Tuples:Tuples",
+        "//third-party/SwiftMath:SwiftMath",
+        "//submodules/ComponentFlow:ComponentFlow",
+        "//submodules/TelegramUI/Components/ShimmeringMask:ShimmeringMask",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+)

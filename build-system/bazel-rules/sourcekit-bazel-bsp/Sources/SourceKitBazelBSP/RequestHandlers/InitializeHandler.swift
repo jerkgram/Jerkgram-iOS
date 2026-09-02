@@ -1,0 +1,310 @@
+// Copyright (c) 2025 Spotify AB.
+//
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+import BuildServerProtocol
+import Foundation
+import LanguageServerProtocol
+
+package let sourcekitBazelBSPVersion = "0.7.1"
+private let logger = makeFileLevelBSPLogger()
+
+enum InitializeHandlerError: Error, LocalizedError {
+    case toolchainNotFound(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .toolchainNotFound(let path): return "Could not determine Xcode toolchain location from path: \(path)"
+        }
+    }
+}
+
+/// Handles the `initialize` request.
+///
+/// This is the first request that the LSP sends, and it contains the initial configuration
+/// for the server. We gather all information needed to operate the server, return it to the LSP,
+/// and then register the other handlers that will handle the rest of the requests.
+final class InitializeHandler {
+
+    private let baseConfig: BaseServerConfig
+    private let commandRunner: CommandRunner
+
+    private weak var connection: LSPConnection?
+
+    init(
+        baseConfig: BaseServerConfig,
+        commandRunner: CommandRunner = ShellCommandRunner(),
+        connection: LSPConnection? = nil,
+    ) {
+        self.baseConfig = baseConfig
+        self.commandRunner = commandRunner
+        self.connection = connection
+    }
+
+    func initializeBuild(
+        _ request: InitializeBuildRequest,
+        _ id: RequestID,
+    ) throws -> (InitializeBuildResponse, InitializedServerConfig) {
+        let taskId = TaskId(id: "initializeBuild-\(id.description)")
+        connection?.startWorkTask(id: taskId, title: "sourcekit-bazel-bsp: Initializing...")
+        do {
+            let result = try withRetry(
+                onRetry: { attempt, error in
+                    logger.warning(
+                        "Initialize attempt \(attempt)/3 failed: \(error.localizedDescription)"
+                    )
+                },
+                operation: {
+                    let initializedConfig = try makeInitializedConfig(fromRequest: request, baseConfig: baseConfig)
+                    let result = buildResponse(fromRequest: request, and: initializedConfig)
+                    return (result, initializedConfig)
+                },
+                delay: 1.0
+            )
+            connection?.finishTask(id: taskId, status: .ok)
+            return result
+        } catch {
+            connection?.finishTask(id: taskId, status: .error)
+            throw error
+        }
+    }
+
+    func makeInitializedConfig(
+        fromRequest request: InitializeBuildRequest,
+        baseConfig: BaseServerConfig,
+    ) throws -> InitializedServerConfig {
+        let rootUri = request.rootUri.arbitrarySchemeURL.path
+        logger.debug("rootUri: \(rootUri, privacy: .public)")
+        let regularOutputBase = URL(
+            fileURLWithPath: try commandRunner.bazel(baseConfig: baseConfig, rootUri: rootUri, cmd: "info output_base")
+        )
+        logger.debug("regularOutputBase: \(regularOutputBase, privacy: .public)")
+        let regularOutputPath: String = try commandRunner.bazel(
+            baseConfig: baseConfig,
+            rootUri: rootUri,
+            cmd: "info output_path"
+        )
+        logger.debug("regularOutputPath: \(regularOutputPath, privacy: .public)")
+
+        // Setup the special output base path where we will run indexing commands from.
+        // Nesting into a subfolder for easier cleanup. For example: /private/var/tmp/_bazel_<User>/<ProjectHash>/sourcekit-bazel-bsp
+        let outputBase: String
+        let outputPath: String
+        if baseConfig.noExtraOutputBase {
+            outputBase = regularOutputBase.path
+            logger.debug("Will use the regular output base for all actions")
+            outputPath = regularOutputPath
+        } else {
+            outputBase =
+                regularOutputBase.appendingPathComponent(
+                    "sourcekit-bazel-bsp"
+                ).path
+            outputPath = try commandRunner.bazelIndexAction(
+                baseConfig: baseConfig,
+                outputBase: outputBase,
+                cmd: "info output_path",
+                rootUri: rootUri,
+                skipIndexFlags: true
+            )
+        }
+        logger.debug("outputBase: \(outputBase, privacy: .public)")
+        logger.debug("outputPath: \(outputPath, privacy: .public)")
+
+        // Create a symlink for _global_index_store so that the custom output base shares
+        // the index store with the original output base. This allows both regular builds
+        // and BSP builds to share the same index data.
+        if baseConfig.sharedIndexStore && !baseConfig.noExtraOutputBase {
+            // Get the base path where rules_swift stores the global index path on the _original_ output base.
+            // This is what we will use for the BSP builds as well.
+            let bspIndexStorePath = outputPath + "/" + InitializedServerConfig.rulesSwiftIndexStoreFolderName
+            let originalIndexStorePath =
+                regularOutputPath + "/" + InitializedServerConfig.rulesSwiftIndexStoreFolderName
+            try setupIndexStoreSymlink(from: bspIndexStorePath, to: originalIndexStorePath, with: commandRunner)
+        } else if !baseConfig.sharedIndexStore {
+            // Remove any existing symlink from a previous run with sharedIndexStore enabled
+            let indexStorePath = outputPath + "/" + InitializedServerConfig.rulesSwiftIndexStoreFolderName
+            try removeSymlinkIfPresent(at: indexStorePath, with: commandRunner)
+        }
+
+        // Get the execution root based on the above output base.
+        let executionRoot: String = try commandRunner.bazelIndexAction(
+            baseConfig: baseConfig,
+            outputBase: outputBase,
+            cmd: "info execution_root",
+            rootUri: rootUri,
+            skipIndexFlags: true
+        )
+        logger.debug("executionRoot: \(executionRoot, privacy: .public)")
+
+        // The workspace name is the last component of the execution root path.
+        let workspaceName = URL(fileURLWithPath: executionRoot).lastPathComponent
+        logger.debug("workspaceName: \(workspaceName, privacy: .public)")
+
+        // Collecting the rest of the env's details
+        let devDir: String = try commandRunner.run("xcode-select --print-path")
+        let xcodeVersion: String = try commandRunner.run(
+            "xcodebuild -version | grep 'Build version' | awk '{print $3}'"
+        )
+        let toolchain = try getToolchainPath(with: commandRunner)
+        let sdkRootPaths: [String: String] = getSDKRootPaths(with: commandRunner)
+
+        logger.debug("devDir: \(devDir, privacy: .public)")
+        logger.debug("xcodeVersion: \(xcodeVersion, privacy: .public)")
+        logger.debug("toolchain: \(toolchain, privacy: .public)")
+        logger.debug("sdkRootPaths: \(sdkRootPaths, privacy: .public)")
+
+        return InitializedServerConfig(
+            baseConfig: baseConfig,
+            rootUri: rootUri,
+            workspaceName: workspaceName,
+            outputBase: outputBase,
+            outputPath: outputPath,
+            originalOutputPath: regularOutputPath,
+            devDir: devDir,
+            xcodeVersion: xcodeVersion,
+            devToolchainPath: toolchain,
+            executionRoot: executionRoot,
+            sdkRootPaths: sdkRootPaths
+        )
+    }
+
+    func getToolchainPath(with commandRunner: CommandRunner) throws -> String {
+        // Trick to get the Xcode toolchain path, since there's no dedicated command for it
+        // In theory this should be just devDir + Toolchains/XcodeDefault.xctoolchain,
+        // but I think we should make it dynamic just in case
+        let swiftPath: String = try commandRunner.run("xcrun --find swift")
+        let expectedSwiftPathSuffix = "usr/bin/swift"
+        guard swiftPath.hasSuffix(expectedSwiftPathSuffix) else {
+            throw InitializeHandlerError.toolchainNotFound(swiftPath)
+        }
+        let toolchain = swiftPath.dropLast(expectedSwiftPathSuffix.count)
+        return String(toolchain)
+    }
+
+    func getSDKRootPaths(with commandRunner: CommandRunner) -> [String: String] {
+        let supportedSDKTypes = [
+            "appletvsimulator",
+            "appletvos",
+            "iphonesimulator",
+            "iphoneos",
+            "macosx",
+            "watchsimulator",
+            "watchos",
+            "xrsimulator",
+            "xros",
+        ]
+        let sdkRootPaths: [String: String] = supportedSDKTypes.reduce(into: [:]) { result, sdkType in
+            // This will fail if the user doesn't have the SDK installed, which is fine.
+            guard let sdkRootPath: String? = try? commandRunner.run("xcrun --sdk \(sdkType) --show-sdk-path") else {
+                return
+            }
+            result[sdkType] = sdkRootPath
+        }
+        return sdkRootPaths
+    }
+
+    private func setupIndexStoreSymlink(
+        from customPath: String,
+        to originalPath: String,
+        with commandRunner: CommandRunner
+    ) throws {
+        // Create parent directory if needed
+        let parentDir = URL(fileURLWithPath: customPath).deletingLastPathComponent().path
+        logger.debug("Ensuring parent directory exists at \(parentDir, privacy: .public)")
+        _ = try? commandRunner.run("mkdir -p '\(parentDir)'")
+        logger.debug("Ensuring destination directory exists at \(originalPath, privacy: .public)")
+        _ = try? commandRunner.run("mkdir -p '\(originalPath)'")
+
+        // Remove existing path if present
+        logger.debug("Removing existing index store at \(customPath, privacy: .public) if present")
+        _ = try? commandRunner.run("mv '\(customPath)' '\(parentDir)/old_indestore.backup'")
+
+        // Need to give the filesystem a moment to finish the rename operation
+        sleep(1)
+
+        // Create the symlink inside the parent directory
+        // ln -s <target> <directory> creates <directory>/<basename(target)> -> <target>
+        logger.debug(
+            "Creating index store symlink from \(customPath, privacy: .public) to \(originalPath, privacy: .public)"
+        )
+        _ = try commandRunner.run("ln -s '\(originalPath)' '\(parentDir)'")
+        _ = try? commandRunner.run("rm -rf '\(parentDir)/old_indestore.backup'")
+    }
+
+    private func removeSymlinkIfPresent(
+        at path: String,
+        with commandRunner: CommandRunner
+    ) throws {
+        // Check if the path is a symlink and remove it if so
+        // This handles the case where a previous run had sharedIndexStore enabled
+        // readlink returns exit code 0 only if the path is a symlink
+        let process = try commandRunner.run("readlink '\(path)'")
+        // Wait for the process to exit
+        let (_, _): (String, String) = process.outputs()
+        let isSymlink = process.wrappedProcess.terminationStatus == 0
+        if isSymlink {
+            logger.debug("Removing existing symlink at \(path, privacy: .public)")
+            _ = try? commandRunner.run("rm '\(path)'")
+        }
+    }
+
+    func buildResponse(
+        fromRequest request: InitializeBuildRequest,
+        and initializedConfig: InitializedServerConfig,
+    ) -> InitializeBuildResponse {
+        let capabilities = request.capabilities
+        let watchers: [FileSystemWatcher]?
+        let rootUri = initializedConfig.rootUri
+        if let filesToWatch = initializedConfig.baseConfig.filesToWatch {
+            watchers = filesToWatch.components(separatedBy: ",").map {
+                FileSystemWatcher(
+                    globPattern: rootUri + "/" + $0,
+                    kind: [.change, .create, .delete]
+                )
+            }
+        } else {
+            watchers = nil
+        }
+        return InitializeBuildResponse(
+            displayName: "sourcekit-bazel-bsp",
+            version: sourcekitBazelBSPVersion,
+            bspVersion: "2.2.0",
+            capabilities: BuildServerCapabilities(
+                compileProvider: .init(languageIds: capabilities.languageIds),
+                testProvider: .init(languageIds: capabilities.languageIds),
+                runProvider: .init(languageIds: capabilities.languageIds),
+                debugProvider: .init(languageIds: capabilities.languageIds),
+                inverseSourcesProvider: true,
+                dependencySourcesProvider: true,
+                resourcesProvider: true,
+                outputPathsProvider: false,
+                buildTargetChangedProvider: true,
+                canReload: true,
+            ),
+            dataKind: InitializeBuildResponseDataKind.sourceKit,
+            data: SourceKitInitializeBuildResponseData(
+                indexDatabasePath: initializedConfig.indexDatabasePath,
+                indexStorePath: initializedConfig.indexStorePath,
+                outputPathsProvider: nil,
+                prepareProvider: true,
+                sourceKitOptionsProvider: true,
+                watchers: watchers,
+            ).encodeToLSPAny()
+        )
+    }
+}

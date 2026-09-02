@@ -1,0 +1,4 @@
+.git
+bazel-output-base
+examples
+setup-bazel-output-base

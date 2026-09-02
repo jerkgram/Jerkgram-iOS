@@ -1,0 +1,217 @@
+// Copyright (c) 2025 Spotify AB.
+//
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+import BuildServerProtocol
+import Foundation
+import LanguageServerProtocol
+import Testing
+
+@testable import SourceKitBazelBSP
+
+@Suite
+struct InitializeHandlerTests {
+
+    @Test
+    func makeConfigGathersCorrectInformation() throws {
+        let commandRunner = CommandRunnerFake()
+        let baseConfig = BaseServerConfig(
+            bazelWrapper: "mybazel",
+            targets: ["//HelloWorld"],
+            indexFlags: ["--config=index"],
+            filesToWatch: nil
+        )
+
+        let fullRootUri = "file:///path/to/project"
+        let rootUri = "/path/to/project"
+        let outputBase = "/_bazel_user/abc123"
+        let outputPath = "/_bazel_user/abc123/sourcekit-bazel-bsp/execroot/_main/bazel-out"
+        let executionRoot = "/_bazel_user/abc123/sourcekit-bazel-bsp/execroot/_main"
+        let devDir = "/Applications/Xcode.app/Contents/Developer"
+        let xcodeVersion: String = "17B100"
+        let toolchain = "/a/b/Toolchains/XcodeDefault.xctoolchain/"
+
+        let regularOutputPath = "/_bazel_user/abc123/execroot/_main/bazel-out"
+
+        commandRunner.setResponse(for: "mybazel info output_base", cwd: rootUri, response: outputBase)
+        commandRunner.setResponse(for: "mybazel info output_path", cwd: rootUri, response: regularOutputPath)
+        commandRunner.setResponse(
+            for: "mybazel --output_base=/_bazel_user/abc123/sourcekit-bazel-bsp info output_path",
+            cwd: rootUri,
+            response: outputPath
+        )
+        commandRunner.setResponse(
+            for: "mybazel --output_base=/_bazel_user/abc123/sourcekit-bazel-bsp info execution_root",
+            cwd: rootUri,
+            response: executionRoot
+        )
+        commandRunner.setResponse(for: "xcode-select --print-path", response: devDir)
+        commandRunner.setResponse(
+            for: "xcodebuild -version | grep 'Build version' | awk '{print $3}'",
+            response: xcodeVersion
+        )
+        commandRunner.setResponse(for: "xcrun --find swift", response: toolchain + "usr/bin/swift")
+        commandRunner.setResponse(for: "xcrun --sdk iphonesimulator --show-sdk-path", response: "sdkiossim")
+        // readlink returns non-zero exit code when path is not a symlink
+        commandRunner.setResponse(
+            for: "readlink '\(outputPath)/_global_index_store'",
+            response: "",
+            exitCode: 1
+        )
+
+        let handler = InitializeHandler(baseConfig: baseConfig, commandRunner: commandRunner)
+
+        let request = try mockRequest(fullRootUri)
+
+        let config = try handler.makeInitializedConfig(fromRequest: request, baseConfig: baseConfig)
+
+        #expect(
+            config
+                == InitializedServerConfig(
+                    baseConfig: baseConfig,
+                    rootUri: rootUri,
+                    workspaceName: "_main",
+                    outputBase: outputBase + "/sourcekit-bazel-bsp",
+                    outputPath: outputPath,
+                    originalOutputPath: regularOutputPath,
+                    devDir: devDir,
+                    xcodeVersion: xcodeVersion,
+                    devToolchainPath: toolchain,
+                    executionRoot: executionRoot,
+                    sdkRootPaths: ["iphonesimulator": "sdkiossim"]
+                )
+        )
+    }
+
+    @Test
+    func makeConfigWithNoIndexFlags() throws {
+        let commandRunner = CommandRunnerFake()
+        let baseConfig = BaseServerConfig(
+            bazelWrapper: "mybazel",
+            targets: ["//HelloWorld"],
+            indexFlags: [],
+            filesToWatch: nil
+        )
+
+        let fullRootUri = "file:///path/to/project"
+        let rootUri = "/path/to/project"
+        let outputBase = "/_bazel_user/abc123"
+        let outputPath = "/_bazel_user/abc123/sourcekit-bazel-bsp/execroot/_main/bazel-out"
+        let toolchain = "/a/b/Toolchains/XcodeDefault.xctoolchain/"
+        let xcodeVersion: String = "17B100"
+
+        let regularOutputPath = "/_bazel_user/abc123/execroot/_main/bazel-out"
+
+        commandRunner.setResponse(for: "mybazel info output_base", cwd: rootUri, response: outputBase)
+        commandRunner.setResponse(for: "mybazel info output_path", cwd: rootUri, response: regularOutputPath)
+        commandRunner.setResponse(
+            for: "mybazel --output_base=/_bazel_user/abc123/sourcekit-bazel-bsp info output_path",
+            cwd: rootUri,
+            response: outputPath
+        )
+        commandRunner.setResponse(
+            for: "mybazel --output_base=/_bazel_user/abc123/sourcekit-bazel-bsp info execution_root",
+            cwd: rootUri,
+            response: outputPath
+        )
+        commandRunner.setResponse(for: "xcrun --find swift", response: toolchain + "usr/bin/swift")
+        commandRunner.setResponse(for: "xcode-select --print-path", response: "foo")
+        commandRunner.setResponse(for: "xcrun --sdk iphonesimulator --show-sdk-path", response: "bar")
+        commandRunner.setResponse(
+            for: "xcodebuild -version | grep 'Build version' | awk '{print $3}'",
+            response: xcodeVersion
+        )
+        // readlink returns non-zero exit code when path is not a symlink
+        commandRunner.setResponse(
+            for: "readlink '\(outputPath)/_global_index_store'",
+            response: "",
+            exitCode: 1
+        )
+
+        let handler = InitializeHandler(baseConfig: baseConfig, commandRunner: commandRunner)
+
+        let request = try mockRequest(fullRootUri)
+        let config = try handler.makeInitializedConfig(fromRequest: request, baseConfig: baseConfig)
+
+        // Makes sure the output_path request didn't get any additional flags.
+        #expect(config.outputPath == outputPath)
+    }
+
+    @Test
+    func makeConfigWithMultipleIndexFlags() throws {
+        let commandRunner = CommandRunnerFake()
+        let baseConfig = BaseServerConfig(
+            bazelWrapper: "mybazel",
+            targets: ["//HelloWorld"],
+            indexFlags: ["--config=index1", "--config=index2"],
+            filesToWatch: nil
+        )
+
+        let fullRootUri = "file:///path/to/project"
+        let rootUri = "/path/to/project"
+        let outputBase = "/_bazel_user/abc123"
+        let outputPath = "/_bazel_user/abc123/sourcekit-bazel-bsp/execroot/_main/bazel-out"
+        let regularOutputPath = "/_bazel_user/abc123/execroot/_main/bazel-out"
+        let toolchain = "/a/b/Toolchains/XcodeDefault.xctoolchain/"
+        let xcodeVersion: String = "17B100"
+
+        commandRunner.setResponse(for: "mybazel info output_base", cwd: rootUri, response: outputBase)
+        commandRunner.setResponse(for: "mybazel info output_path", cwd: rootUri, response: regularOutputPath)
+        commandRunner.setResponse(
+            for: "mybazel --output_base=/_bazel_user/abc123/sourcekit-bazel-bsp info output_path",
+            cwd: rootUri,
+            response: outputPath
+        )
+        commandRunner.setResponse(
+            for: "mybazel --output_base=/_bazel_user/abc123/sourcekit-bazel-bsp info execution_root",
+            cwd: rootUri,
+            response: outputPath
+        )
+        commandRunner.setResponse(for: "xcrun --find swift", response: toolchain + "usr/bin/swift")
+        commandRunner.setResponse(for: "xcode-select --print-path", response: "foo")
+        commandRunner.setResponse(for: "xcrun --sdk iphonesimulator --show-sdk-path", response: "bar")
+        commandRunner.setResponse(
+            for: "xcodebuild -version | grep 'Build version' | awk '{print $3}'",
+            response: xcodeVersion
+        )
+        // readlink returns non-zero exit code when path is not a symlink
+        commandRunner.setResponse(
+            for: "readlink '\(outputPath)/_global_index_store'",
+            response: "",
+            exitCode: 1
+        )
+
+        let handler = InitializeHandler(baseConfig: baseConfig, commandRunner: commandRunner)
+
+        let request = try mockRequest(fullRootUri)
+        let config = try handler.makeInitializedConfig(fromRequest: request, baseConfig: baseConfig)
+
+        // Makes sure the output_path request received the additional index flags as expected.
+        #expect(config.outputPath == outputPath)
+    }
+
+    private func mockRequest(_ rootUri: String) throws -> InitializeBuildRequest {
+        InitializeBuildRequest(
+            displayName: "test-client",
+            version: "1.0.0",
+            bspVersion: "2.2.0",
+            rootUri: try URI(string: rootUri),
+            capabilities: BuildClientCapabilities(languageIds: [.swift])
+        )
+    }
+}

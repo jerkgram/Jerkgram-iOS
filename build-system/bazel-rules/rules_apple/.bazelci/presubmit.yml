@@ -1,0 +1,58 @@
+---
+x_defaults:
+  # YAML has a feature for "repeated nodes", BazelCI is fine with extra nodes
+  # it doesn't know about; so that is used to avoid repeating common subparts.
+  common: &common
+    platform: macos_arm64
+    shell_commands:
+    - xcodebuild -downloadComponent metalToolchain
+    - xcrun simctl runtime list
+    - xcrun simctl runtime match list
+    - xcrun simctl runtime dyld_shared_cache update --all
+    post_shell_commands:
+    - xcrun simctl runtime match list
+    build_targets:
+    - "tools/..."
+    - "test/..."
+    build_flags:
+    - --modify_execution_info=AssetCatalogCompile=+exclusive
+    test_targets:
+    - "tools/..."
+    - "test/..."
+    - "examples/..."
+    test_flags:
+    - --local_test_jobs=2
+    - --modify_execution_info=AssetCatalogCompile=+exclusive
+    - --test_tag_filters=-skipci
+    - --ios_simulator_device=iPhone 16
+    include_json_profile:
+      - build
+      - test
+
+# NOTE: To avoid listing the same things for build_flags/test_flags for each
+# of these tasks, they are listed in the .bazelrc instead.
+tasks:
+  macos_8.x:
+    name: "8.x"
+    bazel: 8.x
+    <<: *common
+
+  macos_9.x:
+    name: "9.x"
+    bazel: 9.x
+    <<: *common
+
+  # TODO: Enable ASAP when we remove usage of `//command_line_option:incompatible_enable_apple_toolchain_resolution`
+  # macos_last_green:
+  #   name: "Last Green Bazel"
+  #   bazel: last_green
+  #   <<: *common
+
+  doc_tests:
+    name: "Doc tests"
+    bazel: 9.x # TODO: use last_green when we fix issues
+    platform: ubuntu2004
+    test_targets:
+    - "doc/..."
+
+buildifier: 8.2.1

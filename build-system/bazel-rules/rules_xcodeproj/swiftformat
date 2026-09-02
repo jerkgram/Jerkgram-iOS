@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# This file exists to help IDE helpers (e.g., vim+ALE) to execute swiftformat
+# using this project's configuration.
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" > /dev/null && pwd)"
+
+cmd=(swiftformat --config "${script_dir}/.swiftformat")
+if [[ ${#} -eq 0 ]]; then
+  # If no args, then apply formatting to the entire project
+  cmd+=( "${script_dir}" )
+else
+  cmd+=( "$@" )
+fi
+"${cmd[@]}"

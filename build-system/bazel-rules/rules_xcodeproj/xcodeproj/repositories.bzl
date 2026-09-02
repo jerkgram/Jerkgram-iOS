@@ -1,0 +1,256 @@
+"""Definitions for handling Bazel repositories used by rules_xcodeproj."""
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+def _generated_files_repo_impl(repository_ctx):
+    repository_ctx.file(
+        "BUILD",
+        content = """
+package_group(
+    name = "package_group",
+    packages = ["//..."],
+)
+""",
+    )
+
+    # Construct the output base path, stripping leading /private if needed.
+    output_base_script = """
+        output_base="${PWD%/*/*/*/*}"
+        if [[ $output_base == /private/* ]]; then
+            output_base="${output_base#/private}"
+        fi
+        echo "$output_base"
+    """
+    output_base_result = repository_ctx.execute(
+        ["bash", "-c", output_base_script],
+    )
+    if output_base_result.return_code != 0:
+        fail("Failed to construct output base path: {}".format(
+            output_base_result.stderr,
+        ))
+
+    # Create the generator symlink inside the output base.
+    output_base_path = output_base_result.stdout.strip()
+    repository_ctx.symlink(
+        output_base_path + "/rules_xcodeproj.noindex/generator",
+        "generator",
+    )
+
+generated_files_repo = repository_rule(
+    implementation = _generated_files_repo_impl,
+)
+
+# buildifier: disable=unnamed-macro
+def xcodeproj_rules_repos():
+    """Fetches repositories that are dependencies of `rules_xcodeproj`."""
+
+    generated_files_repo(name = "rules_xcodeproj_generated")
+
+    # `rules_swift` depends on `build_bazel_rules_swift_index_import`, and we
+    # also need to use `index-import`, so we could declare the same dependency
+    # here in order to reuse it, and in case `rules_swift` stops depending on it
+    # in the future. We don't though, because we need 5.5.3.1 or higher, and the
+    # current lowest version of rules_swift we support uses 5.3.2.6.
+    # TODO: we must depend on two versions of index-import to support backwards
+    # compatibility between Xcode 16.3+ and older versions, we can remove the older
+    # version once we drop support for Xcode 16.x.
+    index_import_build_file_content = """\
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+
+native_binary(
+    name = "index_import",
+    src = "index-import",
+    out = "index-import",
+    visibility = ["//visibility:public"],
+)
+"""
+    http_archive(
+        name = "rules_xcodeproj_legacy_index_import",
+        build_file_content = index_import_build_file_content,
+        canonical_id = "index-import-5.8.0.1",
+        sha256 = "28c1ffa39d99e74ed70623899b207b41f79214c498c603915aef55972a851a15",
+        url = "https://github.com/MobileNativeFoundation/index-import/releases/download/5.8.0.1/index-import.tar.gz",
+    )
+    http_archive(
+        name = "rules_xcodeproj_index_import",
+        build_file_content = index_import_build_file_content,
+        canonical_id = "index-import-6.1.0.1",
+        sha256 = "9a54fc1674af6031125a9884480a1e31e1bcf48b8f558b3e8bcc6b6fcd6e8b61",
+        url = "https://github.com/MobileNativeFoundation/index-import/releases/download/6.1.0.1/index-import.tar.gz",
+    )
+
+    http_archive(
+        name = "com_github_apple_swift_argument_parser",
+        build_file_content = """\
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "ArgumentParserToolInfo",
+    srcs = glob(["Sources/ArgumentParserToolInfo/**/*.swift"]),
+    visibility = ["//visibility:public"],
+)
+
+swift_library(
+    name = "ArgumentParser",
+    srcs = glob(["Sources/ArgumentParser/**/*.swift"]),
+    visibility = ["//visibility:public"],
+    deps = [":ArgumentParserToolInfo"],
+)
+""",
+        sha256 = "4a10bbef290a2167c5cc340b39f1f7ff6a8cf4e1b5433b68548bf5f1e542e908",
+        strip_prefix = "swift-argument-parser-1.2.3",
+        url = "https://github.com/apple/swift-argument-parser/archive/refs/tags/1.2.3.tar.gz",
+    )
+
+    http_archive(
+        name = "com_github_michaeleisel_jjliso8601dateformatter",
+        build_file_content = """\
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
+objc_library(
+    name = "JJLISO8601DateFormatter",
+    srcs = glob(["Sources/JJLISO8601DateFormatter/**/*"]),
+    copts = [
+        "-Wno-incompatible-pointer-types",
+        "-Wno-incompatible-pointer-types-discards-qualifiers",
+        "-Wno-shorten-64-to-32",
+        "-Wno-unreachable-code",
+        "-Wno-unused-function",
+        "-Wno-unused-variable",
+    ],
+    includes = ["Sources/JJLISO8601DateFormatter/include"],
+    hdrs = glob(["Sources/JJLISO8601DateFormatter/include/*"]),
+    visibility = ["//visibility:public"],
+)
+""",
+        patches = [
+            Label("//third_party/com_github_michaeleisel_jjliso8601dateformatter:include_fix.patch"),
+        ],
+        sha256 = "6fe15f251f100f3df057c2802a50765387674fde9c922375683682b5ba37eef0",
+        strip_prefix = "JJLISO8601DateFormatter-0.1.6",
+        url = "https://github.com/michaeleisel/JJLISO8601DateFormatter/archive/refs/tags/0.1.6.tar.gz",
+    )
+
+    http_archive(
+        name = "com_github_michaeleisel_zippyjsoncfamily",
+        build_file_content = """\
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
+objc_library(
+    name = "ZippyJSONCFamily",
+    copts = [
+        "-std=c++17",
+        "-Wno-unused-function",
+        "-Wno-reorder-ctor",
+        "-Wno-return-type-c-linkage",
+        "-Wno-shorten-64-to-32",
+        "-Wno-unused-variable",
+    ],
+    srcs = glob(["Sources/ZippyJSONCFamily/**/*"]),
+    includes = ["Sources/ZippyJSONCFamily/include"],
+    hdrs = glob(["Sources/ZippyJSONCFamily/include/*"]),
+    visibility = ["//visibility:public"],
+)
+""",
+        patches = [
+            Label("//third_party/com_github_michaeleisel_zippyjsoncfamily:include_fix.patch"),
+        ],
+        sha256 = "b215927ada8403e1b056d39450c6a7b59122eca4b0c7fc5beb5f0b5fea2acd72",
+        strip_prefix = "ZippyJSONCFamily-1.2.9",
+        url = "https://github.com/michaeleisel/ZippyJSONCFamily/archive/refs/tags/1.2.9.tar.gz",
+    )
+
+    http_archive(
+        name = "com_github_michaeleisel_zippyjson",
+        build_file_content = """\
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "ZippyJSON",
+    srcs = glob(["Sources/ZippyJSON/**/*.swift"]),
+    deps = [
+        "@com_github_michaeleisel_jjliso8601dateformatter//:JJLISO8601DateFormatter",
+        "@com_github_michaeleisel_zippyjsoncfamily//:ZippyJSONCFamily",
+    ],
+    visibility = ["//visibility:public"],
+)
+""",
+        sha256 = "4b256843c9c3686c527e76dde54f8d76b6201c1fd903c07dc2211ab1b250bd04",
+        strip_prefix = "ZippyJSON-1.2.10",
+        url = "https://github.com/michaeleisel/ZippyJSON/archive/refs/tags/1.2.10.tar.gz",
+    )
+
+    http_archive(
+        name = "com_github_apple_swift_collections",
+        build_file_content = """\
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "Collections",
+    srcs = glob(["Sources/Collections/**/*.swift"]),
+    deps = [
+        "@com_github_apple_swift_collections//:DequeModule",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+swift_library(
+    name = "DequeModule",
+    srcs = glob(["Sources/DequeModule/**/*.swift"]),
+    visibility = ["//visibility:public"],
+)
+
+swift_library(
+    name = "OrderedCollections",
+    srcs = glob(["Sources/OrderedCollections/**/*.swift"]),
+    visibility = ["//visibility:public"],
+)
+""",
+        sha256 = "1a2ec8cc6c63c383a9dd4eb975bf83ce3bc7a2ac21a0289a50dae98a576327d6",
+        strip_prefix = "swift-collections-4cab1c1c417855b90e9cfde40349a43aff99c536",
+        # TODO: Change to 1.0.5 when it's released
+        url = "https://github.com/apple/swift-collections/archive/4cab1c1c417855b90e9cfde40349a43aff99c536.tar.gz",
+    )
+
+def xcodeproj_rules_dev_repos():
+    """Fetches repositories that are dev dependencies of `rules_xcodeproj`."""
+
+    # Setup Swift Custom Dump test dependency
+    http_archive(
+        name = "com_github_pointfreeco_xctest_dynamic_overlay",
+        build_file_content = """\
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "XCTestDynamicOverlay",
+    module_name = "XCTestDynamicOverlay",
+    srcs = glob(["Sources/XCTestDynamicOverlay/**/*.swift"]),
+    visibility = ["//visibility:public"],
+)
+""",
+        sha256 = "1ebde9c9403d5befb6956556e26f9308000722f7da9e87fed2e770d3918d647c",
+        strip_prefix = "swift-issue-reporting-0.2.1",
+        url = "https://github.com/pointfreeco/xctest-dynamic-overlay/archive/refs/tags/0.2.1.tar.gz",
+    )
+
+    http_archive(
+        name = "com_github_pointfreeco_swift_custom_dump",
+        build_file_content = """\
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "CustomDump",
+    module_name = "CustomDump",
+    srcs = glob(["Sources/CustomDump/**/*.swift"]),
+    deps = ["@com_github_pointfreeco_xctest_dynamic_overlay//:XCTestDynamicOverlay"],
+    visibility = ["//visibility:public"],
+)
+""",
+        patches = [
+            # Custom for our tests
+            Label("//third_party/com_github_pointfreeco_swift_custom_dump:type_name.patch"),
+        ],
+        sha256 = "9aec23538c2d050e3829200cd73ecb3c402d3922366ed2f6abb4f748f7582533",
+        strip_prefix = "swift-custom-dump-0.11.1",
+        url = "https://github.com/pointfreeco/swift-custom-dump/archive/refs/tags/0.11.1.tar.gz",
+    )

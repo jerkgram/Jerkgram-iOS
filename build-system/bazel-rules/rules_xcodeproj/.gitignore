@@ -1,0 +1,16 @@
+.DS_Store
+
+/bazel-*
+MODULE.bazel.lock
+
+# We explicitly ignore these subdirectories to ensure they still apply when we
+# undo the `**/*.xcodeproj/*` ignore in `test/fixtures/.gitignore`
+**/*.xcodeproj/xcuserdata/*
+**/*.xcodeproj/project.xcworkspace/xcuserdata/*
+
+**/*.xcodeproj/*
+
+# Symlink to `$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib`
+**/*.xcodeproj/rules_xcodeproj/lib
+
+user.bazelrc

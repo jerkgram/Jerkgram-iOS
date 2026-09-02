@@ -1,0 +1,127 @@
+x_templates:
+  action_setup:
+    - &action_base
+      os: "darwin"
+      self_hosted: true
+      pool: workflows
+      triggers:
+        push:
+          branches:
+            - "main"
+        pull_request:
+          branches:
+            - "*"
+    - &arm64
+      arch: "arm64"
+
+    - &bazel_in_repo_version # No change, uses `.bazelversion`, just used to make it clear
+      env: {}
+    - &bazel_previous_lts
+      env:
+        USE_BAZEL_VERSION: 8.x
+    - &bazel_lts
+      env:
+        USE_BAZEL_VERSION: 9.x
+    - &bazel_head
+      env:
+        USE_BAZEL_VERSION: last_green
+
+    - &normal_resources
+      resource_requests: { memory: 6GB }
+    - &light_resources
+      resource_requests: { memory: 3GB, cpu: 1 }
+
+    # Workspace selection
+    - &root_workspace
+      git_clean_exclude:
+        - bazel-output-base
+        - setup-bazel-output-base
+    - &examples_integration_workspace
+      bazel_workspace_dir: examples/integration
+      git_clean_exclude:
+        - setup-bazel-output-base
+        - examples/integration/bazel-output-base
+        - examples/integration/setup-bazel-output-base
+
+  commands:
+    - &generate_integration "--output_base=bazel-output-base run --config=workflows //:xcodeproj"
+    - &build_all "--output_base=bazel-output-base build --config=workflows //..."
+    - &test_all "--output_base=bazel-output-base test --config=workflows //..."
+
+actions:
+  - name: Buildifier Lint
+    <<: *bazel_in_repo_version
+    <<: *action_base
+    <<: *light_resources
+    <<: *root_workspace
+    bazel_commands:
+      - "run --config=workflows //:buildifier.check"
+
+  - name: Docs
+    <<: *bazel_in_repo_version
+    <<: *action_base
+    <<: *light_resources
+    <<: *root_workspace
+    bazel_commands:
+      - "test --config=workflows //docs:diff_test"
+
+  - name: Test
+    <<: *bazel_in_repo_version
+    <<: *arm64
+    <<: *normal_resources
+    <<: *action_base
+    <<: *root_workspace
+    bazel_commands:
+      - *test_all
+  - name: Test - Bazel Previous LTS
+    <<: *bazel_previous_lts
+    <<: *arm64
+    <<: *normal_resources
+    <<: *action_base
+    <<: *root_workspace
+    bazel_commands:
+      - *test_all
+  - name: Test - Bazel LTS
+    <<: *bazel_lts
+    <<: *arm64
+    <<: *normal_resources
+    <<: *action_base
+    <<: *root_workspace
+    bazel_commands:
+      - *test_all
+  - name: Test - Bazel HEAD
+    <<: *bazel_head
+    <<: *arm64
+    <<: *normal_resources
+    <<: *action_base
+    <<: *root_workspace
+    bazel_commands:
+      - *test_all
+
+  - name: Integration Test - "examples/integration" - Bazel Previous LTS
+    <<: *bazel_previous_lts
+    <<: *arm64
+    <<: *action_base
+    <<: *normal_resources
+    <<: *examples_integration_workspace
+    bazel_commands:
+      - *generate_integration
+      - *build_all
+  - name: Integration Test - "examples/integration" - Bazel LTS
+    <<: *bazel_lts
+    <<: *arm64
+    <<: *action_base
+    <<: *normal_resources
+    <<: *examples_integration_workspace
+    bazel_commands:
+      - *generate_integration
+      - *build_all
+  - name: Integration Test - "examples/integration" - Bazel HEAD
+    <<: *bazel_head
+    <<: *arm64
+    <<: *action_base
+    <<: *normal_resources
+    <<: *examples_integration_workspace
+    bazel_commands:
+      - *generate_integration
+      - *build_all

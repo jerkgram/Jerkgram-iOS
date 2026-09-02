@@ -1,0 +1,231 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "objc_library")
+load("//rules:universal_binary.bzl", "universal_binary")
+load("//test:starlark_apple_binary.bzl", "starlark_apple_binary")
+load("//test:starlark_apple_static_library.bzl", "starlark_apple_static_library")
+load(":framework_includes_provider.bzl", "framework_includes_lib")
+
+package(
+    default_testonly = 1,
+    default_visibility = ["//test:__subpackages__"],
+)
+
+TARGETS_UNDER_TEST_TAGS = [
+    "manual",
+    "notap",
+]
+
+cc_binary(
+    name = "cc_test_binary",
+    srcs = ["main.cc"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+cc_binary(
+    name = "cc_test_binary_no_sandbox",
+    srcs = ["main.cc"],
+    tags = TARGETS_UNDER_TEST_TAGS + ["no-sandbox"],
+)
+
+cc_library(
+    name = "c_main",
+    srcs = ["main.c"],
+    copts = ["-std=c99"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+cc_library(
+    name = "cc_main",
+    srcs = ["main.cc"],
+    copts = ["-std=c++20"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+universal_binary(
+    name = "multi_arch_cc_binary",
+    binary = ":cc_test_binary",
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+starlark_apple_binary(
+    name = "macos_binary",
+    minimum_os_version = "13.0",
+    platform_type = "macos",
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":cc_main"],
+)
+
+starlark_apple_binary(
+    name = "macos_binary_with_spaces",
+    minimum_os_version = "13.0",
+    platform_type = "macos",
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":objc_lib_with_spaces"],
+)
+
+cc_library(
+    name = "cc_lib",
+    srcs = ["cc_lib.cc"],
+    copts = ["-DFROM_BUILD_COPTS=1"],
+    defines = ["FROM_BUILD_DEFINES=1"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+objc_library(
+    name = "objc_pch_lib",
+    srcs = ["objc_pch_lib.m"],
+    pch = "pch.pch",
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+objc_library(
+    name = "objc_lib",
+    srcs = ["objc_lib.m"],
+    copts = ["-DFROM_BUILD_COPTS=1"],
+    defines = ["FROM_BUILD_DEFINES=1"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = ["cc_lib"],
+)
+
+framework_includes_lib(
+    name = "framework_includes_dep",
+    framework_includes = ["test/test_data/frameworks"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+objc_library(
+    name = "objc_framework_includes_lib",
+    srcs = [
+        "objc_lib.cpp",
+        "objc_lib.m",
+    ],
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":framework_includes_dep"],
+)
+
+objc_library(
+    name = "objc_library_sdk_frameworks",
+    srcs = ["main.m"],
+    # SDKs picked at random but shouldn't overlap with things that might be linked naturally
+    sdk_frameworks = ["CalendarStore"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+    weak_sdk_frameworks = ["Accounts"],
+)
+
+starlark_apple_binary(
+    name = "macos_binary_with_sdk_frameworks",
+    minimum_os_version = "13.0",
+    platform_type = "macos",
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":objc_library_sdk_frameworks"],
+)
+
+objc_library(
+    name = "objc_no_arc_lib",
+    non_arc_srcs = ["objc_lib.m"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+objc_library(
+    name = "objc_lib_with_spaces",
+    srcs = ["objc lib with spaces.m"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+starlark_apple_static_library(
+    name = "static_lib",
+    minimum_os_version = "15.0",
+    platform_type = "ios",
+    deps = [":objc_lib"],
+)
+
+objc_library(
+    name = "objc_main",
+    srcs = ["main.m"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = ["objc_lib"],
+)
+
+objc_library(
+    name = "objc_lib_with_unused_symbol",
+    srcs = ["objc_lib_with_unused_symbol.m"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+starlark_apple_binary(
+    name = "ios_app_with_unused_symbol",
+    minimum_os_version = "13.0",
+    platform_type = "ios",
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":objc_lib_with_unused_symbol"],
+)
+
+starlark_apple_binary(
+    name = "visionos_binary",
+    minimum_os_version = "1.0",
+    platform_type = "visionos",
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":objc_main"],
+)
+
+objc_library(
+    name = "watch_main",
+    srcs = ["watch_main.m"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":cc_lib"],
+)
+
+starlark_apple_binary(
+    name = "watch_binary",
+    minimum_os_version = "8.0",
+    platform_type = "watchos",
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":watch_main"],
+)
+
+objc_library(
+    name = "ios_main",
+    srcs = ["ios_main.m"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":cc_lib"],
+)
+
+starlark_apple_binary(
+    name = "ios_binary",
+    minimum_os_version = "15.0",
+    platform_type = "ios",
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":ios_main"],
+)
+
+cc_library(
+    name = "duplicate_object_lib",
+    srcs = [
+        "cc_lib.cc",
+        "duplicate.cc",
+        "nested/duplicate.cc",
+    ],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+objc_library(
+    name = "objcpp_lib",
+    srcs = ["objcpp_lib.mm"],
+    copts = ["-DFROM_BUILD_COPTS=1"],
+    defines = ["FROM_BUILD_DEFINES=1"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+cc_library(
+    name = "test_lib_for_coverage",
+    srcs = ["test_lib.c"],
+    hdrs = ["test_lib.h"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+)
+
+cc_test(
+    name = "c_test",
+    srcs = ["c_test_for_coverage.c"],
+    tags = TARGETS_UNDER_TEST_TAGS,
+    deps = [":test_lib_for_coverage"],
+)

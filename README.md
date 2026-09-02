@@ -23,7 +23,7 @@
 It keeps Telegram's native iOS experience as the foundation, then adds the missing layer: **what changed, what disappeared, and what still belongs to the conversation.**
 
 > [!NOTE]
-> Jerkgram is currently preparing its first Stable public-source release. Release-specific IPA hashes and source tags are intentionally not published until the final Stable artifact exists.
+> Jerkgram 1.0.0 is the first Stable public-source release. The canonical source tag is `v1.0.0`; release artifact hashes are recorded in `JERKGRAM_RELEASE.json`.
 
 ## Context survives
 
