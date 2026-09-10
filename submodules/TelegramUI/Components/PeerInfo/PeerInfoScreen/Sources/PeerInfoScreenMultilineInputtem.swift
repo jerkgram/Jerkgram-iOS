@@ -69,7 +69,6 @@ final class PeerInfoScreenMultilineInputItemNode: PeerInfoScreenItemNode {
         self.bottomSeparatorNode.backgroundColor = presentationData.theme.list.itemBlocksSeparatorColor
         
         let inputItem = ItemListMultilineInputItem(presentationData: ItemListPresentationData(presentationData), systemStyle: .glass,
-            // MARK: Jerkgram v1.2N BUILD125_PROFILE_BIO_GLASS_OWNER1
             // `systemStyle` only controls corners/insets. Supply an explicit
             // tint for this one profile-bio field so the generic `.blocks`
             // renderer cannot replace it with Telegram's opaque list card.
@@ -124,7 +123,6 @@ final class PeerInfoScreenMultilineInputItemNode: PeerInfoScreenItemNode {
         let hasTopCorners = hasCorners && topItem == nil
         let hasBottomCorners = hasCorners && bottomItem == nil
         
-        // MARK: Jerkgram v1.2Q BUILD128_PROFILE_BIO_CORNER_OWNER1
         // `cornersImage(..., glass: true)` is an opaque corner raster. Over a
         // translucent bio editor its filler remains visible as lower-corner
         // triangles. The section container already owns the rounded clipping,

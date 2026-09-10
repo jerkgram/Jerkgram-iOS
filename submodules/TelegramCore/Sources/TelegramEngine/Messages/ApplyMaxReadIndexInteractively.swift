@@ -64,7 +64,6 @@ func _internal_applyMaxReadIndexInteractively(transaction: Transaction, stateMan
             }
         }
     } else if index.id.peerId.namespace == Namespaces.Peer.CloudUser || index.id.peerId.namespace == Namespaces.Peer.CloudGroup || index.id.peerId.namespace == Namespaces.Peer.CloudChannel {
-        // MARK: GhostBase v0.6B Read Ghost local read without remote notify
         let ghostBaseReadGhost = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ReadMessages") as? Bool) ?? false
         if !ghostBaseReadGhost {
             stateManager.notifyAppliedIncomingReadMessages([index.id])

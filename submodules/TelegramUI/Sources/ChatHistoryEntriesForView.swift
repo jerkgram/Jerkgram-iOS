@@ -153,6 +153,16 @@ func chatHistoryEntriesForView(
         if pendingRemovedMessages.contains(message.id) {
             continue
         }
+
+        // Presentation-only filtering: Postbox contents stay untouched, so
+        // switching the option off restores the messages immediately.
+        if JerkgramBlockedReactionPolicy.isMessageHidden(
+            accountPeerId: context.account.peerId,
+            chatPeer: chatPeer,
+            message: message
+        ) {
+            continue loop
+        }
         
         if case let .replyThread(replyThreadMessage) = location, replyThreadMessage.isForumPost {
             for media in message.media {
@@ -214,7 +224,7 @@ func chatHistoryEntriesForView(
         }
         
         if skipViewOnceMedia, let minAutoremoveOrClearTimeout = message.minAutoremoveOrClearTimeout {
-            let ghostBaseOT2KeepViewOnceVisible = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
+            let ghostBaseOT2KeepViewOnceVisible = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
             if minAutoremoveOrClearTimeout <= 60 {
                 if ghostBaseOT2KeepViewOnceVisible {
                     UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "jerkgram.OT2.ViewOnceVisibleKeep.Count") + 1, forKey: "jerkgram.OT2.ViewOnceVisibleKeep.Count")
@@ -225,8 +235,7 @@ func chatHistoryEntriesForView(
             }
         }
         
-        // MARK: GhostBase v1.0S deleted-message visibility gate
-        let ghostBaseShowDeleted = ((UserDefaults.standard.object(forKey: "jerkgram.Messages.ShowDeleted") as? Bool) ?? true)
+        let ghostBaseShowDeleted = ((JerkgramHotSettings.object(forKey: "jerkgram.Messages.ShowDeleted") as? Bool) ?? true)
         let ghostBaseIsDeleted = ((message.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false
 
         if !ghostBaseShowDeleted && ghostBaseIsDeleted {

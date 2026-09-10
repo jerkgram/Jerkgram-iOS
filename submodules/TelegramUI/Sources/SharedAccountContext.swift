@@ -142,6 +142,85 @@ private enum AddedAccountsResult {
 
 private var testHasInstance = false
 
+
+private func jerkgramBuild135ProjectAccountSettings(accountPeerId: Int64) {
+    defer {
+        JerkgramHotSettings.invalidate()
+        JerkgramActivityGhostRuntime.invalidate()
+        JerkgramBlockedReactionPolicy.notifySettingsChanged()
+        GhostBaseGlassStyle.reloadFromDefaults()
+        Queue.mainQueue().async {
+            NotificationCenter.default.post(name: Notification.Name("GhostBaseRamOverlayPreferenceChanged"), object: nil)
+        }
+    }
+    let defaults = UserDefaults.standard
+    let targetPrefix = "jerkgram.account.\(accountPeerId).setting."
+    let runtimeKeys: [String] = [
+        "jerkgram.Profile.Enabled",
+        "jerkgram.Profile.ShowIds",
+        "jerkgram.Profile.ShowDCs",
+        "jerkgram.Profile.ShowRegistration",
+        "jerkgram.Glass.Enabled",
+        "jerkgram.ProfileBlur.Avatar",
+        "jerkgram.ProfileBlur.Animated",
+        "jerkgram.ProfileBlur.Tint",
+        "jerkgram.ProfileBlur.Reduced",
+        "jerkgram.GhostMode.ReadMessages",
+        "jerkgram.GhostMode.TypingActions",
+        "jerkgram.GhostMode.HideRecording",
+        "jerkgram.GhostMode.HideUploading",
+        "jerkgram.GhostMode.HideStickerActivity",
+        "jerkgram.GhostMode.HideGameActivity",
+        "jerkgram.GhostMode.HideEmojiActivity",
+        "jerkgram.GhostMode.Presence",
+        "jerkgram.GhostMode.ScheduledSend",
+        "jerkgram.Messages.SaveDeleted",
+        "jerkgram.Messages.ShowDeleted",
+        "jerkgram.Messages.SaveEditHistory",
+        "jerkgram.Messages.ShowEditHistory",
+        "jerkgram.Messages.HideBlockedMessages",
+        "jerkgram.Messages.HideBlockedReactions",
+        "jerkgram.Messages.SendTextStyle",
+        "jerkgram.Messages.DeletedPortableReplies",
+        "jerkgram.Messages.PreserveDeletedMedia",
+        "jerkgram.Appearance.ShowRamUnderClock",
+        "jerkgram.Appearance.MessageSeconds",
+        "jerkgram.Appearance.HideOwnPhone",
+        "jerkgram.ProtectedContent.Enabled",
+        "jerkgram.ProtectedContent.GalleryShare",
+        "jerkgram.ProtectedContent.GallerySave",
+        "jerkgram.ProtectedContent.GalleryCopy",
+        "jerkgram.ProtectedContent.ChatSave",
+        "jerkgram.ProtectedContent.ChatCopy",
+        "jerkgram.ProtectedContent.ChatForward",
+        "jerkgram.ProtectedContent.AllowScreenshots",
+        "jerkgram.ProtectedContent.AllowScreenRecording",
+        "jerkgram.ProtectedContent.OneTimeScreenshots",
+        "jerkgram.ProtectedContent.OneTimeScreenRecording",
+        "jerkgram.ProtectedContent.OneTimeSave",
+        "jerkgram.Stories.Save",
+        "jerkgram.Stars.LocalBalance.Enabled",
+        "jerkgram.Stars.LocalBalance.Amount",
+        "jerkgram.Stars.LocalBalance.BaseAmount",
+    ]
+    for key in runtimeKeys {
+        let scopedKey = targetPrefix + key
+        if let value = defaults.object(forKey: scopedKey) {
+            defaults.set(value, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    let scheduledSendKey = "jerkgram.GhostMode.ScheduledSend"
+    let sharedDefaults = UserDefaults(suiteName: "group.ph.telegra.Telegraph") ?? defaults
+    if let value = defaults.object(forKey: targetPrefix + scheduledSendKey) {
+        sharedDefaults.set(value, forKey: scheduledSendKey)
+    } else {
+        sharedDefaults.removeObject(forKey: scheduledSendKey)
+    }
+}
+
 public final class SharedAccountContextImpl: SharedAccountContext {
     public let mainWindow: Window1?
     public let applicationBindings: TelegramApplicationBindings
@@ -783,6 +862,9 @@ public final class SharedAccountContextImpl: SharedAccountContext {
                     self.activeAccountsValue!.primary?.account.postbox.clearCaches()
                     self.activeAccountsValue!.primary?.account.resetCachedData()
                     self.activeAccountsValue!.primary = primary
+                    if let primary {
+                        jerkgramBuild135ProjectAccountSettings(accountPeerId: primary.account.peerId.toInt64())
+                    }
                 }
                 if self.activeAccountsValue!.currentAuth?.id != authRecord?.0 {
                     hadUpdates = true
@@ -1786,6 +1868,9 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             }
         }
         self.switchingData = (settingsController as? (ViewController & SettingsController), chatListController as? ChatListController, chatsBadge)
+        if let target = self.activeAccountsValue?.accounts.first(where: { $0.0 == id })?.1 {
+            jerkgramBuild135ProjectAccountSettings(accountPeerId: target.account.peerId.toInt64())
+        }
         
         let _ = self.accountManager.transaction({ transaction -> Bool in
             if transaction.getCurrent()?.0 != id {

@@ -13,7 +13,6 @@ import DeviceAccess
 import TelegramStringFormatting
 import PeerNameColorItem
 
-// MARK: Jerkgram v1.2C BUILD114_SETTINGS_ICONS1
 private func jerkgramMainSettingsIcon(
     _ name: String
 ) -> UIImage? {
@@ -191,8 +190,6 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             interaction.openSettings(.profile)
         }))
 
-    // MARK: GhostBase v1.0R Main Settings Group
-// MARK: Jerkgram v1.2D BUILD115_MAIN_SETTINGS_LOCALIZATION1
     items[.ghostbase]!.append(
     PeerInfoScreenDisclosureItem(
         id: 0,

@@ -376,8 +376,6 @@ class ThemeSettingsAppIconItemNode: ListViewItemNode, ItemListItemNode {
                             var name = "Icon"
                             var bordered = true
                             switch icon.name {
-                                // MARK: JerkGram v1.1Y BUILD110_ICON_LABELS1
-                                // MARK: Jerkgram v1.1Z BUILD111_GLASS_LABELS1
         case "JerkgramGlassReveal":
             name = "Glass Reveal"
         case "JerkgramGlassSolid":

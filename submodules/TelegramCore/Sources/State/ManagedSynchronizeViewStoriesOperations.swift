@@ -119,7 +119,6 @@ func managedSynchronizeViewStoriesOperations(postbox: Postbox, network: Network,
 }
 
 private func pushStoriesAreSeen(postbox: Postbox, network: Network, stateManager: AccountStateManager, peer: Peer, operation: SynchronizeViewStoriesOperation) -> Signal<Void, NoError> {
-    // MARK: GhostBase v0.6C Story Read Ghost remote readStories guard
     let ghostBaseReadGhostExtras = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ReadMessages") as? Bool) ?? false
     if ghostBaseReadGhostExtras {
         return .complete()

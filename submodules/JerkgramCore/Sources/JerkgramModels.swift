@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_CORE_MODELS1
 public struct JerkgramEventId: RawRepresentable, Codable, Hashable, Comparable {
     public let rawValue: String
 

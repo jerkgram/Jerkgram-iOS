@@ -5,7 +5,6 @@ import TelegramPresentationData
 import ItemListUI
 import AccountContext
 
-// MARK: Jerkgram v1.2K BUILD122_STARS_DRAFT_EDITOR1
 private let jerkgramStarsEnabledKey = "jerkgram.Stars.LocalBalance.Enabled"
 private let jerkgramStarsAmountKey = "jerkgram.Stars.LocalBalance.Amount"
 
@@ -56,7 +55,6 @@ private enum JerkgramStarsEditorEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let arguments = arguments as! JerkgramStarsEditorArguments
         switch self {
-        // MARK: Jerkgram v1.2M BUILD124_STARS_REDESIGN1
         case let .preview(_, amount, status):
             return ItemListDisclosureItem(
                 presentationData: presentationData, systemStyle: .glass,

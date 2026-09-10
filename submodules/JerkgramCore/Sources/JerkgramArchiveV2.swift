@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_ARCHIVE_V2_1
 public struct JerkgramSettingsSnapshot: Codable, Equatable {
     public let accountPeerId: Int64
     public var toggles: [String: Bool]

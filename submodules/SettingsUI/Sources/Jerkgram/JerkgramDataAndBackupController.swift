@@ -6,9 +6,6 @@ import ItemListUI
 import AccountContext
 import JerkgramCore
 
-// MARK: Jerkgram v1.2G BUILD118_DATA_BACKUP_UI1
-// MARK: Jerkgram v1.2H BUILD119_DATA_SUMMARY1
-// MARK: Jerkgram v1.2M BUILD124_DATA_REDESIGN1
 private struct JerkgramDataUIState: Equatable {
     var configuration: JerkgramRetentionConfiguration
 }
@@ -57,7 +54,6 @@ private enum JerkgramDataUIEntry: ItemListNodeEntry {
                 sectionId: self.section, style: .blocks,
                 disclosureStyle: .none, action: nil
             )
-        // MARK: Jerkgram v1.2K BUILD122_DATA_ACTIONS1
         case let .action(_, _, title, value, action):
             if action == "export" || action == "import" || action == "cleanup" {
                 return ItemListActionItem(
@@ -129,7 +125,7 @@ private func jerkgramDataEntries(state: JerkgramDataUIState, strings: JerkgramSt
     }
     entries.append(contentsOf: [
         .header(2, strings.backup),
-        .action(2, 1, strings.exportArchive, "Build124 Canary", "export"),
+        .action(2, 1, strings.exportArchive, "Archive v2", "export"),
         .action(2, 2, strings.importArchive, "Archive v2", "import"),
         .info(2, strings.backupAccountHint(state.configuration.accountPeerId)),
     ])

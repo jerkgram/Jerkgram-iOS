@@ -234,7 +234,6 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
     var regularSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
     var editingSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
     let paneContainerNode: PeerInfoPaneContainerNode
-    // MARK: GhostBase v1.1G PROFILEFULLSCREEN1
     private let ghostBaseProfileBackgroundView: GhostBaseProfileBackgroundView?
     private let ghostBaseProfileMetricsSettings: GhostBaseProfileMetricsSettings
     var ignoreScrolling: Bool = false

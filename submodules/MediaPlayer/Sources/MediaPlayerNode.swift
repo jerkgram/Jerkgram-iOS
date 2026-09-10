@@ -68,7 +68,6 @@ public final class MediaPlayerNode: ASDisplayNode {
     var canPlaybackWithoutHierarchy: Bool = false
     public var updateVideoInHierarchy: ((Bool) -> Void)?
 
-    // MARK: GhostBase v1.1P SECONDARY_RENDER_OUTPUT1
     private var secondaryVideoLayers: [ObjectIdentifier: AVSampleBufferDisplayLayer] = [:]
     var secondaryVideoLayersUpdated: (([AVSampleBufferDisplayLayer]) -> Void)?
     private let captureProtected: Bool
@@ -163,7 +162,6 @@ public final class MediaPlayerNode: ASDisplayNode {
         guard self.secondaryVideoLayers[key] == nil else {
             return
         }
-        // MARK: GhostBase v1.1R SECONDARY_VIDEO_LIFECYCLE1
         // The primary Telegram renderer remains responsible for capture
         // protection. Setting preventsCapture on the mirrored display layer
         // can synchronously deadlock AVFoundation during scene resume.
@@ -184,7 +182,6 @@ public final class MediaPlayerNode: ASDisplayNode {
         self.secondaryVideoLayersUpdated?(self.currentSecondaryVideoLayers)
     }
 
-    // MARK: GhostBase v1.1S SECONDARY_VIDEO_STABLE1
     private static func enqueueSecondaryCopies(
         _ sampleBuffer: CMSampleBuffer,
         layers: [AVSampleBufferDisplayLayer]

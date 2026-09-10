@@ -4315,7 +4315,6 @@ func settingsSearchableItems(
     let canAddAccount = activeAccountsAndPeers(context: context)
     |> take(1)
     |> map { _ -> Bool in
-        // MARK: GhostBase v1.0ZG ACCOUNTUNLOCK1 settings search
         return true
     }
     

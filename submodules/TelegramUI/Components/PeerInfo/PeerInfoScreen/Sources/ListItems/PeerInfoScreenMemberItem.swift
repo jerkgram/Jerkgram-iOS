@@ -59,7 +59,6 @@ private final class PeerInfoScreenMemberItemNode: PeerInfoScreenItemNode {
     private let maskNode: ASImageNode
     private let bottomSeparatorNode: ASDisplayNode
 
-    // MARK: GhostBase v1.0ZC Account BOT badge
     private let ghostBaseBotBadgeBackgroundNode: ASDisplayNode
     private let ghostBaseBotBadgeTextNode: ImmediateTextNode
     

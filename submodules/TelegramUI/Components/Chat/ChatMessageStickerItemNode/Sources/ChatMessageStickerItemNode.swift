@@ -288,13 +288,11 @@ public class ChatMessageStickerItemNode: ChatMessageItemView {
 
     override public func setupItem(_ item: ChatMessageItem, synchronousLoad: Bool) {
         super.setupItem(item, synchronousLoad: synchronousLoad)
-        // MARK: Jerkgram v1.2I BUILD120_STICKER_DELETED_ALPHA1
         // Stickers use a dedicated renderer and therefore bypass the
         // bubble deleted-content alpha owner. Mirror the same visual
         // contract here without changing recovery/cache behaviour.
         // Reassign on every setupItem so reused live nodes return to 1.0.
         let ghostBaseDeletedStickerAlpha: CGFloat = (((item.message.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false) ? 0.55 : 1.0
-        // MARK: Jerkgram v1.2K BUILD122_STATIC_STICKER_ALPHA_OWNER1
         // One alpha owner only: parent + child alpha would multiply to 0.3025.
         self.contextSourceNode.contentNode.alpha = ghostBaseDeletedStickerAlpha
 
@@ -571,9 +569,8 @@ public class ChatMessageStickerItemNode: ChatMessageItemView {
                     }
                 }
 
-                // MARK: GhostBase v0.8D right-side protected share button
 
-                let ghostBaseProtectedChatForward = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true) && !item.message.containsSecretMedia && item.message.paidContent == nil)
+                let ghostBaseProtectedChatForward = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true) && !item.message.containsSecretMedia && item.message.paidContent == nil)
 
                 if (item.associatedData.isCopyProtectionEnabled || item.message.isCopyProtected()) && !ghostBaseProtectedChatForward {
                     if hasCommentButton(item: item) {
@@ -932,7 +929,7 @@ public class ChatMessageStickerItemNode: ChatMessageItemView {
             if shouldDisplayInlineDateReactions(message: EngineMessage(item.message), isPremium: item.associatedData.isPremium, forceInline: item.associatedData.forceInlineReactions) {
                 reactions = ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
             } else {
-                reactions = mergedMessageReactions(attributes: item.message.attributes, isTags: item.message.areReactionsTags(accountPeerId: item.context.account.peerId)) ?? ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
+                reactions = jerkgramVisibleMessageReactions(accountPeerId: item.context.account.peerId, message: item.message) ?? ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
             }
 
             var reactionButtonsFinalize: ((CGFloat) -> (CGSize, (_ animation: ListViewItemUpdateAnimation) -> ChatMessageReactionButtonsNode))?

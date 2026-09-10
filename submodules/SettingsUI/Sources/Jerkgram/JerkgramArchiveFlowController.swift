@@ -10,7 +10,6 @@ import LegacyMediaPickerUI
 import JerkgramCore
 import ZipArchive
 
-// MARK: Jerkgram v1.2G BUILD118_ARCHIVE_FLOW1
 private let jerkgramPortableBooleanKeys: [String] = [
     "jerkgram.Profile.Enabled", "jerkgram.Profile.ShowIds", "jerkgram.Profile.ShowDCs",
     "jerkgram.Profile.ShowRegistration", "jerkgram.Glass.Enabled",
@@ -110,7 +109,6 @@ private func jerkgramWritePayload<T: Encodable>(
     )
 }
 
-// MARK: Jerkgram v1.2M BUILD124_ARCHIVE_EXPORT_RUNTIME1
 private func jerkgramPresentArchiveExportError(
     context: AccountContext,
     controller: ViewController,
@@ -148,7 +146,7 @@ public func jerkgramPresentArchiveExport(
         let workURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("jerkgram-export-\(UUID().uuidString)", isDirectory: true)
         let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Jerkgram-\(accountPeerId)-Build124.jerkgram")
+            .appendingPathComponent("Jerkgram-\(accountPeerId).jerkgram")
         do {
             JerkgramCaptureRecorder.flushSynchronously()
             try FileManager.default.createDirectory(at: workURL, withIntermediateDirectories: true)
@@ -271,9 +269,16 @@ private final class JerkgramUserDefaultsSnapshotStore: JerkgramSettingsSnapshotS
     }
 }
 
-// MARK: Jerkgram v1.2K BUILD122_ARCHIVE_ACTIVE_ACCOUNTS1
-// MARK: Jerkgram v1.2M BUILD124_ARCHIVE_IMPORT_BACKGROUND1
 private func jerkgramProjectImportedSettingsToActiveDefaults(_ snapshot: JerkgramSettingsSnapshot) {
+    defer {
+        JerkgramHotSettings.invalidate()
+        JerkgramActivityGhostRuntime.invalidate()
+        JerkgramBlockedReactionPolicy.notifySettingsChanged()
+        GhostBaseGlassStyle.reloadFromDefaults()
+        Queue.mainQueue().async {
+            NotificationCenter.default.post(name: Notification.Name("GhostBaseRamOverlayPreferenceChanged"), object: nil)
+        }
+    }
     let defaults = UserDefaults.standard
     for (key, value) in snapshot.toggles {
         defaults.set(value, forKey: key)
@@ -286,7 +291,6 @@ private func jerkgramProjectImportedSettingsToActiveDefaults(_ snapshot: Jerkgra
     }
 
     // Archive v2 originally used Jerkgram-prefixed portable names while a few
-    // low-level runtime owners still consume their legacy GhostBase projection.
     // Project both spellings for the three synchronous side-effect settings.
     let legacyRuntimeKeys: [String: String] = [
         "jerkgram.GhostMode.ScheduledSend": "GhostBase.GhostMode.ScheduledSend",
@@ -558,7 +562,6 @@ private func jerkgramPresentArchiveImportPicker(
                         TextAlertAction(type: .defaultAction, title: strings.importSettings, action: {
                             let eventStore = JerkgramJSONLEventStore(rootURL: jerkgramCoreRootURL())
                             let settingsStore = JerkgramUserDefaultsSnapshotStore()
-                            // MARK: Jerkgram v1.2K BUILD122_ARCHIVE_RESULT_FEEDBACK1
                             let retentionStore = JerkgramRuntimeRetentionStore()
                             do {
                                 try JerkgramArchiveTransaction.apply(

@@ -15,9 +15,6 @@ import ReactionSelectionNode
 import TopMessageReactions
 import ChatMessagePaymentAlertController
 
-// MARK: Jerkgram v1.2M BUILD124_PROTECTED_FORWARD_LOCAL_COPY1
-// MARK: Jerkgram v1.2M BUILD124_PROTECTED_FORWARD_SOURCE_CHANNEL1
-// MARK: Jerkgram v1.2R BUILD129_PROTECTED_CHAT_FORWARD1
 private func jerkgramRequiresPortableForward(_ message: Message) -> Bool {
     if message.isCopyProtected() { return true }
     if let chatPeer = message.peers[message.id.peerId], chatPeer.isCopyProtectionEnabled { return true }
@@ -94,7 +91,6 @@ private func jerkgramProtectedResourceData(
     // Use the same public EngineResources fetch/data pair as Official Telegram's
     // SaveToCameraRoll path. The cloud reference stays alive only while fetching;
     // the outgoing message is created after a completed local path exists.
-    // MARK: Jerkgram v1.2N BUILD125_PROTECTED_FORWARD_CACHE_FIRST1
     // A viewed private/protected post is normally already in MediaBox. Reuse
     // that completed local file before attempting a server fetch: the latter
     // is rejected for no-forward channels and led to the red failure state.
@@ -480,8 +476,7 @@ extension ChatControllerImpl {
                                         }
                                     }
                                     
-                                    // MARK: GhostBase v1.0P+SH1 Share Scheduled Send
-                                    let ghostBaseSH1ScheduledSendEnabled = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false)
+                                    let ghostBaseSH1ScheduledSendEnabled = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false)
                                     if ghostBaseSH1ScheduledSendEnabled && !shouldDivert {
                                         let ghostBaseSH1ScheduleTime = Int32(Date().timeIntervalSince1970) + 12
                                         peerMessages = peerMessages.map { message -> EnqueueMessage in

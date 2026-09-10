@@ -1,15 +1,24 @@
 import Foundation
 import UIKit
 
-// MARK: GhostBase v1.1F PROFILEBLURSETTINGS1
 public enum GhostBaseGlassStyle {
     public static let enabledKey = "jerkgram.Glass.Enabled"
 
+    private static let enabledLock = NSLock()
+    private static var enabledValue: Bool = {
+        return UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
+    }()
+
+    public static func reloadFromDefaults() {
+        self.enabledLock.lock()
+        defer { self.enabledLock.unlock() }
+        self.enabledValue = UserDefaults.standard.object(forKey: self.enabledKey) as? Bool ?? true
+    }
+
     public static var isEnabled: Bool {
-        if let value = UserDefaults.standard.object(forKey: self.enabledKey) as? Bool {
-            return value
-        }
-        return true
+        self.enabledLock.lock()
+        defer { self.enabledLock.unlock() }
+        return self.enabledValue
     }
 
     public static var usesReducedEffects: Bool {
@@ -17,6 +26,9 @@ public enum GhostBaseGlassStyle {
     }
 
     public static func setEnabled(_ value: Bool) {
+        self.enabledLock.lock()
+        self.enabledValue = value
+        self.enabledLock.unlock()
         UserDefaults.standard.set(value, forKey: self.enabledKey)
     }
 

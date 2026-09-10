@@ -6,7 +6,6 @@ import TelegramApi
 import FlatBuffers
 import FlatSerialization
 
-// MARK: GhostBase v0.9F.1 Local Stars visual override
 private func ghostBaseLocalStarsVisualBalance() -> StarsAmount? {
     let defaults = UserDefaults.standard
     guard defaults.bool(forKey: "jerkgram.Stars.LocalBalance.Enabled") else {

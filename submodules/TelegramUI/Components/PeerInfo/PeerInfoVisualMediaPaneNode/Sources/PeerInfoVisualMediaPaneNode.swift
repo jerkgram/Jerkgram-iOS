@@ -1134,7 +1134,6 @@ public final class PeerInfoVisualMediaPaneNode: ASDisplayNode, PeerInfoPaneNode,
     private let contextGestureContainerNode: ContextControllerSourceNode
     private let itemGrid: SparseItemGrid
     private let itemGridBinding: SparseItemGridBindingImpl
-    // MARK: Jerkgram v1.2G BUILD118_GLASS1
     private let ghostBaseGlassEnabled: Bool
     private let listBackgroundView: UIView
     private let listMaskView: UIImageView

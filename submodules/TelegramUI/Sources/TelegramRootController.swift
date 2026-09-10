@@ -90,7 +90,6 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
     private var applicationInFocusDisposable: Disposable?
     private var storyUploadEventsDisposable: Disposable?
 
-    // MARK: GhostBase v1.1R RAM_OVERLAY1
     private var ghostBaseRamLabel: UILabel?
     private var ghostBaseRamTimer: Foundation.Timer?
     private var ghostBaseRamDefaultsObserver: NSObjectProtocol?
@@ -122,6 +121,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
                 let previousTheme = strongSelf.presentationData.theme
                 strongSelf.presentationData = presentationData
                 if previousTheme !== presentationData.theme {
+                    strongSelf.ghostBaseRamLabel?.textColor = presentationData.theme.overallDarkAppearance ? UIColor.white.withAlphaComponent(0.78) : UIColor.black.withAlphaComponent(0.68)
                     (strongSelf.rootTabController as? TabBarControllerImpl)?.updateTheme(theme: presentationData.theme)
                     strongSelf.rootTabController?.statusBar.statusBarStyle = presentationData.theme.rootController.statusBarStyle.style
                 }
@@ -174,8 +174,8 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
 
     private func ghostBaseSetupRamOverlay() {
         self.ghostBaseRamDefaultsObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification,
-            object: UserDefaults.standard,
+            forName: Notification.Name("GhostBaseRamOverlayPreferenceChanged"),
+            object: nil,
             queue: .main,
             using: { [weak self] _ in
                 self?.ghostBaseUpdateRamOverlayState()
@@ -241,6 +241,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
             let timer = Foundation.Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
                 self?.ghostBaseUpdateRamValue()
             }
+            timer.tolerance = 0.5
             RunLoop.main.add(timer, forMode: .common)
             self.ghostBaseRamTimer = timer
         }
@@ -250,39 +251,16 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
         self.view.bringSubviewToFront(label)
     }
 
-    private func ghostBaseCurrentMemoryFootprint() -> UInt64? {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(
-            MemoryLayout<task_vm_info>.size / MemoryLayout<integer_t>.size
-        )
-        let result = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(
-                to: integer_t.self,
-                capacity: Int(count)
-            ) {
-                task_info(
-                    mach_task_self_,
-                    task_flavor_t(TASK_VM_INFO),
-                    $0,
-                    &count
-                )
+        private func ghostBaseUpdateRamValue() {
+        guard self.ghostBaseRamLabel != nil else { return }
+        JerkgramMemorySampler.shared.sample(consumer: "ramOverlay") { [weak self] bytes in
+            guard let label = self?.ghostBaseRamLabel else { return }
+            if bytes > 0 {
+                let megabytes = Int((bytes + 524_288) / 1_048_576)
+                label.text = "RAM \(megabytes) MB"
+            } else {
+                label.text = "RAM —"
             }
-        }
-        guard result == KERN_SUCCESS else {
-            return nil
-        }
-        return info.phys_footprint
-    }
-
-    private func ghostBaseUpdateRamValue() {
-        guard let label = self.ghostBaseRamLabel else {
-            return
-        }
-        if let bytes = self.ghostBaseCurrentMemoryFootprint() {
-            let megabytes = Int((bytes + 524_288) / 1_048_576)
-            label.text = "RAM \(megabytes) MB"
-        } else {
-            label.text = "RAM —"
         }
     }
 
@@ -359,7 +337,6 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
     
         super.containerLayoutUpdated(layout, transition: transition)
         self.ghostBaseRamLayout = layout
-        self.ghostBaseUpdateRamOverlayState()
         self.ghostBaseLayoutRamLabel()
     }
     

@@ -4,7 +4,6 @@ import SwiftSignalKit
 import TelegramApi
 import MtProtoKit
 
-// MARK: GhostBase v1.1H TRANSCRIPTIONACCUMULATOR1
 private func ghostBaseMergeTranscriptionTextV11H(
     previous: String,
     incoming: String
@@ -71,7 +70,6 @@ private func ghostBaseMergeTranscriptionTextV11H(
     return previous + " " + incoming
 }
 
-// MARK: GhostBase v1.1H TRANSCRIPTIONREQUEST1
 
 public enum EngineAudioTranscriptionResult {
     case success

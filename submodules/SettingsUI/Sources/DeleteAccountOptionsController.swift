@@ -420,7 +420,6 @@ public func deleteAccountOptionsController(context: AccountContext, navigationCo
                 break
         }
         
-        // MARK: GhostBase v1.0ZG ACCOUNTUNLOCK1 delete alternatives
         let canAddAccounts = true
 
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.DeleteAccount_AlternativeOptionsTitle), leftNavigationButton: leftNavigationButton, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))

@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2E BUILD116_ARCHIVE_FOUNDATION1
 public enum JerkgramArchiveEventKindV1: String, Codable, CaseIterable {
     case profileSnapshot
     case presence

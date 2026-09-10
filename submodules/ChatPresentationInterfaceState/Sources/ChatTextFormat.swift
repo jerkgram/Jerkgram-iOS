@@ -263,7 +263,6 @@ public func chatTextInputAddQuoteAttribute(_ state: ChatTextInputState, selectio
                 attributesToRemove.append((key, range))
                 quoteRange = quoteRange.union(range)
             } else if key == ChatTextInputAttributes.customEmoji {
-                // MARK: GhostBase v1.1U BUILD106_CUSTOM_EMOJI_QUOTE1
                 continue
             } else {
                 attributesToRemove.append((key, nsRange))

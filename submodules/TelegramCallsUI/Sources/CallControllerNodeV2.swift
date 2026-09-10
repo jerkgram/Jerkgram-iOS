@@ -19,7 +19,6 @@ import MetalEngine
 import DeviceAccess
 import LibYuvBinding
 
-// MARK: GhostBase v1.1L CALLBACKDROP1
 private final class GhostBaseCallBackdropView:
     UIView {
 

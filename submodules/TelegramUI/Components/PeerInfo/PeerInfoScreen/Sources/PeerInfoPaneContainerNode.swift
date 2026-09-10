@@ -604,7 +604,6 @@ private final class PeerInfoPendingPane {
 }
 
 final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegate {
-    // MARK: GhostBase v1.1G PANEGLASS1
     private let ghostBaseGlassEnabled: Bool
     private let context: AccountContext
     private let peerId: EnginePeer.Id
@@ -997,10 +996,8 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
             }
         }
         
-        // MARK: GhostBase v1.1I FULLPANEFINAL1
         // Preserve native pane ownership/geometry, but do not cover the
         // fullscreen wallpaper/avatar source with an opaque Telegram block.
-        // MARK: Jerkgram v1.2D BUILD115_LINKS_INNER_OWNER1
         // The outer pane container is not the visible owner of the
         // Links list. Keep it transparent and let PeerInfoListPaneNode
         // own the single adaptive readability surface.

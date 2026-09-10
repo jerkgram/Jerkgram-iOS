@@ -6,7 +6,6 @@ import AccountContext
 import TelegramPresentationData
 
 final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
-    // MARK: GhostBase v1.1P SECTION_OWNER1
     private let ghostBaseGlassEnabled: Bool
     private let backgroundNode: ASDisplayNode
     private let topSeparatorNode: ASDisplayNode

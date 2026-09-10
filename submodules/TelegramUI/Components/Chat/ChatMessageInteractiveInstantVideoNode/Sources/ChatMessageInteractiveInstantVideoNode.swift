@@ -458,7 +458,6 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                 forwardInfoSizeApply = makeForwardInfoLayout(item.context, item.presentationData, item.presentationData.strings, .standalone, forwardSource.flatMap(EnginePeer.init), forwardAuthorSignature, forwardPsaType, nil, CGSize(width: availableWidth, height: CGFloat.greatestFiniteMagnitude))
             }
 
-                                    // MARK: Jerkgram v1.2P BUILD127_NATIVE_ONETIME_CIRCLE_STATUS1
             // Preserve only Telegram's native consumed/not-consumed state. There is
             // no separate outgoing viewed marker in the circle renderer.
             var notConsumed = false
@@ -782,7 +781,7 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                                         }
                                     }
                                 }
-                            }), content: NativeVideoContent(id: .message(item.message.stableId, telegramFile.fileId), userLocation: .peer(item.message.id.peerId), fileReference: .message(message: MessageReference(item.message), media: telegramFile), streamVideo: streamVideo ? .conservative : .none, enableSound: false, fetchAutomatically: false, isAudioVideoMessage: true, captureProtected: (isViewOnceMessage && !(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenshots") as? Bool) ?? false) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenRecording") as? Bool) ?? false) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && item.message.id.peerId.namespace != Namespaces.Peer.SecretChat)) || (!(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (item.associatedData.isCopyProtectionEnabled || item.message.isCopyProtected())), storeAfterDownload: nil), priority: item.associatedData.isStandalone ? .overlay : .embedded, autoplay: item.context.sharedContext.energyUsageSettings.autoplayVideo && !isViewOnceMessage)
+                            }), content: NativeVideoContent(id: .message(item.message.stableId, telegramFile.fileId), userLocation: .peer(item.message.id.peerId), fileReference: .message(message: MessageReference(item.message), media: telegramFile), streamVideo: streamVideo ? .conservative : .none, enableSound: false, fetchAutomatically: false, isAudioVideoMessage: true, captureProtected: (isViewOnceMessage && !(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenshots") as? Bool) ?? false) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenRecording") as? Bool) ?? false) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && item.message.id.peerId.namespace != Namespaces.Peer.SecretChat)) || (!(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (item.associatedData.isCopyProtectionEnabled || item.message.isCopyProtected())), storeAfterDownload: nil), priority: item.associatedData.isStandalone ? .overlay : .embedded, autoplay: item.context.sharedContext.energyUsageSettings.autoplayVideo && !isViewOnceMessage)
                             if let previousVideoNode = previousVideoNode {
                                 videoNode.bounds = previousVideoNode.bounds
                                 videoNode.position = previousVideoNode.position
@@ -841,7 +840,6 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                     }
 
                     var displayTranscribe = false
-                    // MARK: GhostBase v1.1A TRANSCRIPTION1 round-video unlock
                     if item.message.id.peerId.namespace != Namespaces.Peer.SecretChat && statusDisplayType == .free && !isViewOnceMessage && !item.presentationData.isPreview {
                         displayTranscribe = true
                     }
@@ -909,7 +907,6 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                             durationFrame.origin.x -= 9.0
                         }
 
-                        // MARK: Jerkgram v1.2N BUILD125_CIRCLE_VIEWED_CHECK1
                         durationNode.isSeen = !notConsumed || item.presentationData.isPreview
                         durationNode.showsViewedCheck = false
                         let size = durationNode.size
@@ -1817,7 +1814,6 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
             return
         }
 
-        // MARK: GhostBase v1.1A TRANSCRIPTION1 round request without local Premium gate
         var shouldBeginTranscription = false
         var shouldExpandNow = false
 
@@ -1842,7 +1838,6 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                 self.audioTranscriptionState = .inProgress
                 self.requestUpdateLayout(true)
 
-                // MARK: GhostBase v1.1B TRANSCRIPTION2 round server-limit guard
                 Logger.shared.log("jerkgram.Transcription2", "round video still requires Official server transcription")
                 self.transcribeDisposable = (item.context.engine.messages.transcribeAudio(messageId: item.message.id)
                 |> deliverOnMainQueue).startStrict(next: { [weak self] result in

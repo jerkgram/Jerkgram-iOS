@@ -84,7 +84,6 @@ private let TitleNodeStateExpanded = 1
 
 final class PeerInfoHeaderNode: ASDisplayNode {
     private var context: AccountContext
-    // MARK: GhostBase v1.1G PREMIUMDECORATIONS1
     private let ghostBaseProfileGlassSettings: GhostBaseProfileBlurSettings?
     private let isPremiumDisabled: Bool
     private weak var controller: PeerInfoScreenImpl?
@@ -707,7 +706,6 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             regularHeaderButtonBackgroundColor = .clear
         }
         if self.ghostBaseProfileGlassSettings != nil {
-            // MARK: GhostBase v1.1K HEADERGLASS2
             //
             // Geometry, icons, labels and hit targets stay native.
             // Only the shared NavigationBackgroundNode material changes.
@@ -781,7 +779,6 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         let editingEdgeEffectHeight: CGFloat = 40.0
         let editingEdgeEffectFrame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: width, height: navigationHeight + 10.0))
         transition.updateFrame(view: self.editingEdgeEffectView, frame: editingEdgeEffectFrame)
-        // MARK: Jerkgram v1.2L BUILD123_PROFILE_EDIT_GLASS_OWNER1
         let editingEdgeColor: UIColor
         if GhostBaseGlassStyle.isEnabled {
             editingEdgeColor = UIColor(
@@ -1296,7 +1293,6 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
             
             if self.isSettings, case let .user(user) = peer {
-                // MARK: GhostBase v1.1L HIDEPHONEHEADER1
                 let hideOwnPhone =
                     (
                         UserDefaults.standard

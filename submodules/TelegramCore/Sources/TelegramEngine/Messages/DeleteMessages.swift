@@ -151,7 +151,14 @@ func _internal_deleteAllReactionsWithAuthor(account: Account, peerId: PeerId, au
                     }
 
                     var tags = currentMessage.tags
-                    if attributes.contains(where: { ($0 as? ReactionsMessageAttribute)?.hasUnseen == true }) {
+                    let hasVisibleUnseenReaction = attributes.compactMap { $0 as? ReactionsMessageAttribute }.contains(where: {
+                        JerkgramBlockedReactionPolicy.hasVisibleUnseenReaction(
+                            accountPeerId: account.peerId,
+                            message: currentMessage,
+                            attribute: $0
+                        )
+                    })
+                    if hasVisibleUnseenReaction {
                         tags.insert(.unseenReaction)
                     } else {
                         tags.remove(.unseenReaction)
@@ -243,7 +250,14 @@ func _internal_deleteReaction(account: Account, messageId: MessageId, authorId: 
                 }
 
                 var tags = currentMessage.tags
-                if attributes.contains(where: { ($0 as? ReactionsMessageAttribute)?.hasUnseen == true }) {
+                let hasVisibleUnseenReaction = attributes.compactMap { $0 as? ReactionsMessageAttribute }.contains(where: {
+                    JerkgramBlockedReactionPolicy.hasVisibleUnseenReaction(
+                        accountPeerId: account.peerId,
+                        message: currentMessage,
+                        attribute: $0
+                    )
+                })
+                if hasVisibleUnseenReaction {
                     tags.insert(.unseenReaction)
                 } else {
                     tags.remove(.unseenReaction)

@@ -147,7 +147,6 @@ final class OverlayAudioPlayerControlsNode: ASDisplayNode {
     
     private let backgroundNode: ASImageNode
 
-    // MARK: GhostBase v1.1R MUSIC_CONTROLS_GLASS2
     private let ghostBaseGlassEffectView: UIVisualEffectView
     private let ghostBaseGlassTintView: UIView
     private var ghostBaseGlassIsDark: Bool?
@@ -681,8 +680,6 @@ final class OverlayAudioPlayerControlsNode: ASDisplayNode {
         }
     }
     
-    // MARK: GhostBase v1.1T MUSIC_READABLE_GLASS1
-    // MARK: GhostBase v1.1U BUILD106_MUSIC_CONTROLS1
     private func updateGhostBaseGlassBackground() {
         let isDark =
             self.presentationData

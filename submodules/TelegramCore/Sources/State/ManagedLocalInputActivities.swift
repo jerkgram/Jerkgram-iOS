@@ -142,36 +142,8 @@ private func actionFromActivity(_ activity: PeerInputActivity?) -> Api.SendMessa
 }
 
 private func requestActivity(postbox: Postbox, network: Network, accountPeerId: PeerId, peerId: PeerId, threadId: Int64?, activity: PeerInputActivity?) -> Signal<Void, NoError> {
-    // MARK: GhostBase v0.5C Activity Ghost lower-layer guard
-    if let activity = activity {
-        let ghostBaseHideTyping = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.TypingActions") as? Bool) ?? false
-        let ghostBaseHideRecording = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideRecording") as? Bool) ?? false
-        let ghostBaseHideUploading = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideUploading") as? Bool) ?? false
-        let ghostBaseHideStickerActivity = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideStickerActivity") as? Bool) ?? false
-        let ghostBaseHideGameActivity = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideGameActivity") as? Bool) ?? false
-        let ghostBaseHideEmojiActivity = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideEmojiActivity") as? Bool) ?? false
-
-        let ghostBaseSuppressActivity: Bool
-        switch activity {
-        case .typingText:
-            ghostBaseSuppressActivity = ghostBaseHideTyping
-        case .recordingVoice, .recordingInstantVideo:
-            ghostBaseSuppressActivity = ghostBaseHideRecording
-        case .uploadingFile(_), .uploadingPhoto(_), .uploadingVideo(_), .uploadingInstantVideo(_):
-            ghostBaseSuppressActivity = ghostBaseHideUploading
-        case .choosingSticker:
-            ghostBaseSuppressActivity = ghostBaseHideStickerActivity
-        case .playingGame:
-            ghostBaseSuppressActivity = ghostBaseHideGameActivity
-        case .interactingWithEmoji(_, _, _), .seeingEmojiInteraction(_):
-            ghostBaseSuppressActivity = ghostBaseHideEmojiActivity
-        default:
-            ghostBaseSuppressActivity = false
-        }
-
-        if ghostBaseSuppressActivity {
-            return .complete()
-        }
+    if let activity, JerkgramActivityGhostRuntime.shouldSuppress(activity) {
+        return .complete()
     }
 
     return postbox.transaction { transaction -> Signal<Void, NoError> in

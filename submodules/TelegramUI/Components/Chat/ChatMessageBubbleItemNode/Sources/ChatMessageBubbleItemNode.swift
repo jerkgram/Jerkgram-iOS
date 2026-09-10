@@ -478,7 +478,7 @@ private func contentNodeMessagesAndClassesForItem(_ item: ChatMessageItem) -> ([
         }
     }
 
-    if !reactionsAreInline && !hideAllAdditionalInfo, let reactionsAttribute = mergedMessageReactions(attributes: firstMessage.attributes, isTags: firstMessage.areReactionsTags(accountPeerId: item.context.account.peerId)), !reactionsAttribute.reactions.isEmpty {
+    if !reactionsAreInline && !hideAllAdditionalInfo, let reactionsAttribute = jerkgramVisibleMessageReactions(accountPeerId: item.context.account.peerId, message: firstMessage), !reactionsAttribute.reactions.isEmpty {
         if result.last?.1 == ChatMessageTextBubbleContentNode.self {
         } else {
             if result.last?.1 == ChatMessagePollBubbleContentNode.self ||
@@ -1952,9 +1952,8 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                 }
             }
 
-            // MARK: GhostBase v0.8D right-side protected share button
 
-            let ghostBaseProtectedChatForward = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true) && !item.message.containsSecretMedia && item.message.paidContent == nil)
+            let ghostBaseProtectedChatForward = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true) && !item.message.containsSecretMedia && item.message.paidContent == nil)
 
             if (item.associatedData.isCopyProtectionEnabled || item.message.isCopyProtected()) && !ghostBaseProtectedChatForward {
                 if mayHaveSeparateCommentsButton && hasCommentButton(item: item) {
@@ -2360,7 +2359,7 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
 
         let bubbleReactions: ReactionsMessageAttribute
         if needReactions || forceReactionsOutside {
-            bubbleReactions = mergedMessageReactions(attributes: item.message.attributes, isTags: item.message.areReactionsTags(accountPeerId: item.context.account.peerId)) ?? ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
+            bubbleReactions = jerkgramVisibleMessageReactions(accountPeerId: item.context.account.peerId, message: item.message) ?? ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
         } else {
             bubbleReactions = ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
         }
@@ -5640,7 +5639,6 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
             }
         }
 
-        // MARK: GhostBase v0.9C deleted bubble alpha
         let ghostBaseDeletedBubbleAlpha: CGFloat = (((item.message.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false) ? 0.55 : 1.0
         strongSelf.backgroundNode.alpha = ghostBaseDeletedBubbleAlpha
         strongSelf.backgroundWallpaperNode.alpha = ghostBaseDeletedBubbleAlpha

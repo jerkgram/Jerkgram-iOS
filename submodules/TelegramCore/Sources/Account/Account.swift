@@ -903,6 +903,109 @@ public enum AccountNetworkState: Equatable {
     case online(proxy: AccountNetworkProxyState?)
 }
 
+private struct JerkgramActivityGhostSettings {
+    let typing: Bool
+    let recording: Bool
+    let uploading: Bool
+    let sticker: Bool
+    let game: Bool
+    let emoji: Bool
+}
+
+public enum JerkgramActivityGhostRuntime {
+    private static let cached = Atomic(value: JerkgramActivityGhostSettings?.none)
+
+    public static func invalidate() {
+        let _ = self.cached.modify { _ in nil }
+    }
+
+    private static func settings() -> JerkgramActivityGhostSettings {
+        // Load and publish under the same lock used by invalidate().
+        return self.cached.modify { cached in
+            if let cached = cached { return cached }
+            let defaults = UserDefaults.standard
+            func value(_ key: String) -> Bool {
+                return defaults.object(forKey: key) as? Bool ?? false
+            }
+            let loaded = JerkgramActivityGhostSettings(
+                typing: value("jerkgram.GhostMode.TypingActions"),
+                recording: value("jerkgram.GhostMode.HideRecording"),
+                uploading: value("jerkgram.GhostMode.HideUploading"),
+                sticker: value("jerkgram.GhostMode.HideStickerActivity"),
+                game: value("jerkgram.GhostMode.HideGameActivity"),
+                emoji: value("jerkgram.GhostMode.HideEmojiActivity")
+            )
+            return loaded
+        }!
+    }
+
+    public static func shouldSuppress(_ activity: PeerInputActivity) -> Bool {
+        let settings = self.settings()
+        switch activity {
+        case .typingText:
+            return settings.typing
+        case .recordingVoice, .recordingInstantVideo:
+            return settings.recording
+        case .uploadingFile(_), .uploadingPhoto(_), .uploadingVideo(_), .uploadingInstantVideo(_):
+            return settings.uploading
+        case .choosingSticker:
+            return settings.sticker
+        case .playingGame:
+            return settings.game
+        case .interactingWithEmoji(_, _, _), .seeingEmojiInteraction(_):
+            return settings.emoji
+        default:
+            return false
+        }
+    }
+}
+
+public enum JerkgramHotSettings {
+    public static let keys: Set<String> = [
+        "jerkgram.GhostMode.ScheduledSend",
+        "jerkgram.Messages.SendTextStyle",
+        "jerkgram.Messages.ShowDeleted",
+        "jerkgram.Messages.ShowEditHistory",
+        "jerkgram.ProtectedContent.AllowScreenRecording",
+        "jerkgram.ProtectedContent.AllowScreenshots",
+        "jerkgram.ProtectedContent.ChatCopy",
+        "jerkgram.ProtectedContent.ChatForward",
+        "jerkgram.ProtectedContent.ChatSave",
+        "jerkgram.ProtectedContent.Enabled",
+        "jerkgram.ProtectedContent.GalleryCopy",
+        "jerkgram.ProtectedContent.GallerySave",
+        "jerkgram.ProtectedContent.GalleryShare",
+        "jerkgram.ProtectedContent.OneTimeSave",
+        "jerkgram.ProtectedContent.OneTimeScreenRecording",
+        "jerkgram.ProtectedContent.OneTimeScreenshots",
+    ]
+    private static let lock = NSLock()
+    private static var snapshot: [String: Any]?
+
+    public static func invalidate() {
+        self.lock.lock()
+        self.snapshot = nil
+        self.lock.unlock()
+    }
+
+    public static func object(forKey key: String) -> Any? {
+        precondition(self.keys.contains(key))
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if self.snapshot == nil {
+            let defaults = UserDefaults.standard
+            var values: [String: Any] = [:]
+            for key in self.keys {
+                if let value = defaults.object(forKey: key) {
+                    values[key] = value
+                }
+            }
+            self.snapshot = values
+        }
+        return self.snapshot?[key]
+    }
+}
+
 public final class AccountAuxiliaryMethods {
     public let fetchResource: (Postbox, MediaResource, Signal<[(Range<Int64>, MediaBoxFetchPriority)], NoError>, MediaResourceFetchParameters?) -> Signal<MediaResourceDataFetchResult, MediaResourceDataFetchError>?
     public let fetchResourceMediaReferenceHash: (MediaResource) -> Signal<Data?, NoError>
@@ -1147,7 +1250,6 @@ public enum NetworkSpeedLimitedEvent {
     case download(DownloadSubject)
 }
 
-// MARK: GhostBase v1.0ZE BOTSAFE1 account quarantine
 private func ghostBaseBotSafeModeEnabled(_ peerId: PeerId) -> Bool {
     return UserDefaults.standard.bool(
         forKey: "jerkgram.BotAccount.\(peerId.toInt64())"
@@ -1168,7 +1270,6 @@ private func ghostBaseBotSafeRecord(
     Logger.shared.log("BOTSAFE1", value)
 }
 
-// MARK: GhostBase v1.1E BOTSHADOW1 logout gate
 // This gate is process-local. It never changes account authorization state.
 enum GhostBaseBotHistoryGate {
     private static let lock = NSLock()
@@ -1366,7 +1467,6 @@ public class Account {
             transaction.updatePeerPresencesInternal(presences: [peerId: TelegramUserPresence(status: .present(until: Int32.max - 1), lastActivity: 0)], merge: { _, updated in return updated })
             transaction.setNeedsPeerGroupMessageStatsSynchronization(groupId: Namespaces.PeerGroup.archive, namespace: Namespaces.Message.Cloud)
 
-            // MARK: GhostBase v1.0ZF BOTSAFE2 local chat-list holes
             if ghostBaseBotSafeMode {
                 var removedRootHoles = 0
                 for hole in transaction.allChatListHoles(groupId: .root) {
@@ -1417,7 +1517,6 @@ public class Account {
             Logger.shared.log("Account", "network logged out")
             if let strongSelf = self {
                 if ghostBaseBotSafeMode && GhostBaseBotHistoryGate.isActive(peerId: peerId) {
-                    // MARK: GhostBase v1.1E BOTSHADOW1 logout gate
                     // A zero historical cursor may provoke a logout-like transport callback.
                     // Suppress it only for this request; never mark the account logged out.
                     ghostBaseBotSafeRecord(
@@ -1686,7 +1785,6 @@ public class Account {
         self.automaticCacheEvictionContext = AutomaticCacheEvictionContext(postbox: postbox, accountManager: accountManager)
 
 
-        // MARK: GhostBase v1.1E BOTSHADOW1 startup
         if ghostBaseBotSafeMode && !supplementary {
             Queue.concurrentDefaultQueue().after(1.5) { [weak self] in
                 self?.stateManager.ghostBaseStartBotShadowHistory()
@@ -1792,31 +1890,8 @@ public class Account {
     }
     
     public func updateLocalInputActivity(peerId: PeerActivitySpace, activity: PeerInputActivity, isPresent: Bool) {
-        // MARK: GhostBase v0.5B Activity Ghost runtime
-        if isPresent {
-            let ghostBaseHideTyping = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.TypingActions") as? Bool) ?? false
-            let ghostBaseHideRecording = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideRecording") as? Bool) ?? false
-            let ghostBaseHideUploading = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideUploading") as? Bool) ?? false
-            let ghostBaseHideStickerActivity = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideStickerActivity") as? Bool) ?? false
-            let ghostBaseHideGameActivity = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideGameActivity") as? Bool) ?? false
-            let ghostBaseHideEmojiActivity = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.HideEmojiActivity") as? Bool) ?? false
-
-            switch activity {
-            case .typingText:
-                if ghostBaseHideTyping { return }
-            case .recordingVoice, .recordingInstantVideo:
-                if ghostBaseHideRecording { return }
-            case .uploadingFile(_), .uploadingPhoto(_), .uploadingVideo(_), .uploadingInstantVideo(_):
-                if ghostBaseHideUploading { return }
-            case .choosingSticker:
-                if ghostBaseHideStickerActivity { return }
-            case .playingGame:
-                if ghostBaseHideGameActivity { return }
-            case .interactingWithEmoji(_, _, _), .seeingEmojiInteraction(_):
-                if ghostBaseHideEmojiActivity { return }
-            default:
-                break
-            }
+        if isPresent && JerkgramActivityGhostRuntime.shouldSuppress(activity) {
+            return
         }
 
         self.localInputActivityManager.transaction { manager in

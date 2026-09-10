@@ -7,7 +7,6 @@ import PresentationDataUtils
 import ProgressNavigationButtonNode
 import AccountContext
 
-// MARK: GhostBase v1.0Y Bot Login UI
 enum AuthorizationSequencePasswordEntryMode: Equatable {
     case password
     case ghostBaseBotToken

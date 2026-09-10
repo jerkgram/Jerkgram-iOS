@@ -9,9 +9,6 @@ import AccountContext
 import AlertUI
 import JerkgramCore
 
-// MARK: Jerkgram v1.2G BUILD118_TIME_MACHINE_UI1
-// MARK: Jerkgram v1.2H BUILD119_TIME_MACHINE_SUMMARY1
-// MARK: Jerkgram v1.2M BUILD124_TIME_MACHINE_REDESIGN1
 private struct JerkgramTimeMachineUIState: Equatable {
     var kinds: Set<JerkgramEventKind>
     var senderPeerId: Int64?
@@ -77,8 +74,6 @@ private enum JerkgramTimeMachineUIEntry: ItemListNodeEntry {
                 sectionId: self.section, style: .blocks,
                 disclosureStyle: .none, action: nil
             )
-        // MARK: Jerkgram v1.2K BUILD122_TIME_MACHINE_POLISH1
-        // MARK: Jerkgram v1.2M BUILD124_TIME_MACHINE_FINAL_UI1
 case let .filter(_, _, title, value, kind):
     if let kind {
         return ItemListSwitchItem(
@@ -116,7 +111,6 @@ case let .filter(_, _, title, value, kind):
     }
 }
 
-// MARK: Jerkgram v1.2L BUILD123_TIME_MACHINE_UI1
 private func jerkgramTimeMachineDateText(_ timestampMs: Int64, dateTimeFormat: PresentationDateTimeFormat) -> String {
     let _ = dateTimeFormat
     let timestamp = TimeInterval(timestampMs) / 1000.0

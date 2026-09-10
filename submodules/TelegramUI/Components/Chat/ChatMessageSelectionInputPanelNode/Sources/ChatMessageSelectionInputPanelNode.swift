@@ -332,7 +332,6 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         }
     }
     
-    // MARK: GhostBase v1.0Y multi-select forward without author
     @objc private func forwardWithoutAuthorButtonPressed() {
         if let _ = self.presentationInterfaceState?.renderedPeer?.peer as? TelegramSecretChat {
             return

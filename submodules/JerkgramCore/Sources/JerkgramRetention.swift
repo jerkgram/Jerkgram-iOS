@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_RETENTION1
 public enum JerkgramHistoryDuration: String, Codable, CaseIterable {
     case disabled
     case days7

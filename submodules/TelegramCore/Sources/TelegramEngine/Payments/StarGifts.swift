@@ -5,7 +5,6 @@ import SwiftSignalKit
 import TelegramApi
 
 
-// MARK: GhostBase v1.0ZG GIFTHISTORY1 local archive
 public struct GhostBaseGiftVisibilityEvent: Codable, Equatable {
     public let observedAt: Int64
     public let savedToProfile: Bool
@@ -20,7 +19,6 @@ public struct GhostBaseGiftHistoryEntry: Codable, Equatable {
     public var key: String
     public var firstObservedAt: Int64
     public var lastObservedAt: Int64
-    // MARK: GhostBase v1.0ZH GIFTHISTORY2 disappearance state
     public var lastSeenVisibleAt: Int64?
     public var missingSince: Int64?
     public var giftDate: Int32
@@ -76,7 +74,6 @@ public func ghostBaseGiftHistoryEntries(
     }
 }
 
-// MARK: GhostBase v1.1B HIDDENGIFTS1 derived local archive
 public func ghostBaseHiddenGiftHistoryEntries(
     accountPeerId: EnginePeer.Id,
     peerId: EnginePeer.Id
@@ -1720,7 +1717,6 @@ extension StarGift {
 }
 
 
-// MARK: GhostBase v1.0Z Hidden Gifts direct catalog
 
 public enum GhostBaseStarGiftsCatalogResult {
     case catalog(StarGiftsList)
@@ -2490,7 +2486,6 @@ private final class ProfileGiftsContextImpl {
             guard let self else {
                 return
             }
-            // MARK: GhostBase v1.0ZG GIFTHISTORY1 record server page
             ghostBaseRecordGiftHistory(
                 accountPeerId: accountPeerId,
                 peerId: peerId,

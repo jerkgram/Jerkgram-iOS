@@ -73,7 +73,6 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
     private let listBackgroundView: UIImageView
     private let listMaskView: UIImageView
 
-    // MARK: GhostBase v1.1R COMMON_GROUPS_GLASS1
     private let ghostBaseGlassEffectView: UIVisualEffectView
     private let ghostBaseGlassTintView: UIView
     private var ghostBaseGlassIsDark: Bool?
@@ -242,7 +241,6 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
             self.listNode.backgroundColor = .clear
             self.listNode.view.backgroundColor = .clear
 
-            // MARK: GhostBase v1.1S COMMON_GROUPS_TRANSLUCENT1
             // Do not stack another dark system material over the already
             // blurred profile scene. Keep one light rounded translucent owner.
             self.ghostBaseGlassIsDark = isDark
@@ -250,7 +248,6 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
             self.ghostBaseGlassEffectView.backgroundColor = .clear
             self.ghostBaseGlassEffectView.contentView.backgroundColor = .clear
             self.ghostBaseGlassEffectView.isHidden = false
-            // MARK: Jerkgram v1.2L BUILD123_COMMON_GROUPS_SURFACE1
             // One neutral readability surface, matching neighboring cards;
             // the fullscreen profile remains the only blur owner.
             self.ghostBaseGlassEffectView.effect = nil

@@ -3,7 +3,6 @@ import Postbox
 import TelegramApi
 
 
-// MARK: GhostBase v1.1G PRESENCEBOUNDED1
 public struct GhostBasePresenceHistoryEvent: Codable, Equatable {
     public var eventId: String?
     public let observedAt: Int64
@@ -165,10 +164,6 @@ private enum GhostBasePresenceStoreV11G {
             self.histories[key] = events
             if let data = try? JSONEncoder().encode(events) {
                 defaults.set(data, forKey: key)
-                defaults.set(
-                    "История присутствия: \(events.count) переходов",
-                    forKey: "jerkgram.Runtime.PresenceSummary.V11G"
-                )
             }
         }
     }
@@ -254,10 +249,6 @@ private enum GhostBasePresenceStoreV11G {
                 defaults.set(
                     ids.map { NSNumber(value: $0) },
                     forKey: idsKey
-                )
-                defaults.set(
-                    "Известные пользователи: \(ids.count)",
-                    forKey: "jerkgram.Runtime.KnownUsersSummary.V11G"
                 )
             }
         }
@@ -515,7 +506,6 @@ func updatePeers(transaction: Transaction, accountPeerId: PeerId, peers: Accumul
     var parsedPeers: [Peer] = []
     for (_, user) in peers.users {
         if let telegramUser = TelegramUser.merge(transaction.getPeer(user.peerId) as? TelegramUser, rhs: user) {
-            // MARK: GhostBase v1.1A PRESENCEGLOBAL1 register every received user
             ghostBaseRegisterKnownUser(
                 accountPeerId: accountPeerId,
                 user: telegramUser

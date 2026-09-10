@@ -416,7 +416,6 @@ public final class PeerInfoCoverComponent: Component {
             }
         }
         
-        // MARK: GhostBase v1.1L PREMIUM_PATTERN1
         // Hide only Telegram's stock color fill. Native Premium pattern
         // layers remain at their original opacity.
         public func setGhostBaseBackgroundFillAlpha(
@@ -426,7 +425,6 @@ public final class PeerInfoCoverComponent: Component {
             self.backgroundGradientLayer.opacity = Float(alpha)
         }
 
-        // MARK: GhostBase v1.1R PREMIUM_PATTERN_RESTORE1
         public func setGhostBaseDecorationAlpha(_ alpha: CGFloat) {
             let alpha = max(0.0, min(1.0, alpha))
             let patternFraction =
@@ -436,7 +434,6 @@ public final class PeerInfoCoverComponent: Component {
                 (self.component?.avatarTransitionFraction ?? 0.0)
 
             // Premium pattern is native profile identity, not a heavy fill.
-            // Keep it fully visible while GhostBase only attenuates gradient.
             self.avatarBackgroundPatternContentsLayer.opacity = 1.0
             self.backgroundPatternContainer.alpha = patternFraction
 

@@ -6,7 +6,6 @@ import SwiftSignalKit
 import TelegramCore
 
 
-// MARK: Jerkgram v1.2C BUILD114_SIGNER_APPGROUP1
 private func jerkgramResolvedApplicationGroupIdentifier(
     fallback: String
 ) -> String {
@@ -106,14 +105,12 @@ private func jerkgramResolvedApplicationGroupIdentifier(
             continue
         }
 
-        // BUILD115_SHARED_APPGROUP_ROLE1
         //
         // Never trust entitlement array ordering.
         //
         // 1. Prefer the normal Telegram-derived fallback
         //    when the signer actually grants it.
         //
-        // 2. GhostBase historically stores shared state in
         //    the signer-provided App Group whose role suffix
         //    is ".1".
         //
@@ -151,7 +148,6 @@ private func jerkgramResolvedApplicationGroupIdentifier(
 class ShareRootController: UIViewController {
     private var impl: ShareRootControllerImpl?
 
-    // MARK: Jerkgram v1.2F BUILD117_SHARE_VISIBLE_DIAGNOSTIC1
     private func showJerkgramExtensionDiagnostic(_ message: String) {
         let label = UILabel()
         label.numberOfLines = 0
@@ -197,7 +193,6 @@ class ShareRootController: UIViewController {
             let languagesCategory = "ios"
             
             let appGroupName = jerkgramResolvedApplicationGroupIdentifier(fallback: "group.\(baseAppBundleId)")
-// MARK: Jerkgram v1.2E BUILD116_EXTENSION_STAGE1
 BuildConfig.jerkgramRecordExtensionDiagnostic(
     process: "share",
     stage: "profile",

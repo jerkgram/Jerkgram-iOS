@@ -204,8 +204,7 @@ extension ChatControllerImpl {
                         }
 
                         var usedCorrelationId = false
-                        // MARK: GhostBase v0.7D Scheduled Send circle transition stabilizer
-                        let ghostBaseRuntimeScheduledSend = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
+                        let ghostBaseRuntimeScheduledSend = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
 
                         if !ghostBaseRuntimeScheduledSend, scheduleTime == nil, shouldAnimateMessageTransition, let extractedView = videoController.extractVideoSnapshot() {
                             usedCorrelationId = true
@@ -268,15 +267,12 @@ extension ChatControllerImpl {
         }
 
         let ghostBaseScheduledVoiceDirectSendEnabled = (
-            UserDefaults.standard.object(
-                forKey: "jerkgram.GhostMode.ScheduledSend"
-            ) as? Bool
+            JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool
         ) ?? false
 
         if ghostBaseScheduledVoiceDirectSendEnabled,
            !isScheduledMessages,
            case let .send(viewOnce) = action {
-            // MARK: GhostBase v1.0ZA scheduled voice direct send redirect
             updatedAction = .preview
             sendImmediately = true
             ghostBaseSendImmediatelyViewOnce = viewOnce
@@ -735,7 +731,6 @@ extension ChatControllerImpl {
                 return
             }
 
-            // MARK: GhostBase v1.0Z scheduled voice official lifecycle restore
             self.chatDisplayNode.setupSendActionOnViewUpdate({ [weak self] in
                 if let strongSelf = self {
                     strongSelf.chatDisplayNode.collapseInput()
@@ -777,9 +772,7 @@ extension ChatControllerImpl {
             let effectiveSilentPosting = silentPosting ?? self.presentationInterfaceState.interfaceState.silentPosting
 
             let ghostBaseScheduledVoiceEnabled = (
-                UserDefaults.standard.object(
-                    forKey: "jerkgram.GhostMode.ScheduledSend"
-                ) as? Bool
+                JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool
             ) ?? false
 
             let ghostBaseEffectiveScheduleTime: Int32?

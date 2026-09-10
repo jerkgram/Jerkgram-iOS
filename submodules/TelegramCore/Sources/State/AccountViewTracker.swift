@@ -912,7 +912,11 @@ public final class AccountViewTracker {
                                                         attributes.append(updatedReactions)
                                                     }
                                                     var tags = currentMessage.tags
-                                                    if updatedReactions.hasUnseen {
+                                                    if JerkgramBlockedReactionPolicy.hasVisibleUnseenReaction(
+                                                        accountPeerId: account.peerId,
+                                                        message: currentMessage,
+                                                        attribute: updatedReactions
+                                                    ) {
                                                         tags.insert(.unseenReaction)
                                                     } else {
                                                         tags.remove(.unseenReaction)

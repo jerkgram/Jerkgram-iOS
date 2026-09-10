@@ -12,8 +12,6 @@ import PhotoResources
 import PeerInfoAvatarListNode
 
 
-// MARK: GhostBase v1.1P FULLCORRECTION1
-// MARK: GhostBase v1.1G PROFILE_RUNTIME1
 enum GhostBaseProfileGlassRuntime {
     static func loadSettings() -> GhostBaseProfileBlurSettings? {
         return GhostBaseProfileBlurSettings.loadEnabled()
@@ -61,13 +59,11 @@ enum GhostBaseProfileGlassRuntime {
             return true
         }
 
-        // Every resolved peer has a deliberate GhostBase scene.
         // Peers without a photo use Telegram's own placeholder palette.
         return true
     }
 }
 
-// MARK: GhostBase v1.1G PROFILEFULLSCREEN1
 // The effect is owned by PeerInfoScreenNode and is optional by construction.
 // With the main switch off this type is never instantiated, so there are no
 // additional views, observers, signals, image work or palette work.
@@ -100,7 +96,6 @@ private struct GhostBaseProfileBackgroundStateKey: Equatable {
     let themeIdentity: ObjectIdentifier
 }
 
-// MARK: GhostBase v1.1L PROFILESTATE1
 // Generic animated-media descriptor. Today it is fed by profile video;
 // a future animated-wallpaper provider can feed the same renderer unchanged.
 private struct GhostBaseAnimatedMediaSource {
@@ -140,20 +135,16 @@ private enum GhostBaseProfileBackgroundSource {
 }
 
 final class GhostBaseProfileBackgroundView: UIView {
-    // MARK: GhostBase v1.1S RUNTIME_RECOVERY1
-    // MARK: GhostBase v1.1M RUNTIMECORE1
     private static let visualSettingsDidChange =
         Notification.Name(
             "jerkgram.ProfileVisualSettingsDidChange.V11M"
         )
-    // MARK: GhostBase v1.1I PROFILEFINAL1
     private static let imageCache: NSCache<NSString, GhostBaseProfileBackgroundCacheEntry> = {
         let cache = NSCache<NSString, GhostBaseProfileBackgroundCacheEntry>()
         cache.countLimit = 64
         return cache
     }()
 
-    // MARK: GhostBase v1.1T BUILD97_STATIC_AVATAR_CACHE1
     // A bounded persistent cache for the already-decoded 360px avatar
     // presentation. This is intentionally NOT a raw MediaBox decoder.
     private static let ghostBaseAvatarDiskCacheLock = NSLock()
@@ -258,7 +249,6 @@ final class GhostBaseProfileBackgroundView: UIView {
         }
     }
 
-    // MARK: GhostBase v1.1K PROFILEPOLISH2
     //
     // Actual image resources remain owned/cached by Telegram MediaBox.
     // Only sampled tone is persisted by source identity.
@@ -413,7 +403,6 @@ final class GhostBaseProfileBackgroundView: UIView {
     private let blurView: UIVisualEffectView
     private let tintView: UIView
 
-    // MARK: GhostBase v1.1P VIDEO_MIRROR1
     // One native Telegram decoder/timeline owns playback.
     // The fullscreen backdrop is a secondary render output.
     private let mirrorVideoView: GhostBaseProfileMirrorVideoView
@@ -421,7 +410,6 @@ final class GhostBaseProfileBackgroundView: UIView {
     private var secondaryVideoDisposable: Disposable?
     private weak var lastAvatarVideoNode: UniversalVideoNode?
 
-    // Blur/tint intentionally use the proven Build97/V11K visual recipe.
 
     private let sourceDisposable = MetaDisposable()
     private var currentStateKey: GhostBaseProfileBackgroundStateKey?
@@ -995,7 +983,6 @@ final class GhostBaseProfileBackgroundView: UIView {
             ? .systemUltraThinMaterialDark
             : .systemUltraThinMaterialLight
         self.blurView.effect = UIBlurEffect(style: effectStyle)
-        // MARK: GhostBase v1.1S STATIC_AVATAR_BLUR_INTENSITY1
         // Reset for every source; only static avatars lower intensity.
         self.blurView.alpha = 1.0
 
@@ -1084,8 +1071,6 @@ final class GhostBaseProfileBackgroundView: UIView {
         ):
             self.usesCustomBackground = true
 
-            // MARK: GhostBase v1.1U BUILD106_STATIC_AVATAR_BLUR1
-            // Build105 runtime proved that lowering UIVisualEffectView.alpha
             // does not lower blur intensity: it exposes the sharp stretched
             // image beneath it. Keep the persistent blur owner fully opaque.
             //
@@ -1108,7 +1093,6 @@ final class GhostBaseProfileBackgroundView: UIView {
             let loadKey =
                 "avatar-final-v2:" + (cacheKey as String)
 
-            // MARK: GhostBase v1.1Q BUILD97_NEUTRAL_REOPEN1
             let immediateTint =
                 fallback
 
@@ -1129,7 +1113,6 @@ final class GhostBaseProfileBackgroundView: UIView {
                 animatedSource
             )
 
-            // MARK: GhostBase v1.1T AVATAR_REOPEN_NO_GREY1
             // RAM cache first, then the small decoded-avatar disk cache.
             // Only if neither exists do we briefly expose the neutral fallback.
             if let cached = Self.imageCache.object(forKey: cacheKey) {
@@ -1313,14 +1296,12 @@ final class GhostBaseProfileBackgroundView: UIView {
         isDark: Bool,
         reduced: Bool
     ) {
-        // MARK: JerkGram v1.1Y BUILD110_PROFILE_READABILITY1
         //
         // The fullscreen background stays visible, but the single existing
         // tint layer now also provides adaptive contrast. This is deliberately
         // one scene-wide layer, not per-cell blur/glass.
         let sourceColor = color
         let luminance = Self.colorLuminance(sourceColor)
-        // MARK: Jerkgram v1.2C BUILD114_SOURCE_LUMINANCE1
         // Read-only bridge for Links readability.
         // It does NOT alter profile tint / blur / source.
         UserDefaults.standard.set(
@@ -1458,14 +1439,12 @@ final class GhostBaseProfileBackgroundView: UIView {
         }
     }
 
-    // MARK: GhostBase v1.1T BUILD97_STATIC_AVATAR_PIPELINE1
     private func avatarEntrySignal(
         peer: EnginePeer,
         representation: TelegramMediaImageRepresentation,
         identity: String,
         fallback: UIColor
     ) -> Signal<GhostBaseProfileBackgroundCacheEntry?, NoError>? {
-        // Exact good V11K/Build97 feed: Telegram owns avatar decoding and
         // produces a 360x360 unclipped presentation. Do not decode the raw
         // MediaBox resource as UIImage and do not request the 720px V11S path.
         guard let signal = peerAvatarImage(
@@ -1478,7 +1457,6 @@ final class GhostBaseProfileBackgroundView: UIView {
             blurred: false,
             inset: 0.0,
             emptyColor: nil,
-            // MARK: Jerkgram v1.2I BUILD120_PROFILE_COLDSTART1
             synchronousLoad: true,
             completeOnly: true
         ) else {
@@ -1488,7 +1466,6 @@ final class GhostBaseProfileBackgroundView: UIView {
         return signal
         |> deliverOn(Queue.concurrentDefaultQueue())
         |> map { versions -> GhostBaseProfileBackgroundCacheEntry? in
-            // MARK: Jerkgram v1.2L BUILD123_PROFILE_FINAL_CACHE1
             // AvatarNode has already rejected every .blurred typed emission.
             guard let image = versions?.0 else {
                 return nil

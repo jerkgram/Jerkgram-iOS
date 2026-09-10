@@ -14,7 +14,6 @@ import ItemListPeerItem
 import BuildConfig
 
 private enum GhostBaseKey {
-    // MARK: GhostBase v1.1G PROFILEMETRICS1
     static let profileEnabled = "jerkgram.Profile.Enabled"
     static let showIds = "jerkgram.Profile.ShowIds"
     static let showDCs = "jerkgram.Profile.ShowDCs"
@@ -34,17 +33,14 @@ private enum GhostBaseKey {
     static let showDeleted = "jerkgram.Messages.ShowDeleted"
     static let saveEditHistory = "jerkgram.Messages.SaveEditHistory"
     static let showEditHistory = "jerkgram.Messages.ShowEditHistory"
+    static let hideBlockedMessages = "jerkgram.Messages.HideBlockedMessages"
+    static let hideBlockedReactions = "jerkgram.Messages.HideBlockedReactions"
 
-    // MARK: GhostBase v1.0U appearance settings
-    // MARK: GhostBase v1.1C SETTINGSGLASS1
-    // MARK: GhostBase v1.1F PROFILEBLURSETTINGS1
     static let glassEnabled = "jerkgram.Glass.Enabled"
     static let profileAvatarBlur = "jerkgram.ProfileBlur.Avatar"
     static let profileAnimatedBackground = "jerkgram.ProfileBlur.Animated"
     static let profileBlurTint = "jerkgram.ProfileBlur.Tint"
     static let profileBlurReduced = "jerkgram.ProfileBlur.Reduced"
-    // MARK: GhostBase v1.1R RAM_SETTING1
-    // MARK: GhostBase v1.1T DELETED_PORTABLE_SETTINGS1
     static let deletedPortableReplies = "jerkgram.Messages.DeletedPortableReplies"
     static let preserveDeletedMedia = "jerkgram.Messages.PreserveDeletedMedia"
     static let deletedMediaCacheLimit = "jerkgram.Messages.DeletedMediaCacheLimit"
@@ -85,7 +81,6 @@ private func ghostBaseString(_ key: String, defaultValue: String) -> String {
     return defaultValue
 }
 
-// MARK: GhostBase v0.9D Stars input parser
 private func ghostBaseIsValidStarsAmountInput(_ text: String) -> Bool {
     var hasSeparator = false
 
@@ -149,11 +144,9 @@ private func ghostBaseStarsTransactionPreview(baseAmount: String, targetAmount: 
     return "Transaction Preview: GhostBase \(sign)\(delta)"
 }
 
-// MARK: GhostBase v1.0T send style state
 private let ghostBaseSendTextStyleKey =
     "jerkgram.Messages.SendTextStyle"
 
-// MARK: JerkGram v1.1Y BUILD110_SHORT_TOGGLE_TITLES1
 private enum GhostBaseSettingsEntryTag:
     Equatable, ItemListItemTag
 {
@@ -167,8 +160,6 @@ private enum GhostBaseSettingsEntryTag:
     }
 }
 
-// MARK: GhostBase v1.0T send style menu helpers
-// MARK: GhostBase v1.0U styled send text preview
 private func ghostBaseSendStyleAttributedText(
     style: String,
     text: String,
@@ -216,7 +207,6 @@ private func ghostBaseSendStyleAttributedText(
     )
 }
 
-// MARK: Jerkgram v1.2E BUILD116_STYLE_LOCALIZATION1
 private func ghostBaseSendTextStyleTitle(
     _ value: String,
     strings: JerkgramStrings
@@ -239,7 +229,6 @@ private func ghostBaseSendTextStyleTitle(
     }
 }
 
-// MARK: GhostBase v1.0T send style context source
 private final class GhostBaseSendStyleContextSource:
     ContextControllerContentSource
 {
@@ -257,7 +246,6 @@ private final class GhostBaseSendStyleContextSource:
         self.sourceNode = sourceNode
     }
 
-    // MARK: GhostBase v1.0U correct context source
     func transitionInfo() -> ContextControllerTakeControllerInfo? {
         let sourceNode = self.sourceNode
 
@@ -283,7 +271,6 @@ private final class GhostBaseSendStyleContextSource:
     }
 }
 
-// MARK: GhostBase v1.0T send style menu items
 private func ghostBaseSendStyleMenuItems(
     selected: String,
     strings: JerkgramStrings,
@@ -393,7 +380,6 @@ private func ghostBaseSendStyleMenuItems(
     }
 }
 
-// MARK: Jerkgram v1.2G BUILD118_ACCOUNT_SETTINGS_SCOPE1
 private func jerkgramScopedSettingsKey(accountPeerId: Int64, key: String) -> String {
     return "jerkgram.account.\(accountPeerId).setting.\(key)"
 }
@@ -426,7 +412,6 @@ private func jerkgramScopedString(
     return migrated
 }
 
-// MARK: Jerkgram v1.2L BUILD123_ACCOUNT_SETTINGS_OWNER1
 private enum JerkgramSettingValue: Equatable {
     case bool(Bool)
     case string(String)
@@ -470,6 +455,8 @@ private func jerkgramStateValues(_ state: GhostBaseSettingsState) -> [String: Je
         GhostBaseKey.showDeleted: .bool(state.showDeleted),
         GhostBaseKey.saveEditHistory: .bool(state.saveEditHistory),
         GhostBaseKey.showEditHistory: .bool(state.showEditHistory),
+        GhostBaseKey.hideBlockedMessages: .bool(state.hideBlockedMessages),
+        GhostBaseKey.hideBlockedReactions: .bool(state.hideBlockedReactions),
         ghostBaseSendTextStyleKey: .string(state.sendTextStyle),
         GhostBaseKey.deletedPortableReplies: .bool(state.deletedPortableReplies),
         GhostBaseKey.preserveDeletedMedia: .bool(state.preserveDeletedMedia),
@@ -500,12 +487,12 @@ private func jerkgramPersistChangedSettings(
     previous: GhostBaseSettingsState?,
     current: GhostBaseSettingsState
 ) {
+    defer { JerkgramHotSettings.invalidate() }
     let oldValues = previous.map(jerkgramStateValues) ?? [:]
     let newValues = jerkgramStateValues(current)
     let changes = newValues.filter { oldValues[$0.key] != $0.value }
     guard !changes.isEmpty else { return }
 
-    // MARK: Jerkgram v1.2M BUILD124_SENSITIVE_SETTINGS_SYNC1
     // These values are consumed synchronously outside Settings immediately
     // before user-visible side effects. Leaving them behind the utility queue
     // creates a real stale-state window: Scheduled Send can remain active after
@@ -514,11 +501,19 @@ private func jerkgramPersistChangedSettings(
     //
     // UserDefaults.set updates the in-process defaults domain; deliberately
     // avoid any forced defaults/filesystem synchronization here.
-    let jerkgramSynchronousRuntimeSettingKeys: Set<String> = [
+    let jerkgramSynchronousRuntimeSettingKeys: Set<String> = Set<String>([
         GhostBaseKey.scheduledSend,
         GhostBaseKey.protectedEnabled,
         GhostBaseKey.oneTimeSave,
-    ]
+        GhostBaseKey.hideBlockedMessages,
+        GhostBaseKey.hideBlockedReactions,
+        GhostBaseKey.typingActions,
+        GhostBaseKey.recordingActions,
+        GhostBaseKey.uploadingActions,
+        GhostBaseKey.stickerActivity,
+        GhostBaseKey.gameActivity,
+        GhostBaseKey.emojiActivity,
+    ]).union(JerkgramHotSettings.keys)
     let defaults = UserDefaults.standard
     for key in jerkgramSynchronousRuntimeSettingKeys {
         guard let value = changes[key] else { continue }
@@ -533,6 +528,12 @@ private func jerkgramPersistChangedSettings(
             let sharedDefaults = UserDefaults(suiteName: "group.ph.telegra.Telegraph") ?? defaults
             value.write(to: sharedDefaults, key: key)
         }
+    }
+    JerkgramActivityGhostRuntime.invalidate()
+
+    if changes[GhostBaseKey.hideBlockedMessages] != nil
+        || changes[GhostBaseKey.hideBlockedReactions] != nil {
+        JerkgramBlockedReactionPolicy.notifySettingsChanged()
     }
 
     let deferredChanges = changes.filter {
@@ -582,6 +583,8 @@ struct GhostBaseSettingsState: Equatable {
     var showDeleted: Bool
     var saveEditHistory: Bool
     var showEditHistory: Bool
+    var hideBlockedMessages: Bool
+    var hideBlockedReactions: Bool
     var sendTextStyle: String
 
     var deletedPortableReplies: Bool
@@ -631,6 +634,8 @@ struct GhostBaseSettingsState: Equatable {
             showDeleted: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showDeleted, defaultValue: true),
             saveEditHistory: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.saveEditHistory, defaultValue: true),
             showEditHistory: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showEditHistory, defaultValue: true),
+            hideBlockedMessages: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.hideBlockedMessages, defaultValue: true),
+            hideBlockedReactions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.hideBlockedReactions, defaultValue: true),
             sendTextStyle: jerkgramScopedString(accountPeerId: accountPeerId, key: 
                 ghostBaseSendTextStyleKey,
                 defaultValue: "normal"
@@ -692,8 +697,6 @@ struct GhostBaseSettingsState: Equatable {
 }
 
 
-// MARK: GhostBase v1.0R Settings Split
-// MARK: Jerkgram v1.2C BUILD114_SETTINGS_ICONS1
 private func jerkgramSettingsMenuIcon(
     _ name: String
 ) -> UIImage? {
@@ -801,7 +804,6 @@ private enum GhostBaseSettingsPage: Equatable {
     }
 }
 
-// MARK: GhostBase v1.0T send style row
 private final class GhostBaseSettingsArguments {
     let context: AccountContext
     let openAboutChannel: (EnginePeer) -> Void
@@ -836,7 +838,6 @@ private enum GhostBaseSettingsSection: Int32 {
     case footer
 }
 
-// MARK: Jerkgram v1.2L BUILD123_SETTINGS_SYSTEM1
 // Shared visual contract used by every internal Jerkgram destination.
 private func JerkgramSettingsSectionHeaderItem(
     presentationData: ItemListPresentationData,
@@ -855,16 +856,10 @@ private func JerkgramSettingsStatusItem(
     text: String,
     sectionId: ItemListSectionId
 ) -> ListViewItem {
-    return ItemListDisclosureItem(
+    return ItemListTextItem(
         presentationData: presentationData,
-        systemStyle: .glass,
-        title: text,
-        label: "",
-        labelStyle: .text,
-        sectionId: sectionId,
-        style: .blocks,
-        disclosureStyle: .none,
-        action: nil
+        text: .plain(text),
+        sectionId: sectionId
     )
 }
 
@@ -1060,7 +1055,6 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
                 maxLength: 20,
                 selectAllOnFocus: true,
                 sectionId: self.section,
-                // BUILD122: legacy input is not a persistence owner. The
                 // dedicated Stars editor keeps a local draft and commits on Save.
                 textUpdated: { _ in },
                 shouldUpdateText: { updatedText in
@@ -1181,7 +1175,6 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
                 action: nil
             )
 
-        // MARK: Jerkgram v1.2F BUILD117_ABOUT_CHANNEL_CARD1
         case let .aboutChannel(_, _, title, peer, preview, _):
             if let peer {
                 return ItemListPeerItem(
@@ -1244,7 +1237,6 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
         case let .researchInfo(_, _, text):
             return JerkgramSettingsStatusItem(presentationData: presentationData, text: text, sectionId: self.section)
 
-        // MARK: Jerkgram v1.2H BUILD119_HYBRID_UI1
         case let .valueDisclosure(_, _, title, value, iconName, page):
             return ItemListDisclosureItem(
                 presentationData: presentationData,
@@ -1268,8 +1260,6 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
 }
 
 
-// MARK: GhostBase v1.0Y Hidden Gifts no-spend probe
-// MARK: GhostBase v1.0Z Hidden Gifts direct catalog deep probe
 
 private let ghostBaseHiddenGiftItems: [(String, Int64)] = [
     ("New Year Bear", 5956217000635139069),
@@ -1450,7 +1440,6 @@ private func ghostBaseHiddenGiftsReport() -> String {
     """
 }
 
-// MARK: GhostBase v1.0ZA Hidden Gifts real send
 
 private struct GhostBaseHiddenGiftSendState {
     var giftName: String?
@@ -1463,7 +1452,6 @@ private struct GhostBaseHiddenGiftSendState {
     var status: String = "Выберите подарок и получателя."
 }
 
-// MARK: GhostBase v1.0ZA Hidden Gifts self and anonymous send
 private var ghostBaseHiddenGiftSendState =
     GhostBaseHiddenGiftSendState()
 
@@ -1556,7 +1544,6 @@ private func ghostBaseHiddenGiftSendResultText(
     }
 }
 
-// MARK: GhostBase v1.0ZA Bot Capability UI
 
 private let ghostBaseBotCapabilityPrefix =
     "jerkgram.Research.BotCapability."
@@ -1584,7 +1571,6 @@ private func ghostBaseBotCapabilityReport() -> String {
     """
 }
 
-// MARK: GhostBase v1.0ZB Bot Difference UI
 
 private let ghostBaseBotDifferencePrefix =
     "jerkgram.Research.BotDifference."
@@ -1612,7 +1598,6 @@ private func ghostBaseBotDifferenceReport() -> String {
     """
 }
 
-// MARK: GhostBase v1.0ZD PROFILEINTEL1 UI
 
 private let ghostBaseProfileIntelPrefix =
     "jerkgram.Research.ProfileIntel1."
@@ -1658,7 +1643,6 @@ private func ghostBaseProfileIntelReport() -> String {
     """
 }
 
-// MARK: GhostBase v1.0ZF PROFILEINTEL2 UI
 
 private let ghostBaseProfileIntel2Prefix =
     "jerkgram.Research.ProfileIntel2."
@@ -1687,9 +1671,6 @@ private func ghostBaseProfileIntel2Report() -> String {
     """
 }
 
-// MARK: Jerkgram v1.2D BUILD115_RESEARCH_SETTINGS_CANONICAL1
-// MARK: Jerkgram v1.2D BUILD115_SETTINGS_LOCALIZATION1
-// MARK: Jerkgram v1.2D BUILD115_RESEARCH_SETTINGS_LOCALIZED1
 
 
 private enum JerkgramAboutChannelState: Equatable {
@@ -1754,7 +1735,6 @@ private func jerkgramAboutChannelState(
     |> distinctUntilChanged
 }
 
-// MARK: Jerkgram v1.2M BUILD124_ARCHIVE_IMPORT_REFRESH1
 private let jerkgramSettingsDidImportNotification = Notification.Name("JerkgramSettingsDidImport")
 
 func jerkgramNotifySettingsImported(accountPeerId: Int64) {
@@ -1791,8 +1771,6 @@ private func jerkgramSettingsImportRefreshSignal(
     }
 }
 
-// MARK: Jerkgram v1.2M BUILD124_SETTINGS_REDESIGN1
-// MARK: Jerkgram v1.2T BUILD130_RELEASE_UI_TELEMETRY1
 private func ghostBaseSettingsEntries(
     state: GhostBaseSettingsState,
     context: AccountContext,
@@ -1990,7 +1968,6 @@ private func ghostBaseSettingsEntries(
     }
 
     if page == .root {
-        // MARK: Jerkgram v1.2K BUILD122_SETTINGS_RELEASE1
         // Keep the agreed Telegram-native destination list. Presentation work
         // belongs inside destinations, not in a new root hero card.
         return [
@@ -2025,7 +2002,6 @@ private func ghostBaseSettingsEntries(
         ]
     }
 
-    // MARK: Jerkgram v1.2H BUILD119_STARS_EDITOR1
     if page == .stars {
         let balance = state.localStarsAmount.isEmpty ? "0" : state.localStarsAmount
         return [
@@ -2096,7 +2072,6 @@ private func ghostBaseSettingsEntries(
                 4,
                 90,
                 GhostBaseKey.deletedPortableReplies,
-            // MARK: Jerkgram v1.1Z BUILD111_PORTABLE_REPLY_TITLE1
                 strings.portableReply,
                 state.deletedPortableReplies
             ),
@@ -2111,7 +2086,10 @@ private func ghostBaseSettingsEntries(
                 4,
                 strings.portableReplyHint
             ),
-        ]
+        
+            .header(5, strings.blockedUsers),
+            .toggle(5, 1, GhostBaseKey.hideBlockedMessages, strings.hideBlockedMessages, state.hideBlockedMessages),
+            .toggle(5, 2, GhostBaseKey.hideBlockedReactions, strings.hideBlockedReactions, state.hideBlockedReactions)]
     }
 
     if page == .protectedContent {
@@ -2161,7 +2139,6 @@ private func ghostBaseSettingsEntries(
         ]
     }
 
-    // MARK: Jerkgram v1.2G BUILD118_ABOUT_CHANNEL_CARDS1
     if page == .about {
         func channelEntry(index: Int32, username: String, state: JerkgramAboutChannelState) -> GhostBaseSettingsEntry {
             switch state {
@@ -2179,16 +2156,15 @@ private func ghostBaseSettingsEntries(
             channelEntry(index: 1, username: "JerkgramApp", state: aboutChannelState),
             channelEntry(index: 2, username: "JerkgramCommunity", state: aboutCommunityState),
             .header(1, strings.version),
-            .aboutValue(1, 1, strings.jerkgramVersion, Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"),
-            .aboutValue(1, 2, strings.build, Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"),
-            .aboutValue(1, 3, strings.telegramBase, "12.9.2"),
+            .aboutValue(1, 1, strings.jerkgramVersion, JerkgramReleaseIdentity.displayVersion),
+            .aboutValue(1, 2, strings.build, JerkgramReleaseIdentity.build),
+            .aboutValue(1, 3, strings.telegramBase, JerkgramReleaseIdentity.telegramBase),
             .header(2, strings.privacy),
             .telemetryToggle(2, 1, strings.anonymousAnalytics, jerkgramTelemetryEnabled()),
             .info(3, strings.anonymousAnalyticsDescription)
         ]
     }
 
-        // MARK: Jerkgram v1.2E BUILD116_SETTINGS_RUNTIME_CLEANUP1
     if page == .debugResearch {
         return [
             .researchAction(0, 0, strings.copyExtensionDiagnostics, "copyExtensionDiagnostics")
@@ -2652,7 +2628,6 @@ public func ghostBaseSettingsController(
     )
 }
 
-// MARK: GhostBase v1.0W native send style page
 private final class GhostBaseSendStylePageArguments {
     let select: (String) -> Void
 
@@ -3676,10 +3651,14 @@ private func ghostBaseSettingsPageController(
                 updated.saveEditHistory = value
             case GhostBaseKey.showEditHistory:
                 updated.showEditHistory = value
+            case GhostBaseKey.hideBlockedMessages:
+                updated.hideBlockedMessages = value
+            case GhostBaseKey.hideBlockedReactions:
+                updated.hideBlockedReactions = value
 
             case GhostBaseKey.glassEnabled:
                 updated.glassEnabled = value
-                UserDefaults.standard.set(value, forKey: GhostBaseKey.glassEnabled)
+                GhostBaseGlassStyle.setEnabled(value)
 
             case GhostBaseKey.profileAvatarBlur:
                 updated.profileAvatarBlur = value
@@ -3715,6 +3694,7 @@ private func ghostBaseSettingsPageController(
                     value,
                     forKey: GhostBaseKey.showRamUnderClock
                 )
+        NotificationCenter.default.post(name: Notification.Name("GhostBaseRamOverlayPreferenceChanged"), object: nil)
 
             case GhostBaseKey.messageSeconds:
                 updated.messageSeconds = value
@@ -3779,7 +3759,6 @@ private func ghostBaseSettingsPageController(
                 updated.scheduledSend = value
 
             case GhostBaseKey.protectedEnabled:
-                // MARK: GhostBase v0.8G protected master cascade
                 updated.protectedEnabled = value
                 updated.protectedGalleryShare = value
                 updated.protectedGallerySave = value
@@ -3809,7 +3788,6 @@ private func ghostBaseSettingsPageController(
                 break
             }
 
-            // MARK: GhostBase v0.8G protected child consistency
             if !updated.protectedGalleryShare && !updated.protectedGallerySave && !updated.protectedGalleryCopy && !updated.chatSave && !updated.chatCopy && !updated.chatForward && !updated.allowScreenshots && !updated.allowScreenRecording && !updated.oneTimeScreenshots && !updated.oneTimeScreenRecording && !updated.oneTimeSave && !updated.storySave {
                 updated.protectedEnabled = false
             } else if updated.protectedGalleryShare || updated.protectedGallerySave || updated.protectedGalleryCopy || updated.chatSave || updated.chatCopy || updated.chatForward || updated.allowScreenshots || updated.allowScreenRecording || updated.oneTimeScreenshots || updated.oneTimeScreenRecording || updated.oneTimeSave || updated.storySave {
@@ -3888,7 +3866,6 @@ private func ghostBaseSettingsPageController(
         )
     }
 
-    // MARK: GhostBase v1.0W native style page opener
     openSendTextStyleImpl = { [weak controller] in
         let selected = stateValue.with {
             $0.sendTextStyle

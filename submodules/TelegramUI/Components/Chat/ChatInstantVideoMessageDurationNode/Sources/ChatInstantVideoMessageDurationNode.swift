@@ -69,7 +69,6 @@ public final class ChatInstantVideoMessageDurationNode: ASImageNode {
         }
     }
     
-    // MARK: Jerkgram v1.2N BUILD125_CIRCLE_VIEWED_CHECK1
     public var showsViewedCheck: Bool = false {
         didSet {
             if self.showsViewedCheck != oldValue {

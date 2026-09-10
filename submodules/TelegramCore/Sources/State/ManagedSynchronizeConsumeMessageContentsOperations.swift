@@ -110,7 +110,6 @@ func managedSynchronizeConsumeMessageContentOperations(postbox: Postbox, network
 }
 
 private func synchronizeConsumeMessageContents(transaction: Transaction, network: Network, stateManager: AccountStateManager, peerId: PeerId, operation: SynchronizeConsumeMessageContentsOperation) -> Signal<Void, NoError> {
-    // MARK: GhostBase v0.6C Read Ghost Extras remote readMessageContents guard
     let ghostBaseReadGhostExtras = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ReadMessages") as? Bool) ?? false
     if ghostBaseReadGhostExtras && peerId.namespace != Namespaces.Peer.SecretChat {
         return .complete()

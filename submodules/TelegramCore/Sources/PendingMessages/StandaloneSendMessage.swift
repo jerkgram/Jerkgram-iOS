@@ -117,7 +117,6 @@ public struct StandaloneSendEnqueueMessage {
 }
 
 
-// MARK: GhostBase v1.0S Standalone Scheduled Send
 private func ghostBaseV10SApplyStandaloneSchedule(
     peerId: PeerId,
     attributes: inout [MessageAttribute]

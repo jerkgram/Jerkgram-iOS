@@ -80,8 +80,114 @@ extension ReactionsMessageAttribute {
     }
 }
 
+
+// Filter only actors whose identity is reliably known. Unknown/anonymous
+// contributions are intentionally preserved. The original attribute is never
+// mutated, so disabling the feature restores stock state immediately.
+public func jerkgramFilteredMessageReactions(
+    accountPeerId: EnginePeer.Id,
+    message: Message,
+    attribute: ReactionsMessageAttribute?
+) -> ReactionsMessageAttribute? {
+    guard let attribute else {
+        return nil
+    }
+    guard JerkgramBlockedReactionPolicy.isGroupMessage(message) else {
+        return attribute
+    }
+    guard JerkgramBlockedReactionPolicy.hideBlockedReactions(accountPeerId: accountPeerId) else {
+        return attribute
+    }
+    let blockedPeerIds = JerkgramBlockedReactionPolicy.blockedPeerIds(accountPeerId: accountPeerId)
+    if blockedPeerIds.isEmpty {
+        return attribute
+    }
+
+    var reactions = attribute.reactions
+    var recentPeers: [ReactionsMessageAttribute.RecentPeer] = []
+    var removedPeerIds = Set<PeerId>()
+
+    for recentPeer in attribute.recentPeers {
+        let isOwn = recentPeer.isMy || recentPeer.peerId == accountPeerId
+        if !isOwn && blockedPeerIds.contains(recentPeer.peerId) {
+            removedPeerIds.insert(recentPeer.peerId)
+            if let index = reactions.firstIndex(where: { $0.value == recentPeer.value }) {
+                let current = reactions[index]
+                let minimumCount: Int32 = current.chosenOrder == nil ? 0 : 1
+                let updatedCount = max(minimumCount, current.count - 1)
+                if updatedCount == 0 {
+                    reactions.remove(at: index)
+                } else {
+                    reactions[index] = MessageReaction(
+                        value: current.value,
+                        count: updatedCount,
+                        chosenOrder: current.chosenOrder
+                    )
+                }
+            }
+        } else {
+            recentPeers.append(recentPeer)
+        }
+    }
+
+    // topPeers survives in cases where Telegram truncates recentPeers. A
+    // blocked top actor can be assigned safely only when one pill exists.
+    if reactions.count == 1 {
+        for item in attribute.topPeers {
+            guard let peerId = item.peerId,
+                  !item.isMy,
+                  !item.isAnonymous,
+                  blockedPeerIds.contains(peerId),
+                  !removedPeerIds.contains(peerId) else {
+                continue
+            }
+            let current = reactions[0]
+            let minimumCount: Int32 = current.chosenOrder == nil ? 0 : 1
+            let updatedCount = max(minimumCount, current.count - item.count)
+            if updatedCount == 0 {
+                reactions.removeAll()
+            } else {
+                reactions[0] = MessageReaction(value: current.value, count: updatedCount, chosenOrder: current.chosenOrder)
+            }
+            break
+        }
+    }
+
+    let topPeers = attribute.topPeers.filter { item in
+        if item.isMy || item.isAnonymous {
+            return true
+        }
+        guard let peerId = item.peerId else {
+            return true
+        }
+        return !blockedPeerIds.contains(peerId)
+    }
+
+    if reactions.isEmpty {
+        return nil
+    }
+    return ReactionsMessageAttribute(
+        canViewList: attribute.canViewList,
+        isTags: attribute.isTags,
+        reactions: reactions,
+        recentPeers: recentPeers,
+        topPeers: topPeers
+    )
+}
+
+public func jerkgramVisibleMessageReactions(
+    accountPeerId: EnginePeer.Id,
+    message: Message
+) -> ReactionsMessageAttribute? {
+    return jerkgramFilteredMessageReactions(
+        accountPeerId: accountPeerId,
+        message: message,
+        attribute: mergedMessageReactions(attributes: message.attributes, isTags: message.areReactionsTags(accountPeerId: accountPeerId))
+    )
+}
+
 public func mergedMessageReactionsAndPeers(accountPeerId: EnginePeer.Id, accountPeer: EnginePeer?, message: Message) -> (reactions: [MessageReaction], peers: [(MessageReaction.Reaction, EnginePeer)]) {
-    guard let attribute = mergedMessageReactions(attributes: message.attributes, isTags: message.areReactionsTags(accountPeerId: accountPeerId)) else {
+    guard let attribute = jerkgramVisibleMessageReactions(accountPeerId: accountPeerId, message: message) else {
         return ([], [])
     }
     

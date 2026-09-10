@@ -113,7 +113,6 @@ func managedSynchronizePinnedChatsOperations(postbox: Postbox, network: Network,
 }
 
 private func synchronizePinnedChats(transaction: Transaction, postbox: Postbox, network: Network, accountPeerId: PeerId, stateManager: AccountStateManager, groupId: PeerGroupId, operation: SynchronizePinnedChatsOperation) -> Signal<Void, NoError> {
-    // MARK: GhostBase v1.0ZC Bot pinned-dialog bypass
     if ghostBaseIsBotAccount(accountPeerId) {
         return .complete()
     }

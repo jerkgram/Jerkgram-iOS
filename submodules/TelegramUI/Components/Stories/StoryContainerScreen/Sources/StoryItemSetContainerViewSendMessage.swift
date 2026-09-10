@@ -986,7 +986,6 @@ final class StoryItemSetContainerSendMessage: @unchecked(Sendable) {
             guard let self, let view else {
                 return
             }
-            // MARK: GhostBase v0.7D Scheduled Send story context direct stabilizer
             let ghostBaseEffectiveScheduleTime = self.ghostBaseStoryEffectiveScheduleTime(nil)
             if component.context.engine.messages.enqueueOutgoingMessageWithChatContextResult(
                 to: peerId,
@@ -2804,9 +2803,8 @@ final class StoryItemSetContainerSendMessage: @unchecked(Sendable) {
         component.controller()?.present(controller, in: .window(.root))
     }
 
-    // MARK: GhostBase v0.7D Scheduled Send story helpers
     private func ghostBaseStoryEffectiveScheduleTime(_ scheduleTime: Int32?) -> Int32? {
-        return (((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil) ? Int32(Date().timeIntervalSince1970) + 12 : scheduleTime
+        return (((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil) ? Int32(Date().timeIntervalSince1970) + 12 : scheduleTime
     }
 
     private func transformEnqueueMessages(view: StoryItemSetContainerComponent.View, messages: [EnqueueMessage], silentPosting: Bool, scheduleTime: Int32? = nil) -> [EnqueueMessage] {
@@ -2860,7 +2858,6 @@ final class StoryItemSetContainerSendMessage: @unchecked(Sendable) {
             return
         }
 
-        // MARK: GhostBase v0.7D Scheduled Send story sendMessages stabilizer
         let ghostBaseEffectiveScheduleTime = self.ghostBaseStoryEffectiveScheduleTime(scheduleTime)
         let _ = (enqueueMessages(account: component.context.account, peerId: peer.id, messages: self.transformEnqueueMessages(view: view, messages: messages, silentPosting: silentPosting, scheduleTime: ghostBaseEffectiveScheduleTime))
         |> deliverOnMainQueue).start(next: { [weak self, weak view] messageIds in
@@ -2893,8 +2890,7 @@ final class StoryItemSetContainerSendMessage: @unchecked(Sendable) {
 
                 var skipAddingTransitions = false
 
-                // MARK: GhostBase v0.7D Scheduled Send story media transition stabilizer
-                let ghostBaseRuntimeScheduledSend = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
+                let ghostBaseRuntimeScheduledSend = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
                 if ghostBaseRuntimeScheduledSend {
                     skipAddingTransitions = true
                 }

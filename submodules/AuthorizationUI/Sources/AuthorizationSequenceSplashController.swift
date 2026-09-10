@@ -108,7 +108,6 @@ public final class AuthorizationSequenceSplashController: ViewController {
         self.startButton = SolidRoundedButtonNode(title: "Start Messaging", theme: SolidRoundedButtonTheme(theme: theme), glass: false, height: 50.0, cornerRadius: 50.0 * 0.5, isShimmering: true)
         self.startButton.accessibilityIdentifier = "Auth.Welcome.StartButton"
 
-        // MARK: GhostBase v0.8H.1 Splash Safe Login init
         let ghostBaseInitialSafeLoginEnabled = ghostBaseSplashSafeLoginInitialEnabled()
         self.ghostBaseSafeLoginEnabled = ghostBaseInitialSafeLoginEnabled
         ghostBaseSplashSafeLoginApply(enabled: ghostBaseInitialSafeLoginEnabled)

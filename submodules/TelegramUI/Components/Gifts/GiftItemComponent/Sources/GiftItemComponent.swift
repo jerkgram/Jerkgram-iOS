@@ -499,7 +499,6 @@ public final class GiftItemComponent: Component {
             }
             
             self.backgroundLayer.cornerRadius = cornerRadius
-            // MARK: GhostBase v1.1E GIFTSURFACE3
             // Cells stay lightweight: no live blur, lens, transform or shadow per item.
             if case .glass = component.style, GhostBaseGlassStyle.isEnabled {
                 self.backgroundLayer.borderWidth = UIScreenPixel
@@ -1284,7 +1283,6 @@ public final class GiftItemComponent: Component {
                 } else {
                     switch component.style {
                     case .ghostBase:
-                        // MARK: GhostBase v1.1O GIFTCARDSCRIM1
                         //
                         // No per-card blur and no shared masked blur.
                         // A stable translucent scrim keeps text readable
@@ -1310,7 +1308,6 @@ public final class GiftItemComponent: Component {
 
                     case .glass, .legacy:
                         // Preserve Official Telegram outside
-                        // GhostBase profile Gifts.
                         self.backgroundLayer.backgroundColor =
                             component
                                 .theme

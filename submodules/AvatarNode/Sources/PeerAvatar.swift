@@ -186,7 +186,6 @@ public func peerAvatarImage(account: Account, peerReference: PeerReference?, aut
     
 public func peerAvatarImage(postbox: Postbox, peerReference: PeerReference?, authorOfMessage: MessageReference?, representation: TelegramMediaImageRepresentation?, displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0), clipStyle: AvatarNodeClipStyle = .round, blurred: Bool = false, inset: CGFloat = 0.0, emptyColor: UIColor? = nil, synchronousLoad: Bool = false, provideUnrounded: Bool = false, cutoutRect: CGRect? = nil, completeOnly: Bool = false) -> Signal<(UIImage, UIImage)?, NoError>? {
     if let imageData = peerAvatarImageData(postbox: postbox, peerReference: peerReference, authorOfMessage: authorOfMessage, representation: representation, synchronousLoad: synchronousLoad) {
-        // MARK: Jerkgram v1.2L BUILD123_PROFILE_COMPLETE_EMISSION1
         // Filter while PeerAvatarImageType is still attached to the emission.
         // A MediaBox completion check after UIImage decoding has a race with
         // an already-queued immediateThumbnailData preview.

@@ -189,11 +189,9 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
                 return
             }
 
-            // MARK: GhostBase v1.1M ANIMCOEXIST1
             //
             // V11O:
             // Fullscreen background and circular avatar share the same
-            // Telegram profileVideo playback id. While GhostBase animation
             // is enabled this node must not pause that shared playback.
             let keepVideoAlive =
                 GhostBaseProfileBlurSettings

@@ -1917,12 +1917,10 @@ public final class ShareController: ViewController {
             }
 
             func transformMessages(_ messages: [EnqueueMessage], showNames: Bool, silently: Bool, sendPaidMessageStars: StarsAmount?) -> [EnqueueMessage] {
-                // MARK: GhostBase v0.8C Internal ShareController Scheduled Send bridge
-                let ghostBaseScheduledSendEnabled = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false)
+                let ghostBaseScheduledSendEnabled = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false)
                 let ghostBaseShareScheduleTime: Int32? = ghostBaseScheduledSendEnabled ? Int32(Date().timeIntervalSince1970) + 12 : nil
 
                 return messages.map { message in
-                    // MARK: GhostBase v0.8D ShareController media scheduled safety
                     let ghostBaseCanScheduleShareMessage: Bool
                     switch message {
                     case let .message(text: _, attributes: _, inlineStickers: _, mediaReference: mediaReference, threadId: _, replyToMessageId: _, replyToStoryId: _, localGroupingKey: _, correlationId: _, bubbleUpEmojiOrStickersets: _):
@@ -2315,8 +2313,7 @@ public final class ShareController: ViewController {
                     }
                     messagesToEnqueue = transformMessages(messagesToEnqueue, showNames: showNames, silently: silently, sendPaidMessageStars: requiresStars[peerId])
 
-                    // MARK: GhostBase v1.0S Post Share Scheduled Send
-                    let ghostBasePostShareScheduledEnabled = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false)
+                    let ghostBasePostShareScheduledEnabled = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false)
 
                     if ghostBasePostShareScheduledEnabled {
                         let ghostBasePostShareScheduleTime = Int32(Date().timeIntervalSince1970) + 12

@@ -212,12 +212,10 @@ extension PeerInfoScreenNode {
             }
             push(usernameSetupController(context: self.context))
         case .addAccount:
-            // MARK: GhostBase v1.0ZG ACCOUNTUNLOCK1 main action
             self.context.sharedContext.beginNewAuth(
                 testingEnvironment: self.context.account.testingEnvironment
             )
         case .logout:
-            // MARK: GhostBase v1.0ZG BOTLOGOUT1
             if case let .user(user) = self.data?.peer {
                 if user.botInfo != nil {
                     self.controller?.present(
@@ -239,7 +237,6 @@ extension PeerInfoScreenNode {
                                         guard let self else {
                                             return
                                         }
-                                        // MARK: GhostBase v1.0ZH BOTDEDUPE1 clear marker on logout
                                         UserDefaults.standard.removeObject(
                                             forKey: "jerkgram.BotAccount.\(user.id.toInt64())"
                                         )

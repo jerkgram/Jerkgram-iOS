@@ -1858,8 +1858,7 @@ public class VideoMessageCameraScreen: ViewController {
                 if skipAction {
                     return
                 }
-                // MARK: GhostBase v0.7D Scheduled Send circle immediate-state stabilizer
-                let ghostBaseRuntimeScheduledSend = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
+                let ghostBaseRuntimeScheduledSend = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
                 self.isSendingImmediately = !ghostBaseRuntimeScheduledSend
                 self.waitingForNextResult = true
                 self.node.stopRecording.invoke(Void())

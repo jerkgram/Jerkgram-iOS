@@ -1205,8 +1205,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
             }
         }
 
-        // MARK: GhostBase v0.8F owner-enabled protected capture gate
-        let ghostBaseAllowCapture = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true))
+        let ghostBaseAllowCapture = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true))
         let isSecret = self.chatLocation.peerId?.namespace == Namespaces.Peer.SecretChat || self.chatLocation.peerId?.isVerificationCodes == true || (!ghostBaseAllowCapture && self.chatPresentationInterfaceState.copyProtectionEnabled)
         if self.historyNodeContainer.isSecret != isSecret {
             #if DEBUG
@@ -4865,8 +4864,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                 isScheduledMessages = true
             }
 
-            // MARK: GhostBase v0.7D Scheduled Send text transition stabilizer
-            let ghostBaseRuntimeScheduledSend = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil && !isScheduledMessages
+            let ghostBaseRuntimeScheduledSend = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil && !isScheduledMessages
 
             if let _ = effectivePresentationInterfaceState.slowmodeState, !isScheduledMessages && scheduleTime == nil && !ghostBaseRuntimeScheduledSend {
                 if let rect = self.frameForInputActionButton() {
@@ -5263,8 +5261,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
 
                     self.sendMessages(messages, silentPosting, scheduleTime, repeatPeriod, messages.count > 1, postpone)
 
-                    // MARK: GhostBase v0.7B Scheduled Send input clear fix
-                    let ghostBaseScheduledSendEnabled = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false
+                    let ghostBaseScheduledSendEnabled = (JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false
 
                     if ghostBaseScheduledSendEnabled && scheduleTime == nil {
                         self.collapseInput()
@@ -5284,11 +5281,9 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                             state = state.withUpdatedForwardMessageIds(nil)
                             state = state.withUpdatedForwardOptionsState(nil)
 
-                            // MARK: GhostBase v0.7C Scheduled Send stronger compose clear
                             state = state.withUpdatedComposeDisableUrlPreviews([])
                             state = state.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: "")))
 
-                            // MARK: GhostBase v0.7D Scheduled Send input state stabilizer
                             state = state.withUpdatedEffectiveInputState(ChatTextInputState(inputText: NSAttributedString(string: "")))
 
                             return state

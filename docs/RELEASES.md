@@ -49,16 +49,16 @@ Release notes
 Recommended release naming:
 
 ```text
-Git tag          v1.0.0
-GitHub release   Jerkgram 1.0.0
-IPA              Jerkgram-1.0.0.ipa
-Source archive   Jerkgram-1.0.0-source.zip
-Manifest         SOURCE_MANIFEST.sha256
+Git tag          v<VERSION>
+GitHub release   Jerkgram <VERSION>
+IPA              Jerkgram-<VERSION>.ipa
+Source archive   Jerkgram-<VERSION>-source.tar.xz
+Manifest         public-source-manifest.json
 ```
 
 The IPA asset name should stay predictable within a release so the website can link directly to it without presenting GitHub's release page as an intermediate download step.
 
-## First Stable release checklist
+## Stable release checklist
 
 The detailed operator checklist and copy-ready GitHub Release body live in [`RELEASE_TEMPLATE.md`](RELEASE_TEMPLATE.md).
 
@@ -82,9 +82,9 @@ Before a release is marked Stable:
 
 ## Current Stable
 
-Jerkgram 1.0.0 is the first Stable release.
+Jerkgram 1.0.2 is the current Stable release.
 
-- **Canonical release:** [Jerkgram 1.0.0](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.0)
-- **Canonical source tag:** `v1.0.0`
-- **Canonical IPA:** `Jerkgram-1.0.0.ipa`, attached to the GitHub Release above
+- **Canonical release:** [Jerkgram 1.0.2](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.2)
+- **Canonical source tag:** `v1.0.2`
+- **Canonical IPA:** `Jerkgram-1.0.2.ipa`, attached to the GitHub Release above
 - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)

@@ -227,7 +227,6 @@ private func validatePeerReadState(network: Network, postbox: Postbox, stateMana
 }
 
 private func pushPeerReadState(network: Network, postbox: Postbox, stateManager: AccountStateManager, peerId: PeerId, readState: PeerReadState) -> Signal<PeerReadState, PeerReadStateValidationError> {
-    // MARK: GhostBase v0.6B Read Ghost remote readHistory guard
     let ghostBaseReadGhost = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ReadMessages") as? Bool) ?? false
     if ghostBaseReadGhost && peerId.namespace != Namespaces.Peer.SecretChat {
         return .single(readState)

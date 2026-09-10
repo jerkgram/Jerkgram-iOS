@@ -195,6 +195,313 @@ public func chatListFilterPredicate(filter: ChatListFilterData, accountPeerId: E
     })
 }
 
+
+private func jerkgramBuild134ChatListPresentationUpdates<T>(
+    _ signal: Signal<T, NoError>
+) -> Signal<T, NoError> {
+    return combineLatest(
+        signal,
+        JerkgramBlockedReactionPolicy.presentationUpdates
+    )
+    |> map { value, _ in
+        return value
+    }
+}
+
+
+private struct JerkgramBuild136VisibilityCacheKey: Hashable {
+    let accountPeerId: PeerId
+    let peerId: PeerId
+}
+
+private struct JerkgramBuild136VisibilityCacheEntry {
+    let sourceIndex: EngineChatList.Item.Index
+    let stockUnreadCount: Int
+    let presentationRevision: Int32
+    let fallbackMessage: EngineMessage?
+    let hiddenUnreadCount: Int32
+}
+
+private struct JerkgramBuild136VisibilityCacheState {
+    var entries: [JerkgramBuild136VisibilityCacheKey: JerkgramBuild136VisibilityCacheEntry] = [:]
+    var insertionOrder: [JerkgramBuild136VisibilityCacheKey] = []
+}
+
+private let jerkgramBuild136VisibilityCache = Atomic(
+    value: JerkgramBuild136VisibilityCacheState()
+)
+
+private let jerkgramBuild136VisibilityCacheLimit = 256
+
+private func jerkgramBuild136ClearVisibilityCache(accountPeerId: PeerId) {
+    let _ = jerkgramBuild136VisibilityCache.modify { current in
+        var current = current
+        let keys = current.entries.keys.filter { key in key.accountPeerId == accountPeerId }
+        guard !keys.isEmpty else {
+            return current
+        }
+        let removed = Set(keys)
+        for key in keys {
+            current.entries.removeValue(forKey: key)
+        }
+        current.insertionOrder.removeAll(where: { removed.contains($0) })
+        return current
+    }
+}
+
+private func jerkgramBuild136StoreVisibilityCache(
+    _ additions: [JerkgramBuild136VisibilityCacheKey: JerkgramBuild136VisibilityCacheEntry],
+    removing removals: Set<JerkgramBuild136VisibilityCacheKey>
+) {
+    guard !additions.isEmpty || !removals.isEmpty else {
+        return
+    }
+    let _ = jerkgramBuild136VisibilityCache.modify { current in
+        var current = current
+        for key in removals {
+            current.entries.removeValue(forKey: key)
+        }
+        if !removals.isEmpty {
+            current.insertionOrder.removeAll(where: { removals.contains($0) })
+        }
+        for (key, value) in additions {
+            if current.entries[key] == nil {
+                current.insertionOrder.append(key)
+            }
+            current.entries[key] = value
+        }
+        while current.insertionOrder.count > jerkgramBuild136VisibilityCacheLimit {
+            let removed = current.insertionOrder.removeFirst()
+            current.entries.removeValue(forKey: removed)
+        }
+        return current
+    }
+}
+
+private func jerkgramBuild136ReadCounters(
+    _ counters: EnginePeerReadCounters?,
+    subtracting hiddenUnreadCount: Int32
+) -> EnginePeerReadCounters? {
+    guard hiddenUnreadCount > 0, let counters, let state = counters._asReadCounters() else {
+        return counters
+    }
+    var remaining = hiddenUnreadCount
+    let states = state.states.map { namespace, value -> (MessageId.Namespace, PeerReadState) in
+        guard namespace == Namespaces.Message.Cloud, remaining > 0 else {
+            return (namespace, value)
+        }
+        switch value {
+        case let .idBased(maxIncomingReadId, maxOutgoingReadId, maxKnownId, count, markedUnread):
+            let removed = min(count, remaining)
+            remaining -= removed
+            return (namespace, .idBased(
+                maxIncomingReadId: maxIncomingReadId,
+                maxOutgoingReadId: maxOutgoingReadId,
+                maxKnownId: maxKnownId,
+                count: max(0, count - removed),
+                markedUnread: markedUnread
+            ))
+        case let .indexBased(maxIncomingReadIndex, maxOutgoingReadIndex, count, markedUnread):
+            let removed = min(count, remaining)
+            remaining -= removed
+            return (namespace, .indexBased(
+                maxIncomingReadIndex: maxIncomingReadIndex,
+                maxOutgoingReadIndex: maxOutgoingReadIndex,
+                count: max(0, count - removed),
+                markedUnread: markedUnread
+            ))
+        }
+    }
+    return EnginePeerReadCounters(state: CombinedPeerReadState(states: states), isMuted: counters.isMuted)
+}
+
+private func jerkgramBuild136PresentationIndex(
+    sourceIndex: EngineChatList.Item.Index,
+    cached: JerkgramBuild136VisibilityCacheEntry?
+) -> EngineChatList.Item.Index? {
+    guard let cached,
+          cached.sourceIndex == sourceIndex,
+          let message = cached.fallbackMessage,
+          case let .chatList(index) = sourceIndex,
+          index.pinningIndex == nil,
+          message.id != index.messageIndex.id else {
+        return nil
+    }
+    return .chatList(EngineChatList.Item.Index.ChatList(
+        pinningIndex: nil,
+        messageIndex: message.index
+    ))
+}
+
+private func jerkgramBuild136Applying(
+    _ cached: JerkgramBuild136VisibilityCacheEntry,
+    to item: EngineChatList.Item
+) -> EngineChatList.Item {
+    var messages = item.messages
+    if messages.isEmpty, let fallbackMessage = cached.fallbackMessage {
+        messages = [fallbackMessage]
+    }
+    return item.withUpdatedCommunitySummary(
+        messages: messages,
+        readCounters: jerkgramBuild136ReadCounters(
+            item.readCounters,
+            subtracting: cached.hiddenUnreadCount
+        ),
+        jerkgramPresentationIndex: jerkgramBuild136PresentationIndex(
+            sourceIndex: item.index,
+            cached: cached
+        )
+    )
+}
+
+private func jerkgramBuild136VisibleChatListUpdate(
+    account: Account,
+    update: ChatListNodeViewUpdate
+) -> Signal<ChatListNodeViewUpdate, NoError> {
+    guard JerkgramBlockedReactionPolicy.hideBlockedMessages(accountPeerId: account.peerId) else {
+        jerkgramBuild136ClearVisibilityCache(accountPeerId: account.peerId)
+        return .single(update)
+    }
+    let blockedPeerIds = JerkgramBlockedReactionPolicy.blockedPeerIds(accountPeerId: account.peerId)
+    guard !blockedPeerIds.isEmpty else {
+        jerkgramBuild136ClearVisibilityCache(accountPeerId: account.peerId)
+        return .single(update)
+    }
+
+    let presentationRevision = JerkgramBlockedReactionPolicy.presentationRevisionValue
+    let cachedEntries = jerkgramBuild136VisibilityCache.with { current in current.entries }
+    var reusable: [PeerId: JerkgramBuild136VisibilityCacheEntry] = [:]
+    var missingPeerIds = Set<PeerId>()
+    for item in update.list.items {
+        guard case let .chatList(peerId) = item.id,
+              let peer = item.renderedPeer.peer,
+              JerkgramBlockedReactionPolicy.isGroupChat(peer._asPeer()),
+              item.messages.isEmpty || (item.readCounters?.count ?? 0) > 0 else {
+            continue
+        }
+        let key = JerkgramBuild136VisibilityCacheKey(accountPeerId: account.peerId, peerId: peerId)
+        let stockUnreadCount = Int(item.readCounters?.count ?? 0)
+        let mustRefreshFallback: Bool
+        if item.messages.isEmpty {
+            switch update.type {
+            case .Generic, .FillHole:
+                mustRefreshFallback = true
+            default:
+                mustRefreshFallback = false
+            }
+        } else {
+            mustRefreshFallback = false
+        }
+        if let cached = cachedEntries[key],
+           cached.sourceIndex == item.index,
+           cached.stockUnreadCount == stockUnreadCount,
+           cached.presentationRevision == presentationRevision,
+           !mustRefreshFallback {
+            reusable[peerId] = cached
+        } else {
+            missingPeerIds.insert(peerId)
+        }
+    }
+
+    let buildUpdate: ([PeerId: JerkgramBuild136VisibilityCacheEntry]) -> ChatListNodeViewUpdate = { resolved in
+        let items = update.list.items.map { item -> EngineChatList.Item in
+            guard case let .chatList(peerId) = item.id,
+                  let cached = resolved[peerId] else {
+                return item
+            }
+            return jerkgramBuild136Applying(cached, to: item)
+        }.sorted { lhs, rhs in
+            let lhsIndex = lhs.jerkgramPresentationIndex ?? lhs.index
+            let rhsIndex = rhs.jerkgramPresentationIndex ?? rhs.index
+            return lhsIndex < rhsIndex
+        }
+        return ChatListNodeViewUpdate(
+            list: EngineChatList(
+                items: items,
+                groupItems: update.list.groupItems,
+                additionalItems: update.list.additionalItems,
+                hasEarlier: update.list.hasEarlier,
+                hasLater: update.list.hasLater,
+                isLoading: update.list.isLoading
+            ),
+            type: update.type,
+            scrollPosition: update.scrollPosition
+        )
+    }
+
+    guard !missingPeerIds.isEmpty else {
+        return .single(buildUpdate(reusable))
+    }
+
+    return account.postbox.transaction { transaction -> ChatListNodeViewUpdate in
+        var resolved = reusable
+        var newCacheEntries: [JerkgramBuild136VisibilityCacheKey: JerkgramBuild136VisibilityCacheEntry] = [:]
+        var removedCacheKeys = Set<JerkgramBuild136VisibilityCacheKey>()
+        for item in update.list.items {
+            guard case let .chatList(peerId) = item.id,
+                  missingPeerIds.contains(peerId),
+                  let chatPeer = transaction.getPeer(peerId),
+                  JerkgramBlockedReactionPolicy.isGroupChat(chatPeer) else {
+                continue
+            }
+
+            let stockUnreadCount = Int(item.readCounters?.count ?? 0)
+            let requestedCount = min(512, max(64, stockUnreadCount + 32))
+            let historyView = transaction.getMessagesHistoryViewState(
+                input: .single(peerId: peerId, threadId: nil),
+                ignoreMessagesInTimestampRange: nil,
+                ignoreMessageIds: Set(),
+                count: requestedCount,
+                clipHoles: true,
+                anchor: .upperBound,
+                namespaces: .just(Set([Namespaces.Message.Cloud]))
+            )
+            let cacheKey = JerkgramBuild136VisibilityCacheKey(
+                accountPeerId: account.peerId,
+                peerId: peerId
+            )
+            if historyView.isLoading {
+                removedCacheKeys.insert(cacheKey)
+                resolved.removeValue(forKey: peerId)
+                continue
+            }
+            var hiddenUnreadCount: Int32 = 0
+            for entry in historyView.entries where !entry.isRead && entry.message.flags.contains(.Incoming) {
+                if JerkgramBlockedReactionPolicy.isMessageHidden(
+                    accountPeerId: account.peerId,
+                    chatPeer: chatPeer,
+                    message: entry.message
+                ) {
+                    hiddenUnreadCount += 1
+                }
+            }
+            let fallbackMessage = historyView.entries.reversed().first(where: { entry in
+                !JerkgramBlockedReactionPolicy.isMessageHidden(
+                    accountPeerId: account.peerId,
+                    chatPeer: chatPeer,
+                    message: entry.message
+                )
+            }).map { EngineMessage($0.message) }
+            let cached = JerkgramBuild136VisibilityCacheEntry(
+                sourceIndex: item.index,
+                stockUnreadCount: stockUnreadCount,
+                presentationRevision: presentationRevision,
+                fallbackMessage: fallbackMessage,
+                hiddenUnreadCount: hiddenUnreadCount
+            )
+            resolved[peerId] = cached
+            if !item.messages.isEmpty || fallbackMessage != nil {
+                newCacheEntries[cacheKey] = cached
+            } else {
+                removedCacheKeys.insert(cacheKey)
+                resolved.removeValue(forKey: peerId)
+            }
+        }
+        jerkgramBuild136StoreVisibilityCache(newCacheEntries, removing: removedCacheKeys)
+        return buildUpdate(resolved)
+    }
+}
+
 public func chatListViewForLocation(chatListLocation: ChatListControllerLocation, location: ChatListNodeLocation, account: Account, shouldLoadCanMessagePeer: Bool) -> Signal<ChatListNodeViewUpdate, NoError> {
     let accountPeerId = account.peerId
     
@@ -211,19 +518,24 @@ public func chatListViewForLocation(chatListLocation: ChatListControllerLocation
         case let .initial(count, _):
             let signal: Signal<(ChatListView, ViewUpdateType), NoError>
             signal = account.viewTracker.tailChatListView(groupId: groupId._asGroup(), filterPredicate: filterPredicate, count: count, shouldLoadCanMessagePeer: shouldLoadCanMessagePeer)
-            return signal
+            return jerkgramBuild134ChatListPresentationUpdates(signal)
             |> map { view, updateType -> ChatListNodeViewUpdate in
                 return ChatListNodeViewUpdate(list: EngineChatList(view, accountPeerId: accountPeerId), type: updateType, scrollPosition: nil)
             }
             |> mapToSignal { update -> Signal<ChatListNodeViewUpdate, NoError> in
                 return chatListNodeViewUpdateWithCommunitySummaries(account: account, update: update)
+                |> mapToSignal { summarized in
+                    return jerkgramBuild136VisibleChatListUpdate(account: account, update: summarized)
+                }
             }
         case let .navigation(index, _):
             guard case let .chatList(index) = index else {
                 return .never()
             }
             var first = true
-            return account.viewTracker.aroundChatListView(groupId: groupId._asGroup(), filterPredicate: filterPredicate, index: index, count: 80, shouldLoadCanMessagePeer: shouldLoadCanMessagePeer)
+            return jerkgramBuild134ChatListPresentationUpdates(
+                account.viewTracker.aroundChatListView(groupId: groupId._asGroup(), filterPredicate: filterPredicate, index: index, count: 80, shouldLoadCanMessagePeer: shouldLoadCanMessagePeer)
+            )
             |> map { view, updateType -> ChatListNodeViewUpdate in
                 let genericType: ViewUpdateType
                 if first {
@@ -236,6 +548,9 @@ public func chatListViewForLocation(chatListLocation: ChatListControllerLocation
             }
             |> mapToSignal { update -> Signal<ChatListNodeViewUpdate, NoError> in
                 return chatListNodeViewUpdateWithCommunitySummaries(account: account, update: update)
+                |> mapToSignal { summarized in
+                    return jerkgramBuild136VisibleChatListUpdate(account: account, update: summarized)
+                }
             }
         case let .scroll(index, sourceIndex, scrollPosition, animated, _):
             guard case let .chatList(index) = index else {
@@ -245,7 +560,9 @@ public func chatListViewForLocation(chatListLocation: ChatListControllerLocation
             let directionHint: ListViewScrollToItemDirectionHint = sourceIndex > .chatList(index) ? .Down : .Up
             let chatScrollPosition: ChatListNodeViewScrollPosition = .index(index: index, position: scrollPosition, directionHint: directionHint, animated: animated)
             var first = true
-            return account.viewTracker.aroundChatListView(groupId: groupId._asGroup(), filterPredicate: filterPredicate, index: index, count: 80, shouldLoadCanMessagePeer: shouldLoadCanMessagePeer)
+            return jerkgramBuild134ChatListPresentationUpdates(
+                account.viewTracker.aroundChatListView(groupId: groupId._asGroup(), filterPredicate: filterPredicate, index: index, count: 80, shouldLoadCanMessagePeer: shouldLoadCanMessagePeer)
+            )
             |> map { view, updateType -> ChatListNodeViewUpdate in
                 let genericType: ViewUpdateType
                 let scrollPosition: ChatListNodeViewScrollPosition? = first ? chatScrollPosition : nil
@@ -259,6 +576,9 @@ public func chatListViewForLocation(chatListLocation: ChatListControllerLocation
             }
             |> mapToSignal { update -> Signal<ChatListNodeViewUpdate, NoError> in
                 return chatListNodeViewUpdateWithCommunitySummaries(account: account, update: update)
+                |> mapToSignal { summarized in
+                    return jerkgramBuild136VisibleChatListUpdate(account: account, update: summarized)
+                }
             }
         }
     case let .forum(peerId):

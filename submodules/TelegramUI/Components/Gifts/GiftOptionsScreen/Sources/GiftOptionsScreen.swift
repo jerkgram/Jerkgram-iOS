@@ -29,9 +29,7 @@ import UndoUI
 import EdgeEffect
 import GlassBarButtonComponent
 
-// MARK: GhostBase v1.1E GIFTSURFACE3 actual cells use lightweight style
 
-// MARK: GhostBase v1.0ZB Seasonal Gifts
 
 private struct GhostBaseSeasonalGiftDescriptor {
     let id: Int64
@@ -103,7 +101,6 @@ private let ghostBaseSeasonalGiftDescriptors: [
         price: 50,
         stickerIndex: 10
     ),
-    // MARK: GhostBase v1.1U BUILD106_NEW_BEAR1
     GhostBaseSeasonalGiftDescriptor(
         id: 6046178578163303744,
         title: "Мишка",
@@ -791,7 +788,7 @@ final class GiftOptionsScreenComponent: Component {
                                 gift.id
                             ) {
                                 ribbon = GiftItemComponent.Ribbon(
-                                    text: "Сезонный",
+                                    text: environment.strings.baseLanguageCode == "ru" ? "Сезонный" : "Seasonal",
                                     color: .blue
                                 )
                             }
@@ -1814,7 +1811,7 @@ final class GiftOptionsScreenComponent: Component {
                             id: AnyHashable(
                                 StarsFilter.seasonal.rawValue
                             ),
-                            title: "Сезонные"
+                            title: strings.baseLanguageCode == "ru" ? "Сезонные" : "Seasonal"
                         )
                     )
                 }

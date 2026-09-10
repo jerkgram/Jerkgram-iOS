@@ -106,7 +106,6 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
         if self.theme !== presentationData.theme {
             self.theme = presentationData.theme
             
-            // MARK: Jerkgram v1.2M BUILD124_PROFILE_EDIT_SURFACE1
             // The fullscreen profile scene owns the blur. Editing rows only add
             // a light readability tint; when Jerkgram Glass is off, preserve
             // Telegram's stock opaque block background exactly.
@@ -174,14 +173,11 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
         let hasTopCorners = hasCorners && !hasPrevious
         let hasBottomCorners = hasCorners && !hasNext
         
-        // MARK: GhostBase v1.1P HEADER_FIELD_GLASS_OWNER1
-                // MARK: Jerkgram v1.2N BUILD125_PROFILE_EDIT_GLASS_OWNER1
         // Edit-profile fields must follow the visible profile Glass setting,
         // not a separate persisted flag which leaves the bio opaque.
         let ghostBaseGlassEnabled = GhostBaseGlassStyle.isEnabled
 
         if ghostBaseGlassEnabled {
-            // MARK: Jerkgram v1.2M BUILD124_PROFILE_EDIT_RUNTIME_SURFACE1
             // This is the actual final visual owner. Keep it visibly lighter
             // than the legacy card so the profile backdrop remains readable.
             // Keep this node as a tint only. `itemBlocksBackgroundColor`

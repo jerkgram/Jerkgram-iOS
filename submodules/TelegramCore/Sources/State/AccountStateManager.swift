@@ -1535,7 +1535,6 @@ public final class AccountStateManager {
             }
         }
         
-        // MARK: GhostBase v1.1E BOTSHADOW1 official filtered replay
         private struct GhostBaseBotShadowCursor {
             let state: AuthorizedAccountState.State
             let slice: Int
@@ -2561,7 +2560,6 @@ public final class AccountStateManager {
         }
     }
 
-    // MARK: GhostBase v1.1E BOTSHADOW1 public startup
     public func ghostBaseStartBotShadowHistory() {
         self.impl.with { impl in
             impl.ghostBaseStartBotShadowHistory()

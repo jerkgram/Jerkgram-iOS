@@ -217,7 +217,6 @@ extension ListMessageItemInteraction {
 }
 
 private func mappedInsertEntries(context: AccountContext, chatLocation: ChatLocation, associatedData: ChatMessageItemAssociatedData, controllerInteraction: ChatControllerInteraction, mode: ChatHistoryListMode, lastHeaderId: Int64, isSavedMusic: Bool, canReorder: Bool, entries: [ChatHistoryViewTransitionInsertEntry], systemStyle: ItemListSystemStyle) -> [ListViewInsertItem] {
-    // MARK: Jerkgram v1.2M BUILD124_HISTORY_DATE_HEADERS1
     // Custom chats normally suppress floating dates. Edit history is the one
     // exception: it supplies real edit-event timestamps and explicitly opts
     // out of hashtag-search navigation, so it should use Telegram's native
@@ -278,7 +277,6 @@ private func mappedInsertEntries(context: AccountContext, chatLocation: ChatLoca
 }
 
 private func mappedUpdateEntries(context: AccountContext, chatLocation: ChatLocation, associatedData: ChatMessageItemAssociatedData, controllerInteraction: ChatControllerInteraction, mode: ChatHistoryListMode, lastHeaderId: Int64, isSavedMusic: Bool, canReorder: Bool, entries: [ChatHistoryViewTransitionUpdateEntry], systemStyle: ItemListSystemStyle) -> [ListViewUpdateItem] {
-    // MARK: Jerkgram v1.2M BUILD124_HISTORY_DATE_HEADERS1
     // Custom chats normally suppress floating dates. Edit history is the one
     // exception: it supplies real edit-event timestamps and explicitly opts
     // out of hashtag-search navigation, so it should use Telegram's native
@@ -1908,7 +1906,15 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
             stopHistoryViewUpdates = .single(false)
         }
         
-        let historyViewUpdateValue = historyViewUpdate
+        // Rebuild visible entries when either the Telegram blocked list or a
+        // Jerkgram visibility switch changes; no chat reload/restart required.
+        let historyViewUpdateValue = combineLatest(
+            historyViewUpdate,
+            JerkgramBlockedReactionPolicy.presentationUpdates
+        )
+        |> map { update, _ in
+            return update
+        }
         historyViewUpdate = stopHistoryViewUpdates |> mapToSignal { value in
             if value {
                 return .never()

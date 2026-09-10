@@ -26,12 +26,10 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
     private let chatLocation: ChatLocation
     private let chatLocationContextHolder: Atomic<ChatLocationContextHolder?>
     private let chatControllerInteraction: ChatControllerInteraction
-    // MARK: Jerkgram v1.2D BUILD115_LINKS_READABILITY_OWNER1
     private let jerkgramLinksReadabilityEnabled: Bool
     
     weak var parentController: ViewController?
     
-    // MARK: Jerkgram v1.2G BUILD118_GLASS1
     private let ghostBaseGlassEnabled: Bool
     private let glassBackgroundView: UIView
     private let listNode: ChatHistoryListNode
@@ -214,7 +212,6 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
     
     func update(size: CGSize, topInset: CGFloat, sideInset: CGFloat, bottomInset: CGFloat, deviceMetrics: DeviceMetrics, visibleHeight: CGFloat, isScrollingLockedAtTop: Bool, expandProgress: CGFloat, navigationHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition) {
         self.currentParams = (size, topInset, sideInset, bottomInset, deviceMetrics, visibleHeight, isScrollingLockedAtTop, expandProgress, navigationHeight, presentationData)
-        // MARK: Jerkgram v1.2L BUILD123_LINKS_INTRINSIC_GLASS1
         // Links already owns a luminance-aware row surface. Never place its
         // variable-height results inside a viewport-height plate.
         if self.ghostBaseGlassEnabled && !self.jerkgramLinksReadabilityEnabled {
@@ -235,8 +232,6 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
             transition.updateFrame(view: self.glassBackgroundView, frame: self.jerkgramLinksReadabilityEnabled ? .zero : self.glassBackgroundView.frame)
         }
 
-        // MARK: Jerkgram v1.2D BUILD115_LINKS_READABILITY_OWNER1
-        // MARK: Jerkgram v1.2M BUILD124_LINKS_INTRINSIC_MATERIAL1
         // The Links pane itself must remain transparent. A pane-sized color
         // layer darkens the whole profile; the material belongs only behind
         // the loaded Links list, exactly like Groups in Common.
@@ -265,8 +260,6 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
                     x: sideInset + 16.0,
                     y: distanceToTop,
                     width: max(1.0, self.listNode.bounds.size.width - (sideInset + 16.0) * 2.0),
-                    // MARK: Jerkgram v1.2N BUILD125_LINKS_LOCAL_CARD_BOUNDS1
-                    // MARK: Jerkgram v1.2N BUILD125_LINKS_REMOVE_VIEWPORT_CARD2
                     // This owner sits behind *every* ChatHistory cell; it cannot
                     // be used as a per-link glass card. Keeping it visible turns
                     // a variable-length list into one giant dark rectangle.

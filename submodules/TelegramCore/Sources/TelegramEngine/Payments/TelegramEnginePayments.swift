@@ -106,7 +106,6 @@ public extension TelegramEngine {
             return _internal_fulfillStarsSubscription(account: self.account, peerId: peerId, subscriptionId: subscriptionId)
         }
         
-        // MARK: GhostBase v1.0Z Hidden Gifts direct catalog
 
         public func ghostBaseFetchStarGiftsCatalogDirect()
         -> Signal<GhostBaseStarGiftsCatalogResult, NoError> {

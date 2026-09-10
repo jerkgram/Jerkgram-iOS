@@ -12,7 +12,6 @@ import GeneratedSources
 import WidgetItems
 
 
-// MARK: Jerkgram v1.2C BUILD114_SIGNER_APPGROUP1
 private func jerkgramResolvedApplicationGroupIdentifier(
     fallback: String
 ) -> String {
@@ -112,14 +111,12 @@ private func jerkgramResolvedApplicationGroupIdentifier(
             continue
         }
 
-        // BUILD115_SHARED_APPGROUP_ROLE1
         //
         // Never trust entitlement array ordering.
         //
         // 1. Prefer the normal Telegram-derived fallback
         //    when the signer actually grants it.
         //
-        // 2. GhostBase historically stores shared state in
         //    the signer-provided App Group whose role suffix
         //    is ".1".
         //
@@ -243,7 +240,6 @@ class DefaultIntentHandler: INExtension, INSendMessageIntentHandling, INSearchFo
         let languagesCategory = "ios"
         
         let appGroupName = jerkgramResolvedApplicationGroupIdentifier(fallback: "group.\(baseAppBundleId)")
-// MARK: Jerkgram v1.2E BUILD116_EXTENSION_STAGE1
 BuildConfig.jerkgramRecordExtensionDiagnostic(
     process: "siri",
     stage: "profile",

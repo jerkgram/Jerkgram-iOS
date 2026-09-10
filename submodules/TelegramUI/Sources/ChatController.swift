@@ -1411,7 +1411,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                 message: message,
                 mediaSubject: params.mediaSubject,
                 standalone: standalone,
-                copyProtected: !(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (self.presentationInterfaceState.copyProtectionEnabled || self.presentationInterfaceState.myCopyProtectionEnabled),
+                copyProtected: !(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (self.presentationInterfaceState.copyProtectionEnabled || self.presentationInterfaceState.myCopyProtectionEnabled),
                 reverseMessageGalleryOrder: false,
                 mode: mode,
                 navigationController: self.effectiveNavigationController, dismissInput: { [weak self] in
@@ -2194,8 +2194,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                 }
             }
 
-            // MARK: GhostBase v0.8E protected capture pinch bypass
-            let ghostBaseAllowCapture = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true))
+            let ghostBaseAllowCapture = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true))
             let isSecret = strongSelf.chatLocation.peerId?.namespace == Namespaces.Peer.SecretChat
             let disableScreenshots = isSecret || (!ghostBaseAllowCapture && (strongSelf.presentationInterfaceState.copyProtectionEnabled || strongSelf.presentationInterfaceState.myCopyProtectionEnabled))
             let pinchController = makePinchController(sourceNode: sourceNode, disableScreenshots: disableScreenshots, getContentAreaInScreenSpace: {
@@ -7675,7 +7674,6 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
 
         self.didAppear = true
 
-        // MARK: Jerkgram v1.2G BUILD118_SINCE_LAST_OPEN1
         if case .standard(.default) = self.mode, let chatPeerId = self.chatLocation.peerId {
             let accountPeerId = self.context.account.peerId.toInt64()
             let chatPeerIdValue = chatPeerId.toInt64()
@@ -8913,14 +8911,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
     }
 
     func transformEnqueueMessages(_ messages: [EnqueueMessage], silentPosting: Bool, scheduleTime: Int32? = nil, repeatPeriod: Int32? = nil, postpone: Bool = false) -> [EnqueueMessage] {
-        // MARK: GhostBase v0.7A Scheduled Send runtime
-        let ghostBaseScheduledSendEnabled = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false
+        let ghostBaseScheduledSendEnabled = (JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false
         let ghostBaseScheduleBaseTime = Int32(Date().timeIntervalSince1970) + 12
 
-        // MARK: GhostBase v1.0T send text style runtime
-        let ghostBaseSendTextStyle = UserDefaults.standard.string(
-            forKey: "jerkgram.Messages.SendTextStyle"
-        ) ?? "normal"
+        let ghostBaseSendTextStyle = (JerkgramHotSettings.object(forKey: "jerkgram.Messages.SendTextStyle") as? String) ?? "normal"
 
         let ghostBaseIsScheduledMessages: Bool
         if case .scheduledMessages = self.presentationInterfaceState.subject {
@@ -9089,17 +9083,11 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                             )
                         )
 
-                        UserDefaults.standard.set(
-                            UserDefaults.standard.integer(
-                                forKey: "jerkgram.V10T.SendTextStyleApplied.Count"
-                            ) + 1,
-                            forKey: "jerkgram.V10T.SendTextStyleApplied.Count"
-                        )
+
                     }
                 }
 
                 let ghostBaseHasExistingSchedule = attributes.contains(where: { $0 is OutgoingScheduleInfoMessageAttribute })
-                // MARK: GhostBase v0.7D Scheduled Send one-time exclusion
                 let ghostBaseHasAutoremove = attributes.contains(where: { $0 is AutoremoveTimeoutMessageAttribute })
                 let ghostBaseEffectiveScheduleTime: Int32? = (ghostBaseScheduledSendEnabled && scheduleTime == nil && !ghostBaseHasExistingSchedule && !ghostBaseHasAutoremove && !ghostBaseIsScheduledMessages) ? ghostBaseScheduleBaseTime : scheduleTime
 
@@ -9298,8 +9286,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
 
                 var skipAddingTransitions = false
 
-                // MARK: GhostBase v0.7D Scheduled Send media transition stabilizer
-                let ghostBaseRuntimeScheduledSend = ((UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
+                let ghostBaseRuntimeScheduledSend = ((JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool) ?? false) && scheduleTime == nil
 
                 if shouldDivert || ghostBaseRuntimeScheduledSend {
                     skipAddingTransitions = true
@@ -9521,11 +9508,8 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
             guard let self else {
                 return
             }
-            // MARK: GhostBase v1.0S inline-result scheduled send
             let ghostBaseScheduledSend = (
-                UserDefaults.standard.object(
-                    forKey: "jerkgram.GhostMode.ScheduledSend"
-                ) as? Bool
+                JerkgramHotSettings.object(forKey: "jerkgram.GhostMode.ScheduledSend") as? Bool
             ) ?? false
 
             let ghostBaseEffectiveScheduleTime: Int32?
@@ -9536,12 +9520,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                 ghostBaseEffectiveScheduleTime =
                     Int32(Date().timeIntervalSince1970) + 12
 
-                UserDefaults.standard.set(
-                    UserDefaults.standard.integer(
-                        forKey: "jerkgram.V10S.InlineScheduledIntercept.Count"
-                    ) + 1,
-                    forKey: "jerkgram.V10S.InlineScheduledIntercept.Count"
-                )
+
             } else {
                 ghostBaseEffectiveScheduleTime = nil
             }
@@ -9685,7 +9664,6 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
         }
     }
 
-    // MARK: Jerkgram v1.2E BUILD116_CHAT_NUMERIC_MENTION1
     private func jerkgramNumericMentionPeerId(_ source: String) -> Int64? {
         var value = source.trimmingCharacters(in: .whitespacesAndNewlines)
 

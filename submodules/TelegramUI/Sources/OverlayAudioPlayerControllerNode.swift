@@ -53,10 +53,6 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
     private let collapseNode: HighlightableButtonNode
     private let headerButtons = ComponentView<Empty>()
     private let title = ComponentView<Empty>()
-
-    // MARK: GhostBase v1.1R MUSIC_HEADER_GLASS2
-    private var ghostBaseHeaderGlassView: UIVisualEffectView?
-    private var ghostBaseHeaderGlassTintView: UIView?
     
     private var floatingHeaderOffset: CGFloat?
     private var historyContentOffset: CGFloat = 0.0
@@ -269,7 +265,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         }, automaticMediaDownloadSettings: MediaAutoDownloadSettings.defaultSettings, pollActionState: ChatInterfacePollActionState(), stickerSettings: ChatInterfaceStickerSettings(), presentationContext: ChatPresentationContext(context: context, backgroundNode: nil))
         
         self.dimNode = ASDisplayNode()
-        self.dimNode.backgroundColor = UIColor(white: 0.0, alpha: 0.5)
+        self.dimNode.backgroundColor = UIColor(white: 0.0, alpha: 0.18)
         
         self.containerContainingNode = ASDisplayNode()
         self.containerContainingNode.clipsToBounds = true
@@ -284,16 +280,16 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         
         self.historyBackgroundContentNode = ASDisplayNode()
         self.historyBackgroundContentNode.isLayerBacked = true
-        self.historyBackgroundContentNode.backgroundColor = self.presentationData.theme.list.itemModalBlocksBackgroundColor
+        self.historyBackgroundContentNode.backgroundColor = self.presentationData.theme.list.itemModalBlocksBackgroundColor.withAlphaComponent(0.94)
         
         self.historyBackgroundNode.addSubnode(self.historyBackgroundContentNode)
         
         self.historyFrameNode = SparseNode()
         self.historyFrameLeftOverlayNode = ASDisplayNode()
-        self.historyFrameLeftOverlayNode.backgroundColor = self.presentationData.theme.list.modalBlocksBackgroundColor
+        self.historyFrameLeftOverlayNode.backgroundColor = self.presentationData.theme.list.modalBlocksBackgroundColor.withAlphaComponent(0.94)
         
         self.historyFrameRightOverlayNode = ASDisplayNode()
-        self.historyFrameRightOverlayNode.backgroundColor = self.presentationData.theme.list.modalBlocksBackgroundColor
+        self.historyFrameRightOverlayNode.backgroundColor = self.presentationData.theme.list.modalBlocksBackgroundColor.withAlphaComponent(0.94)
         
         self.historyFrameTopOverlayClipNode = ASDisplayNode()
         self.historyFrameTopOverlayClipNode.clipsToBounds = true
@@ -301,7 +297,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         self.historyFrameTopOverlayNode = ASDisplayNode()
         self.historyFrameTopOverlayNode.cornerRadius = 38.0
         self.historyFrameTopOverlayNode.clipsToBounds = true
-        self.historyFrameTopOverlayNode.backgroundColor = self.presentationData.theme.list.modalBlocksBackgroundColor
+        self.historyFrameTopOverlayNode.backgroundColor = self.presentationData.theme.list.modalBlocksBackgroundColor.withAlphaComponent(0.94)
         self.historyFrameTopOverlayNode.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         
         self.historyFrameTopMaskNode = ASImageNode()
@@ -600,7 +596,6 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
             return false
         }
         self.view.addGestureRecognizer(panRecognizer)
-        self.updateGhostBaseMusicSurfaces()
     }
     
     private func setupReordering() {
@@ -655,167 +650,18 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
     }
 
     
-    // MARK: GhostBase v1.1P MUSIC_REAL_PROFILE_GLASS1
-    private var isGhostBaseProfileMusicActive: Bool {
-        guard
-            GhostBaseProfileBlurSettings
-                .loadEnabled() != nil
-        else {
-            return false
-        }
-
-        if
-            let playlistLocation =
-                self.playlistLocation
-                as? PeerMessagesPlaylistLocation,
-            case .savedMusic = playlistLocation
-        {
-            return true
-        }
-
-        return false
-    }
-
-    private func updateGhostBaseMusicSurfaces() {
-        guard self.isGhostBaseProfileMusicActive else {
-            self.dimNode.backgroundColor =
-                UIColor(
-                    white: 0.0,
-                    alpha: 0.5
-                )
-
-            self.historyBackgroundContentNode.backgroundColor =
-                self.hasAnyHistoryMessages == true
-                ? self.presentationData
-                    .theme
-                    .list
-                    .itemModalBlocksBackgroundColor
-                : self.presentationData
-                    .theme
-                    .list
-                    .modalPlainBackgroundColor
-
-            self.historyFrameLeftOverlayNode.backgroundColor =
-                self.hasAnyHistoryMessages == true
-                ? self.presentationData
-                    .theme
-                    .list
-                    .modalBlocksBackgroundColor
-                : self.presentationData
-                    .theme
-                    .list
-                    .modalPlainBackgroundColor
-
-            self.historyFrameRightOverlayNode.backgroundColor =
-                self.hasAnyHistoryMessages == true
-                ? self.presentationData
-                    .theme
-                    .list
-                    .modalBlocksBackgroundColor
-                : self.presentationData
-                    .theme
-                    .list
-                    .modalPlainBackgroundColor
-
-            self.historyFrameTopOverlayNode.backgroundColor =
-                self.hasAnyHistoryMessages == true
-                ? self.presentationData
-                    .theme
-                    .list
-                    .modalBlocksBackgroundColor
-                : self.presentationData
-                    .theme
-                    .list
-                    .modalPlainBackgroundColor
-
-            self.historyFrameTopMaskNode.alpha = 1.0
-
-            self.controlsNode.hasPlainBackground =
-                !self.historyNode.hasAnyMessages
-
-            self.controlsNode
-                .ghostBaseGlassBackgroundEnabled = false
-
-            self.ghostBaseHeaderGlassView?.isHidden = true
-            self.ghostBaseHeaderGlassView?.effect = nil
-            self.ghostBaseHeaderGlassView?
-                .layer
-                .borderWidth = 0.0
-            self.ghostBaseHeaderGlassView?
-                .layer
-                .borderColor = nil
-            self.ghostBaseHeaderGlassTintView?
-                .backgroundColor = .clear
-
-            return
-        }
-
-        // MARK: GhostBase v1.1U BUILD106_MUSIC_MOVING_SHEET1
-        let isDark =
-            self.presentationData
-                .theme
-                .overallDarkAppearance
-
-        let sheetColor =
-            self.presentationData
-                .theme
-                .list
-                .itemBlocksBackgroundColor
-                .withAlphaComponent(
-                    isDark
-                    ? 0.34
-                    : 0.42
-                )
-
-        self.dimNode.backgroundColor =
-            UIColor(
-                white: 0.0,
-                alpha: 0.055
-            )
-
-        self.historyBackgroundContentNode
-            .backgroundColor = sheetColor
-
-        self.historyFrameLeftOverlayNode
-            .backgroundColor = sheetColor
-
-        self.historyFrameRightOverlayNode
-            .backgroundColor = sheetColor
-
-        self.historyFrameTopOverlayNode
-            .backgroundColor = sheetColor
-
-        self.historyFrameTopMaskNode.alpha = 0.0
-
-        self.controlsNode.hasPlainBackground = false
-        self.controlsNode
-            .ghostBaseGlassBackgroundEnabled = true
-
-        self.ghostBaseHeaderGlassView?.isHidden = true
-        self.ghostBaseHeaderGlassView?.effect = nil
-        self.ghostBaseHeaderGlassView?
-            .layer
-            .borderWidth = 0.0
-        self.ghostBaseHeaderGlassView?
-            .layer
-            .borderColor = nil
-        self.ghostBaseHeaderGlassTintView?
-            .backgroundColor = .clear
-    }
-
     func updatePresentationData(_ presentationData: PresentationData) {
         self.presentationData = presentationData
         
-        self.historyBackgroundContentNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.itemModalBlocksBackgroundColor : self.presentationData.theme.list.modalPlainBackgroundColor
-        self.historyFrameLeftOverlayNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.modalBlocksBackgroundColor : self.presentationData.theme.list.modalPlainBackgroundColor
-        self.historyFrameRightOverlayNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.modalBlocksBackgroundColor : self.presentationData.theme.list.modalPlainBackgroundColor
-        self.historyFrameTopOverlayNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.modalBlocksBackgroundColor : self.presentationData.theme.list.modalPlainBackgroundColor
+        self.historyBackgroundContentNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.itemModalBlocksBackgroundColor.withAlphaComponent(0.94) : self.presentationData.theme.list.modalPlainBackgroundColor.withAlphaComponent(0.94)
+        self.historyFrameLeftOverlayNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.modalBlocksBackgroundColor.withAlphaComponent(0.94) : self.presentationData.theme.list.modalPlainBackgroundColor.withAlphaComponent(0.94)
+        self.historyFrameRightOverlayNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.modalBlocksBackgroundColor.withAlphaComponent(0.94) : self.presentationData.theme.list.modalPlainBackgroundColor.withAlphaComponent(0.94)
+        self.historyFrameTopOverlayNode.backgroundColor = self.hasAnyHistoryMessages == true ? self.presentationData.theme.list.modalBlocksBackgroundColor.withAlphaComponent(0.94) : self.presentationData.theme.list.modalPlainBackgroundColor.withAlphaComponent(0.94)
         self.historyFrameTopMaskNode.image = generateCornersImage(theme: self.presentationData.theme)
         
         self.collapseNode.setImage(generateCollapseIcon(theme: self.presentationData.theme), for: [])
         
         self.controlsNode.updatePresentationData(self.presentationData)
-        self.updateGhostBaseMusicSurfaces()
     }
     
     private func dismissAllTooltips() {
@@ -1015,7 +861,6 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         self.validLayout = layout
                 
         transition.updateFrame(node: self.dimNode, frame: CGRect(origin: CGPoint(), size: layout.size))
-        self.updateGhostBaseMusicSurfaces()
         transition.updateFrameAsPositionAndBounds(node: self.containerContainingNode, frame: CGRect(origin: CGPoint(), size: layout.size))
         transition.updateFrame(node: self.contentNode, frame: CGRect(origin: CGPoint(), size: layout.size))
         
@@ -1085,19 +930,6 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
             }
             
             let headerInset: CGFloat = 16.0
-            if let headerGlassView = self.ghostBaseHeaderGlassView {
-                let headerGlassFrame = CGRect(
-                    x: 12.0,
-                    y: 8.0,
-                    width: max(1.0, layout.size.width - 24.0),
-                    height: 62.0
-                )
-                headerGlassView.frame = headerGlassFrame
-                self.ghostBaseHeaderGlassTintView?.frame = CGRect(
-                    origin: .zero,
-                    size: headerGlassFrame.size
-                )
-            }
             let headerButtonsSize = self.headerButtons.update(
                 transition: ComponentTransition(transition),
                 component: AnyComponent(
@@ -1806,7 +1638,7 @@ private func generateCollapseIcon(theme: PresentationTheme) -> UIImage? {
 private func generateCornersImage(theme: PresentationTheme) -> UIImage? {
     return generateImage(CGSize(width: 56.0, height: 56.0), rotatedContext: { (size, context) in
         let bounds = CGRect(origin: CGPoint(), size: size)
-        context.setFillColor(theme.list.modalBlocksBackgroundColor.cgColor)
+        context.setFillColor(theme.list.modalBlocksBackgroundColor.withAlphaComponent(0.94).cgColor)
         context.fill(bounds)
         
         context.setBlendMode(.clear)

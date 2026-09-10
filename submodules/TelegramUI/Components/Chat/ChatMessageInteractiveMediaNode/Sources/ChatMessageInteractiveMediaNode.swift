@@ -922,9 +922,8 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
 
             var nativeSize: CGSize
 
-            // MARK: GhostBase v0.8H.1 one-time visual bypass
             var isSecretMedia = message.containsSecretMedia
-            let ghostBaseOneTimeVisualBypass = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenshots") as? Bool) ?? false) || ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenRecording") as? Bool) ?? false) || ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false))) && message.minAutoremoveOrClearTimeout != nil && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
+            let ghostBaseOneTimeVisualBypass = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenshots") as? Bool) ?? false) || ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenRecording") as? Bool) ?? false) || ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false))) && message.minAutoremoveOrClearTimeout != nil && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
             if ghostBaseOneTimeVisualBypass {
                 isSecretMedia = false
             }
@@ -2020,7 +2019,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                             autoFetchFullSizeThumbnail: true,
                                             continuePlayingWithoutSoundOnLostAudioSession: isInlinePlayableVideo,
                                             placeholderColor: emptyColor,
-                                            captureProtected: isExtendedMedia || (!(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (associatedData.isCopyProtectionEnabled || message.isCopyProtected())),
+                                            captureProtected: isExtendedMedia || (!(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (associatedData.isCopyProtectionEnabled || message.isCopyProtected())),
                                             storeAfterDownload: { [weak context] in
                                                 guard let context, let peerId else {
                                                     return
@@ -2322,7 +2321,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                             }
 
                             if let updateImageSignal = updateImageSignal {
-                                strongSelf.imageNode.captureProtected = isExtendedMedia || (!(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (associatedData.isCopyProtectionEnabled || message.isCopyProtected()))
+                                strongSelf.imageNode.captureProtected = isExtendedMedia || (!(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (associatedData.isCopyProtectionEnabled || message.isCopyProtected()))
                                 strongSelf.imageNode.setSignal(updateImageSignal(synchronousLoads, false), attemptSynchronously: synchronousLoads)
 
                                 var imageDimensions: CGSize?
@@ -2971,8 +2970,8 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
 
             if let remainingTime {
                 let jerkgramOutgoingTimedMediaViewed = (
-                    ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
-                    && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false)
+                    ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
+                    && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false)
                     && message.id.peerId.namespace != Namespaces.Peer.SecretChat
                     && (context.map { !message.effectivelyIncoming($0.account.peerId) } ?? false)
                     && message.attributes.contains(where: { attribute in
@@ -2983,7 +2982,6 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     })
                 )
                 if remainingTime == viewOnceTimeout {
-                    // MARK: Jerkgram v1.2M BUILD124_OUTGOING_ONETIME_VIEWED_MEDIA1
                     // Preserve Telegram's one-time badge and add a compact viewed state only
                     // when the real consumable-content state says the recipient opened it.
                     let jerkgramOneTimeBadgeText = jerkgramOutgoingTimedMediaViewed ? "1 ✓" : "1"

@@ -9,7 +9,6 @@ import TelegramPresentationData
 import AccountContext
 import PeerInfoPaneNode
 
-// MARK: GhostBase v1.1G PROFILEHISTORYBOUNDED1
 private struct GhostBaseObservedProfileSnapshotV11G: Codable, Equatable {
     let observedAt: Int64
     let displayName: String
@@ -223,7 +222,6 @@ private enum GhostBaseProfileReportStoreV11G {
                 return value
             }
 
-            // MARK: Jerkgram v1.2G BUILD118_PROFILE_REPORT_SEMANTICS1
             func emojiStatusValue(_ raw: String) -> String {
                 if raw == "nil" { return "—" }
                 if let marker = raw.range(of: "fileId: ") {
@@ -385,7 +383,6 @@ private enum GhostBaseProfileReportStoreV11G {
             )
     }
 
-    // MARK: GhostBase v1.1I HISTORYCOMPILEFIX1
     static func personalChannelReport(
         accountPeerId: Int64,
         peerId: Int64
@@ -695,7 +692,6 @@ func ghostBaseRecordPersonalChannelObservationV11G(
     )
 }
 
-// MARK: GhostBase v1.1R HISTORY_CARDS1
 private final class GhostBaseProfileReportCardNode: ASDisplayNode {
     private let textNode = ImmediateTextNode()
 
@@ -713,7 +709,6 @@ private final class GhostBaseProfileReportCardNode: ASDisplayNode {
         presentationData: PresentationData,
         width: CGFloat
     ) -> CGSize {
-        // MARK: JerkGram v1.1Y BUILD110_REPORT_CONTRAST1
         let isDark = presentationData.theme.overallDarkAppearance
         self.backgroundColor = UIColor(
             white: isDark ? 0.0 : 1.0,
@@ -751,7 +746,6 @@ private final class GhostBaseProfileReportCardNode: ASDisplayNode {
     }
 }
 
-// MARK: GhostBase v1.1G NATIVEPANES1
 final class GhostBaseProfileReportPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScrollViewDelegate {
     enum Kind {
         case profileHistory
@@ -791,7 +785,6 @@ final class GhostBaseProfileReportPaneNode: ASDisplayNode, PeerInfoPaneNode, UIS
     var tabBarOffsetUpdated: ((ContainedViewLayoutTransition) -> Void)?
 
     var tabBarOffset: CGFloat {
-        // MARK: GhostBase v1.1O HISTORYSTATICHEADER1
         //
         // Text reports scroll only inside their clipped viewport.
         // They never drive PeerInfo header/tab collapsing.
@@ -895,7 +888,6 @@ final class GhostBaseProfileReportPaneNode: ASDisplayNode, PeerInfoPaneNode, UIS
         }
     }
 
-    // MARK: GhostBase v1.1M HISTORYPRESENTATION1
     private static func prettyGiftHistoryReport(
         _ raw: String
     ) -> String {
@@ -1240,7 +1232,6 @@ final class GhostBaseProfileReportPaneNode: ASDisplayNode, PeerInfoPaneNode, UIS
         synchronous: Bool,
         transition: ContainedViewLayoutTransition
     ) {
-        // MARK: GhostBase v1.1N HISTORYVIEWPORT_FINAL1
         //
         // The report scroll view no longer exists underneath
         // the profile header/tab bar. Offset clamping alone
@@ -1284,7 +1275,6 @@ final class GhostBaseProfileReportPaneNode: ASDisplayNode, PeerInfoPaneNode, UIS
                 )
         )
 
-        // MARK: GhostBase v1.1Q HISTORY_CLIP_HARDENING1
         self.clipsToBounds =
             true
 

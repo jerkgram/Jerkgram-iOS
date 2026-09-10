@@ -808,7 +808,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     node.imageNode = nil
                 }
                 if let message = arguments.message {
-                    node.imageNode?.captureProtected = !(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (arguments.associatedData.isCopyProtectionEnabled || message.isCopyProtected())
+                    node.imageNode?.captureProtected = !(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (arguments.associatedData.isCopyProtectionEnabled || message.isCopyProtected())
                 }
 
                 titleNode.frame = CGRect(origin: CGPoint(x: leftInset - textInsets.left - 2.0, y: spacing - textInsets.top + 1.0), size: titleLayout.size)

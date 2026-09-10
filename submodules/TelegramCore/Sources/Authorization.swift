@@ -1322,8 +1322,6 @@ public func authorizeWithPasskey(accountManager: AccountManager<TelegramAccountM
 }
 
 
-// MARK: GhostBase v1.0Y Bot Authorization Core
-// MARK: GhostBase v1.0ZC Persistent Bot Inbox
 
 public enum GhostBaseBotAuthorizationError {
     case alreadyAdded
@@ -1440,8 +1438,6 @@ private func ghostBaseImportBotAuthorization(
     }
 }
 
-// MARK: GhostBase v1.0ZE BOTSAFE1 current server state
-// MARK: GhostBase v1.1A BOTREPAIR1 live server state
 private func ghostBaseBotInitialState(
     account: UnauthorizedAccount
 ) -> Signal<AuthorizedAccountState.State?, NoError> {
@@ -1473,7 +1469,6 @@ private func ghostBaseBotInitialState(
     }
 }
 
-// MARK: GhostBase v1.0ZH BOTDEDUPE1 token peer id
 private func ghostBaseBotPeerIdFromToken(
     _ botAuthToken: String
 ) -> PeerId? {
@@ -1509,7 +1504,6 @@ public func ghostBaseAuthorizeBot(
     apiHash: String,
     botAuthToken: String
 ) -> Signal<Never, GhostBaseBotAuthorizationError> {
-    // MARK: GhostBase v1.0ZH BOTDEDUPE1 authorization gate
     if ghostBaseBotAlreadyAdded(botAuthToken) {
         Logger.shared.log(
             "jerkgram.BotDedupe1",

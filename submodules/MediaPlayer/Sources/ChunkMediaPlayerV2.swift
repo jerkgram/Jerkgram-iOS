@@ -172,7 +172,6 @@ public final class ChunkMediaPlayerV2: ChunkMediaPlayer {
     
     private let renderSynchronizer: AVSampleBufferRenderSynchronizer
     private var videoRenderer: AVSampleBufferDisplayLayer
-    // MARK: GhostBase v1.1P CHUNK_SECONDARY_RENDER_OUTPUT1
     private var secondaryVideoRenderers: [ObjectIdentifier: AVSampleBufferDisplayLayer] = [:]
     private var audioRenderer: AVSampleBufferAudioRenderer?
     
@@ -359,8 +358,6 @@ public final class ChunkMediaPlayerV2: ChunkMediaPlayer {
         self.updateInternalState()
     }
 
-    // MARK: GhostBase v1.1S SECONDARY_VIDEO_STABLE1
-    // Build103 recovery was too aggressive: preserve the V11Q timeline
     // and let normal seek/reset paths flush renderers only when required.
     private func updateInternalState() {
         if self.isSoundEnabled && self.hasSound {

@@ -107,7 +107,6 @@ public func stringForMessageTimestampStatus(
         timestamp = orignalDate
     }
     
-    // MARK: GhostBase v1.0U message seconds
     let ghostBaseMessageSeconds = (
         UserDefaults.standard.object(
             forKey: "jerkgram.Appearance.MessageSeconds"

@@ -15,13 +15,11 @@ public enum UniversalVideoContentVideoQuality: Equatable {
     case quality(Int)
 }
 
-// MARK: GhostBase v1.1P UNIVERSAL_SECONDARY_OUTPUT1
 public protocol UniversalVideoSecondaryOutputContentNode: AnyObject {
     func addSecondaryVideoLayer(_ layer: AVSampleBufferDisplayLayer)
     func removeSecondaryVideoLayer(_ layer: AVSampleBufferDisplayLayer)
 }
 
-// MARK: GhostBase v1.1Q SECONDARY_OUTPUT_REGISTRY1
 public enum GhostBaseUniversalVideoSecondaryOutputRegistry {
     private final class WeakLayer {
         weak var value: AVSampleBufferDisplayLayer?

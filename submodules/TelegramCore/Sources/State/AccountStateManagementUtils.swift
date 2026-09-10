@@ -6,7 +6,6 @@ import TelegramApi
 import MtProtoKit
 import EncryptionProvider
 
-// MARK: GhostBase v1.1H TRANSCRIPTIONACCUMULATOR1
 private func ghostBaseMergeTranscriptionTextV11H(
     previous: String,
     incoming: String
@@ -74,7 +73,6 @@ private func ghostBaseMergeTranscriptionTextV11H(
 }
 
 
-// MARK: GhostBase v1.1G BOUNDEDDIAGNOSTICS1
 private enum GhostBaseRuntimeDiagnosticsV11G {
     private static let queue = DispatchQueue(
         label: "jerkgram.RuntimeDiagnostics.V11G",
@@ -88,32 +86,8 @@ private enum GhostBaseRuntimeDiagnosticsV11G {
     private static var lastFlush: Int64 = 0
 
     static func record(_ event: String) {
-        self.queue.async {
-            let defaults = UserDefaults.standard
-            if !self.didLoad {
-                self.didLoad = true
-                self.lines = defaults.stringArray(forKey: self.key) ?? []
-                if self.lines.count > self.limit {
-                    self.lines.removeFirst(self.lines.count - self.limit)
-                }
-            }
-
-            let timestamp = Int64(Date().timeIntervalSince1970)
-            self.lines.append("\(timestamp) · \(event)")
-            if self.lines.count > self.limit {
-                self.lines.removeFirst(self.lines.count - self.limit)
-            }
-
-            self.eventsSinceFlush += 1
-            let shouldFlush = self.lastFlush == 0
-                || self.eventsSinceFlush >= 20
-                || timestamp - self.lastFlush >= 5
-            if shouldFlush {
-                defaults.set(self.lines, forKey: self.key)
-                self.eventsSinceFlush = 0
-                self.lastFlush = timestamp
-            }
-        }
+        // Release builds keep no persistent probe log on the update path.
+        _ = event
     }
 }
 
@@ -330,7 +304,6 @@ private func associatedStoredStories(_ difference: Api.updates.Difference) -> [S
     return storedStories
 }
 
-// MARK: GhostBase v1.0ZC Bot account helper
 func ghostBaseIsBotAccount(_ accountPeerId: PeerId) -> Bool {
     return UserDefaults.standard.bool(
         forKey: "jerkgram.BotAccount.\(accountPeerId.toInt64())"
@@ -1630,7 +1603,6 @@ private func finalStateWithUpdatesAndServerTime(accountPeerId: PeerId, postbox: 
                 updatedState.mergePeerPresences([PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(updateUserStatusData.userId)): updateUserStatusData.status], explicit: true)
             case let .updateUserName(updateUserNameData):
                 let (userId, usernames) = (updateUserNameData.userId, updateUserNameData.usernames)
-                // MARK: GhostBase v1.1T PUBLIC_NAME_SNAPSHOT1
                 // Raw updateUserName carries the self-set public profile name,
                 // separate from a local contact alias.
                 ghostBaseStorePublicPeerName(
@@ -4572,7 +4544,6 @@ func replayFinalState(
                     }
                 }
             case let .DeleteMessagesWithGlobalIds(ids):
-                // MARK: GhostBase v1.1G DELETEDMESSAGES1 bounded global gate
                 let ghostBaseMessageIds = transaction.messageIdsForGlobalIds(ids)
                 let ghostBaseSaveDeleted = ghostBaseMessageIds.allSatisfy { id in
                     JerkgramRetentionRuntime.shouldCapture(
@@ -4586,7 +4557,6 @@ func replayFinalState(
                 if ghostBaseSaveDeleted {
                     for id in ghostBaseMessageIds {
                         transaction.updateMessage(id, update: { currentMessage in
-                            // MARK: GhostBase v1.1T DELETED_MEDIA_PRESERVE_GLOBAL1
                             ghostBaseScheduleDeletedMediaPreservation(
                                 mediaBox: mediaBox,
                                 message: currentMessage
@@ -4630,7 +4600,6 @@ func replayFinalState(
                                 editHistoryDates: [],
                                 isDeleted: false,
                                 deletedAt: 0,
-                                // MARK: Jerkgram v1.2L BUILD123_DELETED_ENTITY_SNAPSHOT1
                                 originalEntities: currentMessage.textEntitiesAttribute?.entities ?? []
                             )
                             updatedAttributes.removeAll(
@@ -4690,7 +4659,6 @@ func replayFinalState(
                 }
                 deletedMessageIds.append(contentsOf: ids.map { .global($0) })
             case let .DeleteMessages(ids):
-                // MARK: GhostBase v1.1G DELETEDMESSAGES1 bounded local gate
                 let ghostBaseSaveDeleted = ids.allSatisfy { id in
                     JerkgramRetentionRuntime.shouldCapture(
                         accountPeerId: accountPeerId.toInt64(),
@@ -4705,7 +4673,6 @@ func replayFinalState(
                         guard let currentMessage = transaction.getMessage(id) else {
                             continue
                         }
-                        // MARK: GhostBase v1.1T DELETED_MEDIA_PRESERVE_LOCAL1
                         ghostBaseScheduleDeletedMediaPreservation(
                             mediaBox: mediaBox,
                             message: currentMessage
@@ -4871,7 +4838,6 @@ func replayFinalState(
                         }
                     }
 
-                    // MARK: GhostBase v1.1G EDITHISTORY1 bounded save gate
                     let ghostBaseSaveEditHistory = JerkgramRetentionRuntime.shouldCapture(
                         accountPeerId: accountPeerId.toInt64(),
                         chatPeerId: id.peerId.toInt64(),
@@ -4888,13 +4854,11 @@ func replayFinalState(
                         updatedAttributes.append(previousAttribute)
                     }
 
-                    // MARK: Jerkgram v1.2K BUILD122_EDIT_CAPTION_HISTORY1
                     // Telegram captions and ordinary message bodies both live in message.text.
                     // Keep empty -> caption and caption -> empty transitions as real versions.
                     let previousEntities = previousMessage.textEntitiesAttribute?.entities ?? []
                     let updatedEntities = (message.attributes.first(where: { $0 is TextEntitiesMessageAttribute }) as? TextEntitiesMessageAttribute)?.entities ?? []
                     let previousInlineStickerFiles = (previousMessage.attributes.first(where: { $0 is EmbeddedMediaStickersMessageAttribute }) as? EmbeddedMediaStickersMessageAttribute)?.files ?? []
-                    // MARK: Jerkgram v1.2L BUILD123_ENTITY_HISTORY_CAPTURE1
                     // Capture text transitions and entity-only edits.
                     if ghostBaseSaveEditHistory,
                        previousMessage.text != message.text || previousEntities != updatedEntities {
@@ -4911,7 +4875,6 @@ func replayFinalState(
                                 previousText: previousMessage.text
                             )
                         )
-                        // MARK: Jerkgram v1.2M BUILD124_EDIT_EVENT_DATE1
                         // A history entry describes an edit event: `previousMessage`
                         // is what existed before the edit, while the date shown above
                         // that saved version must be the date on which it was changed.
@@ -4931,7 +4894,6 @@ func replayFinalState(
                                 editHistoryDates: [],
                                 isDeleted: false,
                                 deletedAt: 0,
-                                // MARK: Jerkgram v1.2L BUILD123_DELETED_ENTITY_SNAPSHOT1
                                 originalEntities: previousEntities
                             )
                         }

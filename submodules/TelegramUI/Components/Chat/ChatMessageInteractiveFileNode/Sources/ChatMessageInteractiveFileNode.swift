@@ -352,7 +352,6 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
             return
         }
         
-        // MARK: GhostBase v1.1A TRANSCRIPTION1 request without local Premium gate
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
 
         var shouldBeginTranscription = false
@@ -379,7 +378,6 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                 self.audioTranscriptionState = .inProgress
                 self.requestUpdateLayout(true)
                 
-                // MARK: GhostBase v1.1B TRANSCRIPTION2 local-first voice
                 if true {
                     let appLocale = presentationData.strings.baseLanguageCode
                     
@@ -605,8 +603,6 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                 var consumableContentIcon: UIImage?
                 for attribute in arguments.message.attributes {
                     if let attribute = attribute as? ConsumableContentMessageAttribute {
-                        // MARK: Jerkgram v1.2P BUILD127_NATIVE_ONETIME_VOICE_STATUS1
-                        // Keep Telegram's own consumable-media states. The Build126
                         // renderer drew an additional dot/check image for consumed
                         // outgoing voice messages, which conflicted with the message
                         // read receipt and was not a native one-time-media status.
@@ -733,7 +729,6 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                 var updatedAudioTranscriptionState: AudioTranscriptionButtonComponent.TranscriptionState?
                 
                 var displayTranscribe = false
-                // MARK: GhostBase v1.1A TRANSCRIPTION1 voice unlock
                 if !Namespaces.Message.allNonRegular.contains(arguments.message.id.namespace) && arguments.message.id.peerId.namespace != Namespaces.Peer.SecretChat && !isViewOnceMessage && !arguments.presentationData.isPreview {
                     displayTranscribe = true
                 }

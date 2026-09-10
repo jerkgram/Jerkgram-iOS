@@ -129,22 +129,8 @@ import ComponentFlow
 import ComponentDisplayAdapters
 
 
-// MARK: GhostBase v1.0N SourcePeer UI Probe
 private func ghostBaseV10NSaveSourcePeerId(_ peerId: PeerId, source: String) {
-    let prefix = "jerkgram.V10F.Raw."
-    let ghostBaseSourcePeerRaw = peerId.toInt64()
-    UserDefaults.standard.set(ghostBaseSourcePeerRaw, forKey: prefix + "NLastSourcePeerIdRaw")
-    UserDefaults.standard.set("\(peerId)", forKey: prefix + "NLastSourcePeerId")
-    UserDefaults.standard.set(source, forKey: prefix + "NLastSourcePeerSource")
-    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: prefix + "NLastSourcePeerSavedAt")
-
-    // MARK: GhostBase v1.0O persistent SourcePeer candidate
-    UserDefaults.standard.set(ghostBaseSourcePeerRaw, forKey: "jerkgram.V10O.Persistent.SourcePeerIdRaw")
-    UserDefaults.standard.set("\(peerId)", forKey: "jerkgram.V10O.Persistent.SourcePeerId")
-    UserDefaults.standard.set(source, forKey: "jerkgram.V10O.Persistent.SourcePeerSource")
-    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "jerkgram.V10O.Persistent.SourcePeerSavedAt")
-    let key = prefix + "nSourcePeerSaved.Count"
-    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + 1, forKey: key)
+    // Retired source-peer diagnostics; no persistence on chat entry.
 }
 
 
@@ -5056,6 +5042,45 @@ extension ChatControllerImpl {
         self.displayNodeDidLoad()
     }
     
+
+private func jerkgramBuild135VisibleUnreadCount(
+    account: Account,
+    peerId: PeerId?,
+    stockCount: Int
+) -> Signal<Int, NoError> {
+    guard stockCount > 0, let peerId else {
+        return .single(stockCount)
+    }
+    return account.postbox.transaction { transaction -> Int in
+        guard let chatPeer = transaction.getPeer(peerId),
+              JerkgramBlockedReactionPolicy.isGroupChat(chatPeer),
+              JerkgramBlockedReactionPolicy.hideBlockedMessages(accountPeerId: account.peerId) else {
+            return stockCount
+        }
+        let requestedCount = min(512, max(64, stockCount + 32))
+        let historyView = transaction.getMessagesHistoryViewState(
+            input: .single(peerId: peerId, threadId: nil),
+            ignoreMessagesInTimestampRange: nil,
+            ignoreMessageIds: Set(),
+            count: requestedCount,
+            clipHoles: true,
+            anchor: .upperBound,
+            namespaces: .just(Set([Namespaces.Message.Cloud]))
+        )
+        var hiddenUnreadCount = 0
+        for entry in historyView.entries where !entry.isRead && entry.message.flags.contains(.Incoming) {
+            if JerkgramBlockedReactionPolicy.isMessageHidden(
+                accountPeerId: account.peerId,
+                chatPeer: chatPeer,
+                message: entry.message
+            ) {
+                hiddenUnreadCount += 1
+            }
+        }
+        return max(0, stockCount - hiddenUnreadCount)
+    }
+}
+
     func setupChatHistoryNode(historyNode: ChatHistoryListNodeImpl) {
         self.historyStateDisposable?.dispose()
         self.historyStateDisposable = historyNode.historyState.get().startStrict(next: { [weak self] state in
@@ -5077,7 +5102,20 @@ extension ChatControllerImpl {
             let peerId = self.chatLocation.peerId
             if let subject = self.subject, case .scheduledMessages = subject {
             } else {
-                let throttledUnreadCountSignal = self.context.chatLocationUnreadCount(for: self.chatLocation, contextHolder: self.chatLocationContextHolder)
+                let throttledUnreadCountSignal = combineLatest(
+                    self.context.chatLocationUnreadCount(for: self.chatLocation, contextHolder: self.chatLocationContextHolder),
+                    JerkgramBlockedReactionPolicy.presentationUpdates
+                )
+                |> mapToSignal { [weak self] count, _ -> Signal<Int, NoError> in
+                    guard let self else {
+                        return .single(count)
+                    }
+                    return jerkgramBuild135VisibleUnreadCount(
+                        account: self.context.account,
+                        peerId: self.chatLocation.peerId,
+                        stockCount: count
+                    )
+                }
                 |> mapToThrottled { value -> Signal<Int, NoError> in
                     return .single(value) |> then(.complete() |> delay(0.2, queue: Queue.mainQueue()))
                 }

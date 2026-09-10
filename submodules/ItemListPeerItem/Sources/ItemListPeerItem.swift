@@ -1868,9 +1868,7 @@ public class ItemListPeerItemNode: ItemListRevealOptionsItemNode, ItemListItemNo
                         customAvatarIconView.removeFromSuperview()
                     }
                     
-                    // MARK: GhostBase v1.1U BUILD106_COMMON_GROUPS_OWNER1
                     // displayBackground is intentionally false for the
-                    // GhostBase Common Groups rows. Do not let this later
                     // decorations pass re-enable their opaque stock cell.
                     strongSelf.backgroundNode.isHidden =
                         !item.displayDecorations || !item.displayBackground

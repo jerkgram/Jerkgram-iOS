@@ -151,7 +151,6 @@ func deleteMessagesInteractively(transaction: Transaction, stateManager: Account
             }
         }
     }
-    // MARK: GhostBase v0.9E self-delete two-stage
     var ghostBasePhysicalDeleteMessageIds: [MessageAndThreadId] = []
     for messageAndThreadId in messageIds {
         let messageId = messageAndThreadId.messageId
@@ -159,7 +158,6 @@ func deleteMessagesInteractively(transaction: Transaction, stateManager: Account
             let isGhostBaseDeleted = ((message.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false
             let isOwnMessage = (message.author?.id == accountPeerId) || !message.flags.contains(.Incoming)
             if isOwnMessage && !isGhostBaseDeleted {
-                // MARK: GhostBase v1.1T DELETED_MEDIA_PRESERVE_SELF1
                 ghostBaseScheduleDeletedMediaPreservation(
                     mediaBox: postbox.mediaBox,
                     message: message
@@ -169,7 +167,6 @@ func deleteMessagesInteractively(transaction: Transaction, stateManager: Account
                     if let existingIndex = updatedAttributes.firstIndex(where: { $0 is GhostBaseMessageAttribute }), let existingAttribute = updatedAttributes[existingIndex] as? GhostBaseMessageAttribute {
                         updatedAttributes[existingIndex] = existingAttribute.withUpdatedDeleted(isDeleted: true, deletedAt: currentMessage.timestamp)
                     } else {
-                        // MARK: Jerkgram v1.2L BUILD123_DELETED_ENTITY_SNAPSHOT1
                         updatedAttributes.append(GhostBaseMessageAttribute(
                             originalText: currentMessage.text,
                             editHistoryTexts: [],
@@ -190,7 +187,6 @@ func deleteMessagesInteractively(transaction: Transaction, stateManager: Account
     }
 
     if !ghostBasePhysicalDeleteMessageIds.isEmpty {
-        // MARK: GhostBase v1.1T DELETED_MEDIA_FINAL_DELETE1
         let ghostBasePhysicalIds = ghostBasePhysicalDeleteMessageIds.map(\.messageId)
         ghostBaseRemoveDeletedMediaCacheEntries(
             mediaBox: postbox.mediaBox,

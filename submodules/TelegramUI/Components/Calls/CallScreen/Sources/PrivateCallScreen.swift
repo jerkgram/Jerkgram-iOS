@@ -250,7 +250,6 @@ public final class PrivateCallScreen: OverlayMaskContainerView, AVPictureInPictu
     public var restoreUIForPictureInPicture: ((@escaping (Bool) -> Void) -> Void)?
     public var conferenceAddParticipant: (() -> Void)?
     
-    // MARK: GhostBase v1.1L CALLBACKDROP1
     public var ghostBaseBackdropEnabled:
         Bool = false
 
@@ -781,7 +780,6 @@ public final class PrivateCallScreen: OverlayMaskContainerView, AVPictureInPictu
             ? 0.0
             : 1.0
 
-        // MARK: GhostBase v1.1M CALLCONTROLS1
         //
         // blurredLayer is also the material
         // revealed by Telegram's native

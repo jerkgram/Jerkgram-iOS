@@ -945,14 +945,13 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, ASScroll
             canEdit = false
         }
 
-        let ghostBaseProtectedEnabled = ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
-        let ghostBaseProtectedGalleryShare = ghostBaseProtectedEnabled && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.GalleryShare") as? Bool) ?? true)
+        let ghostBaseProtectedEnabled = ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
+        let ghostBaseProtectedGalleryShare = ghostBaseProtectedEnabled && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.GalleryShare") as? Bool) ?? true)
 
         if message.paidContent != nil {
             canShare = false
             canEdit = false
         } else if message.isCopyProtected() || peerIsCopyProtected {
-            // MARK: GhostBase v0.8C Protected Content gallery share toggle
             if !ghostBaseProtectedGalleryShare {
                 canShare = false
             }

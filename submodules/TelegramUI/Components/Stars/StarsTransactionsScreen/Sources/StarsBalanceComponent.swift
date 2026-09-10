@@ -12,7 +12,6 @@ import BundleIconComponent
 import TelegramStringFormatting
 import TelegramCore
 
-// MARK: GhostBase v0.9C Stars input polish
 private func ghostBaseLocalStarsAmountForDisplay() -> StarsAmount? {
     guard ((UserDefaults.standard.object(forKey: "jerkgram.Stars.LocalBalance.Enabled") as? Bool) ?? false) else {
         return nil

@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_TIME_MACHINE_INDEX1
 public enum JerkgramTimeMachineFilter: String, Codable, CaseIterable {
     case deleted
     case edited

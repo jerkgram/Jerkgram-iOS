@@ -460,7 +460,7 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
         self.translateToLanguage = translateToLanguage
         self.peerIsCopyProtected = peerIsCopyProtected
         self.isSecret = isSecret
-        self.imageNode.captureProtected = message.id.peerId.namespace == Namespaces.Peer.SecretChat || isSecret || message.paidContent != nil || (!(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (message.isCopyProtected() || peerIsCopyProtected))
+        self.imageNode.captureProtected = message.id.peerId.namespace == Namespaces.Peer.SecretChat || isSecret || message.paidContent != nil || (!(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (message.isCopyProtected() || peerIsCopyProtected))
         self.updateFooter(animated: false)
 
         var title: String?
@@ -734,16 +734,14 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                     f(.default)
                 })))
 
-                let ghostBaseProtectedEnabled = ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
-                let ghostBaseProtectedSave = ghostBaseProtectedEnabled && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.GallerySave") as? Bool) ?? true)
-                let ghostBaseProtectedCopy = ghostBaseProtectedEnabled && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.GalleryCopy") as? Bool) ?? true)
+                let ghostBaseProtectedEnabled = ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
+                let ghostBaseProtectedSave = ghostBaseProtectedEnabled && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.GallerySave") as? Bool) ?? true)
+                let ghostBaseProtectedCopy = ghostBaseProtectedEnabled && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.GalleryCopy") as? Bool) ?? true)
                 let ghostBaseProtectedOriginalAllowed = !message.isCopyProtected() && !self.peerIsCopyProtected
 
-                // MARK: GhostBase v0.8I one-time/timed image preview save gate
-                let ghostBaseTimedImageSave = ghostBaseProtectedEnabled && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil
+                let ghostBaseTimedImageSave = ghostBaseProtectedEnabled && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil
 
                 if (!self.isSecret || ghostBaseTimedImageSave) && message.paidContent == nil, let media = self.contextAndMedia?.1, (ghostBaseProtectedSave || ghostBaseProtectedCopy || ghostBaseProtectedOriginalAllowed || ghostBaseTimedImageSave) {
-                    // MARK: GhostBase v0.8C Protected Content image save/copy toggles
                     // Save/Copy are controlled separately; Create Sticker keeps original gate.
                     if ghostBaseProtectedOriginalAllowed {
                     items.append(.action(ContextMenuActionItem(text: self.presentationData.strings.Gallery_CreateSticker, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Sticker"), color: theme.actionSheet.primaryTextColor) }, action: { [weak self] _, f in

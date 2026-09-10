@@ -463,7 +463,6 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                         handleResolvedUrl(.share(url: nil, text: shareText, to: sharePhoneNumber))
                         return
                     }
-                // MARK: Jerkgram v1.2D BUILD115_NUMERIC_OPENMESSAGE1
                 // Android-oriented tg://openmessage?user_id=N is
                 // normalized into the exact Official Telegram iOS
                 // contact-reference path. The downstream @id resolver

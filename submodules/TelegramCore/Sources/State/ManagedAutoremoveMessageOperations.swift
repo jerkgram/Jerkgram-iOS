@@ -90,12 +90,11 @@ func managedAutoremoveMessageOperations(network: Network, postbox: Postbox, isRe
                                 if let forwardInfo = currentMessage.forwardInfo {
                                     storeForwardInfo = StoreMessageForwardInfo(authorId: forwardInfo.author?.id, sourceId: forwardInfo.source?.id, sourceMessageId: forwardInfo.sourceMessageId, date: forwardInfo.date, authorSignature: forwardInfo.authorSignature, psaType: forwardInfo.psaType, flags: forwardInfo.flags)
                                 }
-                                // MARK: Jerkgram v1.2M BUILD124_PERSISTENT_ONETIME_MEDIA1
                                 // Decide before Telegram replaces one-time media with ExpiredContent.
                                 // Secret chats deliberately remain on Telegram's native lifecycle.
                                 let jerkgramKeepOneTimeIdentity = (
-                                    ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
-                                    && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false)
+                                    ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
+                                    && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false)
                                     && currentMessage.id.peerId.namespace != Namespaces.Peer.SecretChat
                                     && currentMessage.minAutoremoveOrClearTimeout == viewOnceTimeout
                                     && currentMessage.attributes.contains(where: { $0 is ConsumableContentMessageAttribute })
@@ -117,7 +116,6 @@ func managedAutoremoveMessageOperations(network: Network, postbox: Postbox, isRe
                                     }
                                 }
                                 var updatedAttributes = currentMessage.attributes
-                                // MARK: Jerkgram v1.2M BUILD124_PERSISTENT_ONETIME_MARKER1
                                 // Preserve the cloud view-once identity for retained media, but disarm the
                                 // timestamp operation. countdownBeginTime == nil does not schedule another pass.
                                 for i in 0 ..< updatedAttributes.count {

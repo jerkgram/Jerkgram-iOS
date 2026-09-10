@@ -359,7 +359,6 @@ public struct PresentationResourcesItemList {
         })
     }
     
-    // MARK: GhostBase v1.1P GLOBAL_GLASS_CORNERS1
     private static let ghostBaseGlassCornerSuppressionKey =
         "jerkgram.PresentationResourcesItemList.SuppressGlassCornerFiller"
 

@@ -215,7 +215,6 @@ public final class UniversalVideoManagerImpl: UniversalVideoManager {
             }
         }
         
-        // MARK: GhostBase v1.1Q SECONDARY_OUTPUT_REATTACH1
         GhostBaseUniversalVideoSecondaryOutputRegistry.attachRegisteredLayers(
             manager: self,
             contentId: holder.content.id,

@@ -468,7 +468,6 @@ final class AuthorizationSequencePhoneEntryControllerNode: ASDisplayNode {
         self.proceedNode.accessibilityIdentifier = "Auth.PhoneEntry.ContinueButton"
 
         self.ghostBaseBotLoginNode = HighlightableButtonNode()
-        // MARK: GhostBase v1.0ZF BOTSAFE2 first-screen button
         self.ghostBaseBotLoginNode.setAttributedTitle(
             NSAttributedString(
                 string: strings.jerkgram.botLoginButton,
@@ -482,7 +481,6 @@ final class AuthorizationSequencePhoneEntryControllerNode: ASDisplayNode {
         self.ghostBaseBotLoginNode.accessibilityTraits = [.button]
         self.ghostBaseBotLoginNode.isHidden = false
 
-        // MARK: GhostBase v0.8H Safe Login init
         let ghostBaseInitialSafeLoginEnabled = ghostBaseSafeLoginInitialEnabled()
         self.ghostBaseSafeLoginEnabled = ghostBaseInitialSafeLoginEnabled
         ghostBaseSafeLoginApply(enabled: ghostBaseInitialSafeLoginEnabled)
@@ -691,8 +689,6 @@ final class AuthorizationSequencePhoneEntryControllerNode: ASDisplayNode {
 
         let titleInset: CGFloat = layout.size.width > 320.0 ? 18.0 : 0.0
         let ghostBaseSafeLoginExtraBottomInset: CGFloat = 0.0
-        // MARK: Jerkgram v1.2M BUILD124_AUTH_KEYBOARD1
-        // MARK: Jerkgram v1.2M BUILD124_AUTH_RUNTIME_LAYOUT1
         let jerkgramKeyboardVisible = (layout.inputHeight ?? 0.0) > 0.0
         let additionalBottomInset: CGFloat = (layout.size.width > 320.0 ? 80.0 : 10.0) + ghostBaseSafeLoginExtraBottomInset
 
@@ -797,12 +793,10 @@ final class AuthorizationSequencePhoneEntryControllerNode: ASDisplayNode {
             )
         )
 
-        // MARK: GhostBase v0.8H Safe Login layout
         let ghostBaseSafeLoginButtonFrame = CGRect(origin: CGPoint(x: buttonFrame.minX, y: buttonFrame.minY - 10.0 - ghostBaseSafeLoginHeight), size: CGSize(width: proceedSize.width, height: ghostBaseSafeLoginHeight))
         let ghostBaseSafeLoginInfoFrame = CGRect(origin: CGPoint(x: buttonFrame.minX, y: ghostBaseSafeLoginButtonFrame.minY - 6.0 - ghostBaseSafeLoginInfoSize.height), size: ghostBaseSafeLoginInfoSize)
         transition.updateFrame(node: self.ghostBaseSafeLoginNode, frame: ghostBaseSafeLoginButtonFrame)
         transition.updateFrame(node: self.ghostBaseSafeLoginInfoNode, frame: ghostBaseSafeLoginInfoFrame)
-        // MARK: Jerkgram v1.2L BUILD123_SAFE_LOGIN_ALL_ACCOUNTS1
         // Available for both first authorization and add-account flows.
         self.ghostBaseSafeLoginNode.isHidden = jerkgramKeyboardVisible
         self.ghostBaseSafeLoginInfoNode.isHidden = jerkgramKeyboardVisible
@@ -1471,6 +1465,4 @@ private final class ManagedPhoneAnimationNode: ManagedAnimationNode {
     }
 }
 
-// MARK: Jerkgram v1.2N BUILD125_AUTH_BOT_LOGIN_LOCALIZATION2
 
-// MARK: Jerkgram v1.2N BUILD125_AUTH_GHOST_LOCALIZATION1

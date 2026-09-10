@@ -35,7 +35,6 @@ public struct ItemListMultilineInputInlineAction {
 public class ItemListMultilineInputItem: ListViewItem, ItemListItem {
     let presentationData: ItemListPresentationData
     let systemStyle: ItemListSystemStyle
-    // MARK: Jerkgram v1.2N BUILD125_PROFILE_BIO_BACKGROUND_API1
     // Optional per-item override. Generic callers retain Telegram's stock cards.
     let backgroundColor: UIColor?
     let text: String

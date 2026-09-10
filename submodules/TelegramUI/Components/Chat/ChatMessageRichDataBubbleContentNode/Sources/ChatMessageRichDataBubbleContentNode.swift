@@ -350,7 +350,7 @@ public class ChatMessageRichDataBubbleContentNode: ChatMessageBubbleContentNode 
                 let showMoreExpanded = (showMoreExpandedState?.messageId == item.message.id) ? (showMoreExpandedState?.value ?? false) : false
                 let page = (showMoreExpanded ? attribute.fullInstantPage : nil) ?? attribute.instantPage
                 if let lastBlock = page.blocks.last, richDataBlockEndsWithVisualMedia(lastBlock) {
-                    let reactions = mergedMessageReactions(attributes: item.message.attributes, isTags: item.message.areReactionsTags(accountPeerId: item.context.account.peerId))
+                    let reactions = jerkgramVisibleMessageReactions(accountPeerId: item.context.account.peerId, message: item.message)
                     let hasReactions = !(reactions?.reactions.isEmpty ?? true)
                     let inline = shouldDisplayInlineDateReactions(message: EngineMessage(item.message), isPremium: item.associatedData.isPremium, forceInline: item.associatedData.forceInlineReactions)
                     wantsReactionsOutside = hasReactions && !inline

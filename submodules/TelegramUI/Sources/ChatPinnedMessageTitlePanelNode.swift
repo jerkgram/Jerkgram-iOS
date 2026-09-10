@@ -291,7 +291,7 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
         }
         self.isReplyThread = isReplyThread
 
-        self.captureProtected = !(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (interfaceState.copyProtectionEnabled || interfaceState.myCopyProtectionEnabled)
+        self.captureProtected = !(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (interfaceState.copyProtectionEnabled || interfaceState.myCopyProtectionEnabled)
 
         self.contextContainer.isGestureEnabled = !isReplyThread
 

@@ -96,6 +96,9 @@ public enum ChatListNodeEntryPromoInfo: Equatable {
 enum ChatListNodeEntry: Comparable, Identifiable {
     struct PeerEntryData: Equatable {
         var index: EngineChatList.Item.Index
+        // This value is supplied only by the group-only visibility processor.
+        // `index` remains Telegram's source index for navigation and pagination.
+        var jerkgramBuild136PresentationSortIndex: EngineChatList.Item.Index?
         var presentationData: ChatListPresentationData
         var messages: [EngineMessage]
         var readState: EnginePeerReadCounters?
@@ -126,6 +129,7 @@ enum ChatListNodeEntry: Comparable, Identifiable {
         
         init(
             index: EngineChatList.Item.Index,
+            jerkgramBuild136PresentationSortIndex: EngineChatList.Item.Index? = nil,
             presentationData: ChatListPresentationData,
             messages: [EngineMessage],
             readState: EnginePeerReadCounters?,
@@ -155,6 +159,7 @@ enum ChatListNodeEntry: Comparable, Identifiable {
             displayAsTopicList: Bool
         ) {
             self.index = index
+            self.jerkgramBuild136PresentationSortIndex = jerkgramBuild136PresentationSortIndex
             self.presentationData = presentationData
             self.messages = messages
             self.readState = readState
@@ -186,6 +191,9 @@ enum ChatListNodeEntry: Comparable, Identifiable {
         
         static func ==(lhs: PeerEntryData, rhs: PeerEntryData) -> Bool {
             if lhs.index != rhs.index {
+                return false
+            }
+            if lhs.jerkgramBuild136PresentationSortIndex != rhs.jerkgramBuild136PresentationSortIndex {
                 return false
             }
             if lhs.presentationData !== rhs.presentationData {
@@ -432,7 +440,7 @@ enum ChatListNodeEntry: Comparable, Identifiable {
         case .HeaderEntry:
             return .index(.chatList(.absoluteUpperBound))
         case let .PeerEntry(peerEntry):
-            return .index(peerEntry.index)
+            return .index(peerEntry.jerkgramBuild136PresentationSortIndex ?? peerEntry.index)
         case let .HoleEntry(holeIndex, _):
             return .index(.chatList(EngineChatList.Item.Index.ChatList(pinningIndex: nil, messageIndex: holeIndex)))
         case let .GroupReferenceEntry(groupReferenceEntry):
@@ -732,6 +740,7 @@ func chatListNodeEntriesForView(view: EngineChatList, state: ChatListNodeState, 
 
         let entry: ChatListNodeEntry = .PeerEntry(ChatListNodeEntry.PeerEntryData(
             index: offsetPinnedIndex(entry.index, offset: pinnedIndexOffset),
+            jerkgramBuild136PresentationSortIndex: entry.jerkgramPresentationIndex,
             presentationData: state.presentationData,
             messages: updatedMessages,
             readState: updatedCombinedReadState,

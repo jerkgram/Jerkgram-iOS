@@ -146,6 +146,7 @@ public final class EngineChatList: Equatable {
 
         public let id: Id
         public let index: Index
+        public let jerkgramPresentationIndex: Index?
         public let messages: [EngineMessage]
         public let readCounters: EnginePeerReadCounters?
         public let isMuted: Bool
@@ -187,10 +188,12 @@ public final class EngineChatList: Equatable {
             storyStats: StoryStats?,
             displayAsTopicList: Bool,
             isPremiumRequiredToMessage: Bool,
-            mediaDraftContentType: EngineChatList.MediaDraftContentType?
+            mediaDraftContentType: EngineChatList.MediaDraftContentType?,
+            jerkgramPresentationIndex: Index? = nil
         ) {
             self.id = id
             self.index = index
+            self.jerkgramPresentationIndex = jerkgramPresentationIndex
             self.messages = messages
             self.readCounters = readCounters
             self.isMuted = isMuted
@@ -217,6 +220,9 @@ public final class EngineChatList: Equatable {
                 return false
             }
             if lhs.index != rhs.index {
+                return false
+            }
+            if lhs.jerkgramPresentationIndex != rhs.jerkgramPresentationIndex {
                 return false
             }
             if lhs.messages != rhs.messages {
@@ -428,7 +434,7 @@ public final class EngineChatList: Equatable {
 }
 
 public extension EngineChatList.Item {
-    func withUpdatedCommunitySummary(messages: [EngineMessage], readCounters: EnginePeerReadCounters?) -> EngineChatList.Item {
+    func withUpdatedCommunitySummary(messages: [EngineMessage], readCounters: EnginePeerReadCounters?, jerkgramPresentationIndex: EngineChatList.Item.Index? = nil) -> EngineChatList.Item {
         let updatedReadCounters = readCounters.map { readCounters -> EnginePeerReadCounters in
             return EnginePeerReadCounters(state: readCounters._asReadCounters(), isMuted: self.isMuted)
         }
@@ -454,7 +460,8 @@ public extension EngineChatList.Item {
             storyStats: self.storyStats,
             displayAsTopicList: self.displayAsTopicList,
             isPremiumRequiredToMessage: self.isPremiumRequiredToMessage,
-            mediaDraftContentType: self.mediaDraftContentType
+            mediaDraftContentType: self.mediaDraftContentType,
+            jerkgramPresentationIndex: jerkgramPresentationIndex
         )
     }
 }
@@ -522,6 +529,59 @@ private func calculateIsPremiumRequiredToMessage(accountPeerId: PeerId?, isPremi
     return cachedIsPremiumRequired
 }
 
+
+private func jerkgramBuild133ActivityVisible(
+    stock: Bool,
+    expectedCount: Int,
+    accountPeerId: PeerId?,
+    messages: [Message],
+    tag: MessageTags,
+    hidden: (PeerId, Message) -> Bool
+) -> Bool {
+    guard stock else {
+        return false
+    }
+    guard expectedCount > 0, let accountPeerId else {
+        return stock
+    }
+
+    let taggedMessages = messages.filter { $0.tags.contains(tag) }
+    guard taggedMessages.count >= expectedCount else {
+        // The chat-list preview is not the complete mention/reaction history.
+        // Without complete evidence, preserve Telegram's summary badge.
+        return stock
+    }
+    for message in taggedMessages {
+        if !hidden(accountPeerId, message) {
+            return true
+        }
+    }
+    // A stale summary may count an entry already removed by blocked-message
+    // filtering. If every materialized target is hidden, do not expose a dead
+    // chat-list badge or navigation button.
+    return false
+}
+
+private func jerkgramBuild133ReactionActivityHidden(
+    accountPeerId: PeerId,
+    message: Message
+) -> Bool {
+    if JerkgramBlockedReactionPolicy.isMessageHidden(
+        accountPeerId: accountPeerId,
+        message: message
+    ) {
+        return true
+    }
+    guard let attribute = message.attributes.first(where: { $0 is ReactionsMessageAttribute }) as? ReactionsMessageAttribute else {
+        return false
+    }
+    return !JerkgramBlockedReactionPolicy.hasVisibleUnseenReaction(
+        accountPeerId: accountPeerId,
+        message: message,
+        attribute: attribute
+    )
+}
+
 extension EngineChatList.Item {
     convenience init?(_ entry: ChatListEntry, accountPeerId: PeerId?, isPremium: Bool, displayAsTopicList: Bool) {
         switch entry {
@@ -532,6 +592,18 @@ extension EngineChatList.Item {
             let isRemovedFromTotalUnreadCount = entryData.isRemovedFromTotalUnreadCount
             let embeddedState = entryData.embeddedInterfaceState
             let renderedPeer = entryData.renderedPeer
+            let visibleMessages: [Message]
+            if let accountPeerId, let chatPeer = renderedPeer.chatMainPeer {
+                visibleMessages = messages.filter { message in
+                    return !JerkgramBlockedReactionPolicy.isMessageHidden(
+                        accountPeerId: accountPeerId,
+                        chatPeer: chatPeer,
+                        message: message
+                    )
+                }
+            } else {
+                visibleMessages = messages
+            }
             let presence = entryData.presence
             let tagSummaryInfo = entryData.summaryInfo
             let forumTopicData = entryData.forumTopicData
@@ -561,7 +633,23 @@ extension EngineChatList.Item {
                 tag: .unseenPersonalMessage,
                 actionType: PendingMessageActionType.consumeUnseenPersonalMessage
             )] {
-                hasUnseenMentions = (info.tagSummaryCount ?? 0) > (info.actionsSummaryCount ?? 0)
+                let tagCount = Int(info.tagSummaryCount ?? 0)
+                let actionCount = Int(info.actionsSummaryCount ?? 0)
+                let outstandingCount = max(0, tagCount - actionCount)
+                let stockHasUnseenMentions = outstandingCount > 0
+                hasUnseenMentions = jerkgramBuild133ActivityVisible(
+                    stock: stockHasUnseenMentions,
+                    expectedCount: outstandingCount,
+                    accountPeerId: accountPeerId,
+                    messages: messages,
+                    tag: .unseenPersonalMessage,
+                    hidden: { accountPeerId, message in
+                        JerkgramBlockedReactionPolicy.isMessageHidden(
+                            accountPeerId: accountPeerId,
+                            message: message
+                        )
+                    }
+                )
             }
             
             var hasUnseenReactions = false
@@ -569,7 +657,16 @@ extension EngineChatList.Item {
                 tag: .unseenReaction,
                 actionType: PendingMessageActionType.readReactionOrPollVote
             )] {
-                hasUnseenReactions = (info.tagSummaryCount ?? 0) != 0
+                let outstandingCount = Int(info.tagSummaryCount ?? 0)
+                let stockHasUnseenReactions = outstandingCount != 0
+                hasUnseenReactions = jerkgramBuild133ActivityVisible(
+                    stock: stockHasUnseenReactions,
+                    expectedCount: outstandingCount,
+                    accountPeerId: accountPeerId,
+                    messages: messages,
+                    tag: .unseenReaction,
+                    hidden: jerkgramBuild133ReactionActivityHidden
+                )
             }
             
             var hasUnseenPollVotes = false
@@ -609,7 +706,7 @@ extension EngineChatList.Item {
             self.init(
                 id: .chatList(index.messageIndex.id.peerId),
                 index: .chatList(index),
-                messages: messages.map(EngineMessage.init),
+                messages: visibleMessages.map(EngineMessage.init),
                 readCounters: readCounters,
                 isMuted: isRemovedFromTotalUnreadCount,
                 draft: draft,

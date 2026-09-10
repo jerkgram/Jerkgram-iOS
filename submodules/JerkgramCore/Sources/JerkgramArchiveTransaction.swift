@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_ARCHIVE_TRANSACTION1
 public enum JerkgramImportEventDisposition: Equatable {
     case new
     case duplicate
@@ -25,7 +24,6 @@ public protocol JerkgramSettingsSnapshotStore: AnyObject {
     func replace(_ snapshot: JerkgramSettingsSnapshot) throws
 }
 
-// MARK: Jerkgram v1.2K BUILD122_ARCHIVE_EXACT_ACCOUNTS1
 public protocol JerkgramRetentionConfigurationStore: AnyObject {
     func configuration(accountPeerId: Int64) throws -> JerkgramRetentionConfiguration
     func replace(_ configuration: JerkgramRetentionConfiguration) throws

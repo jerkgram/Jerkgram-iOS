@@ -1,7 +1,6 @@
 # Building Jerkgram from Source
 
-> [!NOTE]
-> This guide defines the public build contract before the first Stable snapshot. Exact release commands will be frozen and verified against that snapshot before publication.
+This guide describes the public build contract for Jerkgram Stable source snapshots.
 
 ## Base
 
@@ -11,9 +10,11 @@ release-12.9.2
 6ad963e5b62d354da79040f388ae2b9132fb17b8
 ```
 
-## What a Stable public snapshot includes
+## Stable source snapshot
 
-The public snapshot is intended to include the production code and corresponding build material required for that released tree, including relevant Bazel/build definitions and source dependencies that are part of the release source.
+The public Stable snapshot contains the release source tree and the corresponding build material included with that source, including the relevant Bazel/build definitions and source dependencies.
+
+For Jerkgram 1.0.2, use the public source tag `v1.0.2` and verify the release metadata in `JERKGRAM_RELEASE.json` before building.
 
 ## What you provide yourself
 
@@ -29,11 +30,11 @@ The public repository does not provide personal certificates, provisioning profi
 ## High-level flow
 
 1. Check out the exact Stable source tag.
-2. Verify `JERKGRAM_RELEASE.json` and the published source manifest.
+2. Verify `JERKGRAM_RELEASE.json` and `public-source-manifest.json`.
 3. Configure your own Telegram API credentials and application identity.
 4. Configure your own Apple signing environment.
-5. Build using the build system included in the release source tree.
+5. Build using the build system included in the tagged release source tree.
 
-## Why the exact commands are not frozen yet
+## Build environment
 
-The final public build guide must describe the **actual first Stable materialized tree**, not a guessed development state. The command-level section is therefore completed only after the final Stable build path exists and has been verified.
+Jerkgram keeps the Telegram for iOS build system that is present in the corresponding release source. Local signing, provisioning and developer-specific configuration are intentionally not published as part of the Stable source record.

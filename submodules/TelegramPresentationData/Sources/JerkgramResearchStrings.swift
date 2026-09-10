@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2D BUILD115_RESEARCH_STRINGS1
 // Late legacy/research UI remains available, but its labels follow Telegram's
 // selected language instead of carrying Russian literals in generated source.
 public extension JerkgramStrings {

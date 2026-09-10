@@ -10,8 +10,8 @@ Do not publish a release while any `<PLACEHOLDER>` value remains.
 Release title       Jerkgram <VERSION>
 Git tag             v<VERSION>
 IPA                  Jerkgram-<VERSION>.ipa
-Source archive       Jerkgram-<VERSION>-source.zip
-Manifest             SOURCE_MANIFEST.sha256
+Source archive       Jerkgram-<VERSION>-source.tar.xz
+Manifest             public-source-manifest.json
 Upstream tag         release-12.9.2
 Upstream commit      6ad963e5b62d354da79040f388ae2b9132fb17b8
 ```
@@ -97,7 +97,7 @@ See [`LICENSE`](https://github.com/jerkgram/Jerkgram-iOS/blob/v<VERSION>/LICENSE
 - [ ] Required third-party license and notice files are preserved.
 - [ ] `docs/BUILDING.md` describes the actual Stable source tree and no longer contains pre-release-only wording.
 - [ ] `JERKGRAM_RELEASE.json` has `status: "stable"` and contains the final version, build number, source tag and artifact hashes.
-- [ ] `SOURCE_MANIFEST.sha256` is generated from the final public source snapshot.
+- [ ] `public-source-manifest.json` is generated from the final public source snapshot.
 - [ ] Source archive is generated and its SHA-256 is recorded.
 
 ### 3. Verify the IPA
@@ -123,8 +123,8 @@ See [`LICENSE`](https://github.com/jerkgram/Jerkgram-iOS/blob/v<VERSION>/LICENSE
 - [ ] Release title is `Jerkgram <VERSION>`.
 - [ ] Paste the release body from this template and replace every placeholder.
 - [ ] Upload `Jerkgram-<VERSION>.ipa`.
-- [ ] Upload `Jerkgram-<VERSION>-source.zip`.
-- [ ] Upload `SOURCE_MANIFEST.sha256`.
+- [ ] Upload `Jerkgram-<VERSION>-source.tar.xz`.
+- [ ] Upload `public-source-manifest.json`.
 - [ ] Confirm the displayed hashes match the locally verified values.
 - [ ] Confirm all links in the release body resolve against `v<VERSION>`.
 - [ ] Do not rely on GitHub's automatically generated “Source code” archives as the project provenance archive unless their exact hashes are intentionally recorded.

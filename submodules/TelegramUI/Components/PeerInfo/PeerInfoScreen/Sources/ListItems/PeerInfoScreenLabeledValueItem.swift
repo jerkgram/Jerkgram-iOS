@@ -609,7 +609,6 @@ private final class PeerInfoScreenLabeledValueItemNode: PeerInfoScreenItemNode {
 
         let labelSize = self.labelNode.updateLayout(CGSize(width: width - sideInset * 2.0, height: .greatestFiniteMagnitude))
         let rightLabelSize = self.rightLabelNode.updateLayout(CGSize(width: width - sideInset * 2.0, height: .greatestFiniteMagnitude))
-        // MARK: Jerkgram v1.2M BUILD124_PROFILE_MORE_CUTOUT1
         // Measure once without a stale cutout, then reserve real layout space
         // for Telegram's "more" control instead of painting over live glyphs.
         self.textNode.cutout = nil
@@ -691,7 +690,6 @@ private final class PeerInfoScreenLabeledValueItemNode: PeerInfoScreenItemNode {
         self.expandNode.frame = expandFrame
         self.expandButonNode.frame = expandFrame.insetBy(dx: -8.0, dy: -8.0)
         
-        // MARK: Jerkgram v1.2M BUILD124_PROFILE_MORE_NO_OVERLAY1
         // The text cutout above reserves the exact "more" footprint. Do not
         // paint Telegram's historical 50 pt cover over adjacent glyphs.
         self.expandBackgroundNode.isHidden = true

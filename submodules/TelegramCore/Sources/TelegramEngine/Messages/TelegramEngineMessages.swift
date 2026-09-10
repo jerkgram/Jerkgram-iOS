@@ -3,7 +3,6 @@ import SwiftSignalKit
 import Postbox
 import TelegramApi
 
-// MARK: GhostBase v1.1H TRANSCRIPTIONACCUMULATOR1
 private func ghostBaseMergeTranscriptionTextV11H(
     previous: String,
     incoming: String
@@ -70,7 +69,6 @@ private func ghostBaseMergeTranscriptionTextV11H(
     return previous + " " + incoming
 }
 
-// MARK: GhostBase v1.1H RECOVERY1
 
 public enum EngineOutgoingMessageContent {
     case text(String, [MessageTextEntity])

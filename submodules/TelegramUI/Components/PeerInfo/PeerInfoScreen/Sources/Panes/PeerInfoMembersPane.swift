@@ -289,7 +289,6 @@ final class PeerInfoMembersPaneNode: ASDisplayNode, PeerInfoPaneNode {
     private let listBackgroundView: UIImageView
     private let listMaskView: UIImageView
 
-    // MARK: GhostBase v1.1Q MEMBERS_PANE_GLASS1
     private let ghostBaseGlassEffectView: UIVisualEffectView
     private let ghostBaseGlassTintView: UIView
     private var ghostBaseGlassIsDark: Bool?

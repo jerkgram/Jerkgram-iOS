@@ -532,7 +532,6 @@ private func forwardedMessageToBeReuploaded(transaction: Transaction, id: Messag
     }
 }
 
-// MARK: GhostBase v1.1T BUILD105_FULL1
 // Deferred deleted-reply materialization. Composer/reply preview stay stock;
 // only the public enqueue boundary converts a locally retained deleted reply.
 private let ghostBaseDeletedPortableRepliesKey =
@@ -936,7 +935,6 @@ func ghostBaseRemoveDeletedMediaCacheEntries(
     )
 }
 
-// MARK: GhostBase v1.1U BUILD106_FINAL1
 private struct GhostBaseDeletedReplyPlan {
     let outgoing: EnqueueMessage
     let source: Message?
@@ -952,7 +950,6 @@ private struct GhostBaseDeletedQuoteBody {
 }
 
 private func ghostBaseDeletedMediaLabel(_ message: Message) -> String? {
-    // MARK: Jerkgram v1.2D BUILD115_RECOVERY_ENGLISH1
     // TelegramCore cannot depend on presentation/UI localization.
     // Portable recovery text therefore uses English canonical labels;
     // richer UI localization uses semantic JerkgramStringKey values.
@@ -1046,7 +1043,6 @@ private func ghostBaseShiftEntities(
     }
 }
 
-// MARK: Jerkgram v1.2M BUILD124_DELETED_FULL_ENTITIES1
 private func ghostBaseOriginalPortableEntities(
     source: Message
 ) -> [MessageTextEntity] {
@@ -1134,8 +1130,6 @@ private func ghostBaseBuildPortableDeletedReply(
 
     var entities: [MessageTextEntity] = []
     if authorLength > 0 {
-        // MARK: JerkGram v1.1Y BUILD110_RECOVERED_AUTHOR_NO_WEB_PREVIEW1
-        // MARK: GhostBase v1.1U BUILD106_PORTABLE_AUTHOR1
         if let authorUsername,
            !authorUsername.isEmpty {
             entities.append(
@@ -1281,7 +1275,6 @@ private func ghostBaseReconstructedMedia(
         return nil
     }
 
-    // MARK: GhostBase v1.1U BUILD106_GROUPED_MEDIA1
     guard source.media.count == 1 else {
         return nil
     }
@@ -1300,7 +1293,6 @@ private func ghostBaseReconstructedMedia(
     }
 
     let media = source.media[0]
-    // MARK: Jerkgram v1.2J BUILD121_NATIVE_STICKER_RECOVERY1
     // Preserve the original TelegramMediaFile mimeType + attributes and
     // let the existing deleted-media reconstruction path rebuild it.
     // The textual Sticker label remains only as the missing-media fallback.
@@ -1428,7 +1420,6 @@ private func ghostBaseResolveDeletedReplies(
                 )
             }
 
-            // MARK: GhostBase v1.1U BUILD106_ALBUM_QUERY1
             let sourceGroup: [Message]
 
             if source.groupingKey != nil {
@@ -1534,7 +1525,6 @@ private func ghostBaseResolveDeletedReplies(
                         }
                     }
 
-                    // MARK: GhostBase v1.1U BUILD106_ALBUM_RECOVERY1
                     if source.groupingKey != nil,
                        recoveredGroup.count >= 2 {
 
@@ -1596,7 +1586,6 @@ private func ghostBaseResolveDeletedReplies(
                         continue
                     }
 
-                    // MARK: Jerkgram v1.2K BUILD122_STICKER_REPLY_NO_REUPLOAD1
                     // A recovered sticker must stay inside the quoted source context;
                     // attaching it as outgoing media sends a second sticker message.
                     // Preserve the established photo/video/GIF/audio/document and album paths.

@@ -19,8 +19,6 @@ public extension ListSectionComponentChildView {
 }
 
 public final class ListSectionContentView: UIView {
-    // MARK: GhostBase v1.1Q FULL_RUNTIME_CORRECTION1
-    // MARK: GhostBase v1.1Q MODERN_GLASS_OWNER1
     private let ghostBaseDirectGlassBackgroundView = UIView()
     private var ghostBaseUsesDirectGlassBackground = false
     public final class ItemView: UIView {

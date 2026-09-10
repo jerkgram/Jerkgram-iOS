@@ -984,7 +984,6 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                         return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                     })
                                 } else {
-                                    // MARK: GhostBase v1.0A channel retention
                                     let ghostBaseDeleted = ((transaction.getMessage(id)?.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false
                                     if ghostBaseDeleted {
                                         Logger.shared.log("HistoryValidation", "GhostBase keeping deleted message \(id) in \(id.peerId)")
@@ -1173,7 +1172,6 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
                 
                     for id in removedMessageIds {
                         if !validMessageIds.contains(id) {
-                            // MARK: GhostBase v1.0A channel retention
                             let ghostBaseDeleted = ((transaction.getMessage(id)?.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false
                             if ghostBaseDeleted {
                                 Logger.shared.log("HistoryValidation", "GhostBase keeping deleted thread message \(id) in \(id.peerId)")

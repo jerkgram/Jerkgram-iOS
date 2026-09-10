@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_EVENT_STORE1
 public protocol JerkgramEventStore {
     func append(_ event: JerkgramCanonicalEvent) throws
     func events(accountPeerId: Int64, chatPeerId: Int64?) throws -> [JerkgramCanonicalEvent]
@@ -706,7 +705,6 @@ public enum JerkgramCaptureRecorder {
     private static var flushScheduled = false
     private static var retryBackoffActive = false
     private static var retryDelay: Double = 1.0
-    // MARK: Jerkgram v1.2M BUILD124_NONBLOCKING_LIFECYCLE_FLUSH1
     // UIKit lifecycle notifications are normally posted on the main thread.
     // Never wait there for JSONL/index disk I/O: the capture queue can be busy
     // rebuilding or appending its index and a queue.sync here freezes the whole UI.
@@ -725,7 +723,6 @@ public enum JerkgramCaptureRecorder {
         ),
     ]
 
-    // MARK: Jerkgram v1.2M BUILD124_COOPERATIVE_LIFECYCLE_DRAIN1
     private static func requestLifecycleFlush() {
         _ = self.lifecycleObservers
         self.queue.async {

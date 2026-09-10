@@ -738,11 +738,21 @@ private func synchronizeMessageStarsReactions(transaction: Transaction, postbox:
 }
 
 public extension EngineMessageReactionListContext.State {
-    init(message: EngineMessage, readStats: MessageReadStats?, reaction: MessageReaction.Reaction?) {
+    init(message: EngineMessage, readStats: MessageReadStats?, reaction: MessageReaction.Reaction?, accountPeerId: PeerId? = nil) {
         var totalCount = 0
         var hasOutgoingReaction = false
         var items: [EngineMessageReactionListContext.Item] = []
-        if let reactionsAttribute = message._asMessage().reactionsAttribute {
+        let reactionsAttribute: ReactionsMessageAttribute?
+        if let accountPeerId {
+            reactionsAttribute = jerkgramFilteredMessageReactions(
+                accountPeerId: accountPeerId,
+                message: message._asMessage(),
+                attribute: message._asMessage().reactionsAttribute
+            )
+        } else {
+            reactionsAttribute = message._asMessage().reactionsAttribute
+        }
+        if let reactionsAttribute {
             for messageReaction in reactionsAttribute.reactions {
                 if reaction == nil || messageReaction.value == reaction {
                     if messageReaction.chosenOrder != nil {
@@ -854,7 +864,7 @@ public final class EngineMessageReactionListContext {
             self.message = message
             self.reaction = reaction
             
-            let initialState = EngineMessageReactionListContext.State(message: message, readStats: readStats, reaction: reaction)
+            let initialState = EngineMessageReactionListContext.State(message: message, readStats: readStats, reaction: reaction, accountPeerId: account.peerId)
             self.state = InternalState(hasOutgoingReaction: initialState.hasOutgoingReaction, totalCount: initialState.totalCount, items: initialState.items, canLoadMore: initialState.canLoadMore, nextOffset: nil)
             
             if initialState.canLoadMore {
@@ -914,17 +924,25 @@ public final class EngineMessageReactionListContext {
                             updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                             
                             var items: [EngineMessageReactionListContext.Item] = []
+                            var blockedItemsOnPage = 0
+                            let filterBlocked = JerkgramBlockedReactionPolicy.isGroupMessage(message._asMessage())
+                                && JerkgramBlockedReactionPolicy.hideBlockedReactions(accountPeerId: accountPeerId)
                             for reaction in reactions {
                                 switch reaction {
                                 case let .messagePeerReaction(messagePeerReactionData):
                                     let (peer, date, reaction) = (messagePeerReactionData.peerId, messagePeerReactionData.date, messagePeerReactionData.reaction)
-                                    if let peer = transaction.getPeer(peer.peerId), let reaction = MessageReaction.Reaction(apiReaction: reaction) {
+                                    let peerId = peer.peerId
+                                    if filterBlocked && peerId != accountPeerId && JerkgramBlockedReactionPolicy.isBlocked(accountPeerId: accountPeerId, peerId: peerId) {
+                                        blockedItemsOnPage += 1
+                                        continue
+                                    }
+                                    if let peer = transaction.getPeer(peerId), let reaction = MessageReaction.Reaction(apiReaction: reaction) {
                                         items.append(EngineMessageReactionListContext.Item(peer: EnginePeer(peer), reaction: reaction, timestamp: date, timestampIsReaction: true))
                                     }
                                 }
                             }
-                            
-                            return InternalState(hasOutgoingReaction: false, totalCount: Int(count), items: items, canLoadMore: nextOffset != nil, nextOffset: nextOffset)
+                            let visibleTotalCount = max(0, Int(count) - blockedItemsOnPage)
+                            return InternalState(hasOutgoingReaction: false, totalCount: visibleTotalCount, items: items, canLoadMore: nextOffset != nil, nextOffset: nextOffset)
                         case .none:
                             return InternalState(hasOutgoingReaction: false, totalCount: 0, items: [], canLoadMore: false, nextOffset: nil)
                         }

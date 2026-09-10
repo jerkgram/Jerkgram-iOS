@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: GhostBase v0.9A Edit History storage
 private func ghostBaseEditHistoryKey(_ id: MessageId) -> String {
     return "jerkgram.EditHistory.\(id.peerId).\(id.namespace).\(id.id)"
 }
@@ -1648,7 +1647,6 @@ final class MessageHistoryTable: Table {
             var updatedAttributes = message.attributes
             self.seedConfiguration.mergeMessageAttributes(previousAttributes, &updatedAttributes)
 
-            // MARK: GhostBase v0.9A capture previous edited text
             ghostBaseStoreEditedMessageVersionIfNeeded(messageId: message.id, previousText: previousMessage.text, updatedText: message.text, updatedAttributes: updatedAttributes)
 
             self.valueBox.remove(self.table, key: self.key(index), secure: true)

@@ -1,7 +1,6 @@
 import Foundation
 import PresentationStrings
 
-// MARK: Jerkgram v1.2D BUILD115_LOCALIZATION_FOUNDATION1
 //
 // Jerkgram user-facing text follows Telegram's selected interface language,
 // never the device locale. English is the canonical source and universal
@@ -304,7 +303,6 @@ public struct JerkgramStrings {
     public var personalChannelTab: String { self.text(.personalChannelTab) }
     public var profileReportLoading: String { self.text(.profileReportLoading) }
 
-    // MARK: Jerkgram v1.2F BUILD117_PROFILE_REPORT_LOCALIZATION1
     public func localizedProfileReport(_ raw: String) -> String {
         guard self.languageCode != "ru" else {
             return raw
@@ -659,7 +657,6 @@ public extension PresentationStrings {
 }
 
 
-// MARK: Jerkgram v1.2G BUILD118_DATA_STRINGS1
 public extension JerkgramStrings {
     var dataAndBackup: String { self.languageCode == "ru" ? "Данные и резервная копия" : "Data and Backup" }
     var retentionRules: String { self.languageCode == "ru" ? "Правила хранения" : "Retention Rules" }
@@ -681,7 +678,6 @@ public extension JerkgramStrings {
 }
 
 
-// MARK: Jerkgram v1.2G BUILD118_TIME_MACHINE_STRINGS1
 public extension JerkgramStrings {
     var timeMachine: String { self.languageCode == "ru" ? "Машина времени" : "Time Machine" }
     var timeMachineFilters: String { self.languageCode == "ru" ? "Фильтры" : "Filters" }
@@ -696,7 +692,6 @@ public extension JerkgramStrings {
 }
 
 
-// MARK: Jerkgram v1.2G BUILD118_SINCE_LAST_OPEN_STRINGS1
 public extension JerkgramStrings {
     func changesSinceLastOpening(_ deleted: Int, _ edited: Int, _ media: Int) -> String {
         if self.languageCode == "ru" {
@@ -708,7 +703,6 @@ public extension JerkgramStrings {
 }
 
 
-// MARK: Jerkgram v1.2H BUILD119_HYBRID_STRINGS1
 public extension JerkgramStrings {
     var build119Summary: String {
         self.languageCode == "ru"
@@ -755,7 +749,6 @@ public extension JerkgramStrings {
 }
 
 
-// MARK: Jerkgram v1.2M BUILD124_SETTINGS_REDESIGN_STRINGS1
 public extension JerkgramStrings {
     private func build124StateWord(_ enabled: Bool) -> String {
         if self.languageCode == "ru" {
@@ -823,7 +816,7 @@ public extension JerkgramStrings {
     }
 
     var build124AboutSummary: String {
-        return "Jerkgram · Official Telegram 12.9.2 · Build 124 Canary"
+        return JerkgramReleaseIdentity.aboutText
     }
 
     func build124DataSummary(_ duration: String, _ mediaLimit: String, _ accountPeerId: Int64) -> String {
@@ -845,7 +838,6 @@ public extension JerkgramStrings {
     }
 }
 
-// MARK: Jerkgram v1.2N BUILD125_AUTH_GHOST_LOCALIZATION1
 // Login controls must follow Telegram's selected interface language before an
 // account session exists. `strings` is supplied by the authorization flow and
 // therefore tracks PresentationStrings.baseLanguageCode rather than iOS Locale.
@@ -867,8 +859,6 @@ public extension JerkgramStrings {
     }
 }
 
-// MARK: Jerkgram v1.2N BUILD125_AUTH_BOT_LOGIN_STRINGS2
-// This probe does not materialize the older Build124 bot-localization overlay,
 // so the visible phone-entry control owns its small selected-language contract.
 public extension JerkgramStrings {
     private var authBotIsRussian: Bool { self.languageCode == "ru" }
@@ -882,7 +872,6 @@ public extension JerkgramStrings {
     }
 }
 
-// MARK: Jerkgram v1.2M BUILD124_BOT_LOCALIZATION1
 // Bot-account UI follows Telegram's selected interface language through the
 // same JerkgramStrings owner as the rest of Jerkgram. Persisted diagnostic
 // status values remain semantic English tokens and are translated only here.
@@ -927,7 +916,6 @@ public extension JerkgramStrings {
 
 
 
-// MARK: Jerkgram v1.2T BUILD130_RELEASE_STRINGS1
 public extension JerkgramStrings {
     var version: String { self.languageCode == "ru" ? "ВЕРСИЯ" : "VERSION" }
     var privacy: String { self.languageCode == "ru" ? "КОНФИДЕНЦИАЛЬНОСТЬ" : "PRIVACY" }
@@ -941,5 +929,47 @@ public extension JerkgramStrings {
         } else {
             return "Help improve Jerkgram by sharing anonymous usage statistics such as Jerkgram version, iOS version and device region. Telegram accounts, messages, usernames and phone numbers are never collected."
         }
+    }
+}
+
+public extension JerkgramStrings {
+    var blockedUsers: String {
+        self.languageCode == "ru" ? "ЗАБЛОКИРОВАННЫЕ" : "BLOCKED USERS"
+    }
+
+    var hideBlockedMessages: String {
+        self.languageCode == "ru"
+            ? "Скрывать сообщения заблокированных"
+            : "Hide Blocked Messages"
+    }
+
+    var hideBlockedReactions: String {
+        self.languageCode == "ru"
+            ? "Скрывать реакции заблокированных"
+            : "Hide Blocked Reactions"
+    }
+}
+
+public enum JerkgramReleaseIdentity {
+    public static let displayVersion = "1.0.2"
+    public static let technicalVersion = "1.0.2"
+    public static let build = "138"
+    public static let telegramBase = "12.9.2"
+
+    public static var aboutText: String {
+        return "Jerkgram Version \(displayVersion)\nBuild \(build)\nTelegram Base \(telegramBase)"
+    }
+}
+
+
+// These labels follow Telegram's selected interface language through
+// PresentationStrings.baseLanguageCode. English remains the fallback.
+public extension JerkgramStrings {
+    var messageHistory: String {
+        return self.languageCode == "ru" ? "История" : "History"
+    }
+
+    var forwardWithoutAuthor: String {
+        return self.languageCode == "ru" ? "Переслать без автора" : "Forward without author"
     }
 }

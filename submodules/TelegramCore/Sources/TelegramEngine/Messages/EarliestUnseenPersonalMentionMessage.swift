@@ -9,8 +9,58 @@ public enum EarliestUnseenPersonalMentionMessageResult: Equatable {
     case result(MessageId?)
 }
 
+
+private enum JerkgramBuild133UnseenTargetKind {
+    case mention
+    case reaction
+}
+
+private func jerkgramBuild133IsNavigableUnseenTarget(
+    accountPeerId: PeerId,
+    message: Message,
+    kind: JerkgramBuild133UnseenTargetKind
+) -> Bool {
+    if JerkgramBlockedReactionPolicy.isMessageHidden(
+        accountPeerId: accountPeerId,
+        message: message
+    ) {
+        return false
+    }
+
+    switch kind {
+    case .mention:
+        return true
+    case .reaction:
+        guard let attribute = message.attributes.first(where: { $0 is ReactionsMessageAttribute }) as? ReactionsMessageAttribute else {
+            return true
+        }
+        return JerkgramBlockedReactionPolicy.hasVisibleUnseenReaction(
+            accountPeerId: accountPeerId,
+            message: message,
+            attribute: attribute
+        )
+    }
+}
+
+private func jerkgramBuild133FirstNavigableUnseenTarget(
+    accountPeerId: PeerId,
+    entries: [MessageHistoryEntry],
+    kind: JerkgramBuild133UnseenTargetKind
+) -> Message? {
+    for entry in entries {
+        if jerkgramBuild133IsNavigableUnseenTarget(
+            accountPeerId: accountPeerId,
+            message: entry.message,
+            kind: kind
+        ) {
+            return entry.message
+        }
+    }
+    return nil
+}
+
 func _internal_earliestUnseenPersonalMentionMessage(account: Account, peerId: PeerId, threadId: Int64?) -> Signal<EarliestUnseenPersonalMentionMessageResult, NoError> {
-    return account.viewTracker.aroundMessageHistoryViewForLocation(.peer(peerId: peerId, threadId: threadId), index: .lowerBound, anchorIndex: .lowerBound, count: 4, fixedCombinedReadStates: nil, tag: .tag(.unseenPersonalMessage), additionalData: [.peerChatState(peerId)])
+    return account.viewTracker.aroundMessageHistoryViewForLocation(.peer(peerId: peerId, threadId: threadId), index: .lowerBound, anchorIndex: .lowerBound, count: 64, fixedCombinedReadStates: nil, tag: .tag(.unseenPersonalMessage), additionalData: [.peerChatState(peerId)])
     |> mapToSignal { view -> Signal<EarliestUnseenPersonalMentionMessageResult, NoError> in
         if view.0.isLoading {
             return .single(.loading)
@@ -18,7 +68,11 @@ func _internal_earliestUnseenPersonalMentionMessage(account: Account, peerId: Pe
         if case .FillHole = view.1 {
             return _internal_earliestUnseenPersonalMentionMessage(account: account, peerId: peerId, threadId: threadId)
         }
-        if let message = view.0.entries.first?.message {
+        if let message = jerkgramBuild133FirstNavigableUnseenTarget(
+            accountPeerId: account.peerId,
+            entries: view.0.entries,
+            kind: .mention
+        ) {
             if peerId.namespace == Namespaces.Peer.CloudChannel {
                 var invalidatedPts: Int32?
                 for data in view.0.additionalData {
@@ -50,6 +104,8 @@ func _internal_earliestUnseenPersonalMentionMessage(account: Account, peerId: Pe
             } else {
                 return .single(.result(message.id))
             }
+        } else if !view.0.entries.isEmpty {
+            return .single(.result(nil))
         } else {
             return account.postbox.transaction { transaction -> EarliestUnseenPersonalMentionMessageResult in
                 if let topId = transaction.getTopPeerMessageId(peerId: peerId, namespace: Namespaces.Message.Cloud) {
@@ -77,7 +133,7 @@ func _internal_earliestUnseenPersonalMentionMessage(account: Account, peerId: Pe
 }
 
 func _internal_earliestUnseenPersonalReactionMessage(account: Account, peerId: PeerId, threadId: Int64?) -> Signal<EarliestUnseenPersonalMentionMessageResult, NoError> {
-    return account.viewTracker.aroundMessageHistoryViewForLocation(.peer(peerId: peerId, threadId: threadId), index: .lowerBound, anchorIndex: .lowerBound, count: 4, fixedCombinedReadStates: nil, tag: .tag(.unseenReaction), additionalData: [.peerChatState(peerId)])
+    return account.viewTracker.aroundMessageHistoryViewForLocation(.peer(peerId: peerId, threadId: threadId), index: .lowerBound, anchorIndex: .lowerBound, count: 64, fixedCombinedReadStates: nil, tag: .tag(.unseenReaction), additionalData: [.peerChatState(peerId)])
     |> mapToSignal { view -> Signal<EarliestUnseenPersonalMentionMessageResult, NoError> in
         if view.0.isLoading {
             return .single(.loading)
@@ -85,7 +141,11 @@ func _internal_earliestUnseenPersonalReactionMessage(account: Account, peerId: P
         if case .FillHole = view.1 {
             return _internal_earliestUnseenPersonalReactionMessage(account: account, peerId: peerId, threadId: threadId)
         }
-        if let message = view.0.entries.first?.message {
+        if let message = jerkgramBuild133FirstNavigableUnseenTarget(
+            accountPeerId: account.peerId,
+            entries: view.0.entries,
+            kind: .reaction
+        ) {
             if peerId.namespace == Namespaces.Peer.CloudChannel {
                 var invalidatedPts: Int32?
                 for data in view.0.additionalData {
@@ -117,6 +177,8 @@ func _internal_earliestUnseenPersonalReactionMessage(account: Account, peerId: P
             } else {
                 return .single(.result(message.id))
             }
+        } else if !view.0.entries.isEmpty {
+            return .single(.result(nil))
         } else {
             return account.postbox.transaction { transaction -> EarliestUnseenPersonalMentionMessageResult in
                 if let topId = transaction.getTopPeerMessageId(peerId: peerId, namespace: Namespaces.Message.Cloud) {

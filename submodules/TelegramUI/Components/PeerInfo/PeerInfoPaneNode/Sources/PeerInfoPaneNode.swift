@@ -23,7 +23,6 @@ public enum PeerInfoPaneKey: Int32 {
     case similarChannels
     case similarBots
     case storyArchive
-    // MARK: GhostBase v1.1G NATIVEPANES1
     case ghostBaseProfileHistory
     case ghostBasePresence
     case ghostBaseGiftHistory

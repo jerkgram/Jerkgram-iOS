@@ -16,10 +16,10 @@ public final class MessageReadStats {
 }
 
 func _internal_messageReadStats(account: Account, id: MessageId) -> Signal<MessageReadStats?, NoError> {
-    UserDefaults.standard.set(id.peerId.toInt64(), forKey: "jerkgram.READ3.LastPeerIdRaw")
-    UserDefaults.standard.set(id.id, forKey: "jerkgram.READ3.LastMessageId")
-    UserDefaults.standard.set(Int(Date().timeIntervalSince1970), forKey: "jerkgram.READ3.LastRequestAt")
-    UserDefaults.standard.set("started", forKey: "jerkgram.READ3.FinalVerdict")
+
+
+
+
     return account.postbox.transaction { transaction -> Peer? in
         return transaction.getPeer(id.peerId)
     }
@@ -48,13 +48,13 @@ func _internal_messageReadStats(account: Account, id: MessageId) -> Signal<Messa
                 }
             }
         } else {
-            UserDefaults.standard.set("getMessageReadParticipants", forKey: "jerkgram.READ3.LastApi")
-            UserDefaults.standard.set("requesting", forKey: "jerkgram.READ3.FinalVerdict")
+
+
 
             let readPeers: Signal<[(Int64, Int32)]?, NoError> = account.network.request(Api.functions.messages.getMessageReadParticipants(peer: inputPeer, msgId: id.id))
             |> map { result -> [(Int64, Int32)]? in
-                UserDefaults.standard.set(result.count, forKey: "jerkgram.READ3.ForcedApiRawCount")
-                UserDefaults.standard.set("response", forKey: "jerkgram.READ3.LastResponse")
+
+
                 var items: [(Int64, Int32)] = []
                 for item in result {
                     switch item {
@@ -63,21 +63,14 @@ func _internal_messageReadStats(account: Account, id: MessageId) -> Signal<Messa
                         items.append((userId, date))
                     }
                 }
-                UserDefaults.standard.set(items.count, forKey: "jerkgram.READ3.ForcedCount")
-                if let first = items.first {
-                    UserDefaults.standard.set(first.0, forKey: "jerkgram.READ3.FirstUserId")
-                    UserDefaults.standard.set(first.1, forKey: "jerkgram.READ3.FirstReadDate")
-                }
-                if items.isEmpty {
-                    UserDefaults.standard.set("MESSAGE_NOT_READ_OR_EMPTY", forKey: "jerkgram.READ3.FinalVerdict")
-                } else {
-                    UserDefaults.standard.set("EXACT_READERS_FOUND", forKey: "jerkgram.READ3.FinalVerdict")
-                }
+
+                
+                
                 return items
             }
             |> `catch` { error -> Signal<[(Int64, Int32)]?, NoError> in
-                UserDefaults.standard.set("\(error)", forKey: "jerkgram.READ3.LastErrorRaw")
-                UserDefaults.standard.set("RESTRICTED_BY_TELEGRAM_API_OR_ERROR", forKey: "jerkgram.READ3.FinalVerdict")
+
+
                 return .single(nil)
             }
             

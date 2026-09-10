@@ -92,7 +92,6 @@ public func attributedString(from content: ChatInputContent) -> NSAttributedStri
                 ]))
             } else {
                 let start = result.length
-                // MARK: GhostBase v1.1V BUILD107_BLOCKQUOTE_CUSTOM_EMOJI1
                 // Keep structured inline attributes here.
                 // .plainText destroys Premium/custom emoji metadata.
                 result.append(attributedString(from: bq.content))
@@ -245,7 +244,6 @@ public func chatInputContent(from attributedText: NSAttributedString) -> ChatInp
     let full = attributedText.string as NSString
     var blocks: [ChatInputBlock] = []
 
-    // MARK: GhostBase v1.1R MULTILINE_QUOTE1
     func appendParagraphs(in range: NSRange) {
         guard range.length > 0 else { return }
         var paraRanges: [NSRange] = []

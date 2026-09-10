@@ -118,7 +118,6 @@ func handleTextLinkActionImpl(context: AccountContext, peerId: EnginePeer.Id?, n
         }))
     }
     
-    // MARK: Jerkgram v1.2D BUILD115_NUMERIC_MENTION1
     // Reuse Official Telegram's t.me/@idN parser for textual numeric
     // mentions instead of introducing a second peer lookup implementation.
     let jerkgramNumericMentionPeerId: (String) -> Int64? = { mention in

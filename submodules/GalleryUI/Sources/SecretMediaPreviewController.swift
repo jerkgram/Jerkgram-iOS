@@ -422,7 +422,7 @@ public final class SecretMediaPreviewController: ViewController {
             self.screenCaptureEventsDisposable = (screenCaptureEvents()
             |> deliverOnMainQueue).start(next: { [weak self] _ in
                 if let strongSelf = self, strongSelf.traceVisibility() {
-                    let ghostBaseAllowOneTimeScreenshots = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenshots") as? Bool) ?? false) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && strongSelf.messageId.peerId.namespace != Namespaces.Peer.SecretChat)
+                    let ghostBaseAllowOneTimeScreenshots = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenshots") as? Bool) ?? false) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && strongSelf.messageId.peerId.namespace != Namespaces.Peer.SecretChat)
                     if strongSelf.currentNodeMessageIsViewOnce && ghostBaseAllowOneTimeScreenshots {
                         return
                     }
@@ -474,13 +474,12 @@ public final class SecretMediaPreviewController: ViewController {
         }
     }
 
-    // MARK: GhostBase v0.8I.1 secret preview save action
     @objc private func ghostBaseSaveCurrentTimedMedia() {
         guard let message = self.messageView?.message else {
             return
         }
 
-        let ghostBaseTimedPreviewSave = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
+        let ghostBaseTimedPreviewSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
         guard ghostBaseTimedPreviewSave, let media = mediaForMessage(message: message) else {
             return
         }
@@ -539,8 +538,7 @@ public final class SecretMediaPreviewController: ViewController {
             }
         }
         if let message = message {
-            // MARK: GhostBase v0.8I.1 secret preview save button
-            let ghostBaseTimedPreviewSave = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
+            let ghostBaseTimedPreviewSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
             if ghostBaseTimedPreviewSave, let media = mediaForMessage(message: message) {
                 let saveTitle = media is TelegramMediaFile ? self.presentationData.strings.Gallery_SaveVideo : self.presentationData.strings.Gallery_SaveImage
                 self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: saveTitle, style: .plain, target: self, action: #selector(self.ghostBaseSaveCurrentTimedMedia))
@@ -565,8 +563,7 @@ public final class SecretMediaPreviewController: ViewController {
                     }
                 }
 
-                // MARK: GhostBase v0.8G one-time save gate
-                let ghostBaseAllowOneTimeSave = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil)
+                let ghostBaseAllowOneTimeSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil)
                 let entry = GalleryEntry(entry: MessageHistoryEntry(message: message, isRead: false, location: nil, monthLocation: nil, attributes: MutableMessageHistoryEntryAttributes(authorIsContact: false)))
                 guard let item = galleryItemForEntry(context: self.context, presentationData: self.presentationData, entry: entry, streamVideos: false, hideControls: !ghostBaseAllowOneTimeSave, isSecret: !ghostBaseAllowOneTimeSave, playbackRate: { nil }, peerIsCopyProtected: !ghostBaseAllowOneTimeSave, tempFilePath: tempFilePath, playbackCompleted: { [weak self] in
                     if let self {
@@ -588,8 +585,7 @@ public final class SecretMediaPreviewController: ViewController {
                     self?.didSetReady = true
                 }
                 self._ready.set(ready |> map { true })
-                // MARK: GhostBase v0.8H.1 one-time keep local / no local expire
-                let ghostBaseKeepOneTimeLocal = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.minAutoremoveOrClearTimeout != nil && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
+                let ghostBaseKeepOneTimeLocal = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.minAutoremoveOrClearTimeout != nil && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
                 if !ghostBaseKeepOneTimeLocal {
                     self.markMessageAsConsumedDisposable.set(self.context.engine.messages.markMessageContentAsConsumedInteractively(messageId: message.id).start())
                 }

@@ -1,7 +1,6 @@
 import Foundation
 import Postbox
 
-// MARK: Jerkgram v1.2L BUILD123_MESSAGE_SNAPSHOT1
 public final class GhostBaseEditEntitySnapshot: PostboxCoding {
     public let entities: [MessageTextEntity]
     public let inlineStickerFiles: [TelegramMediaFile]

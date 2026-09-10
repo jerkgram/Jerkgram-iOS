@@ -405,8 +405,6 @@ private func peerInfoStatusWithHiddenCommunityPrefix(_ status: PeerInfoStatusDat
 }
 
 
-// MARK: GhostBase v1.1G NATIVEPANES1
-// MARK: Jerkgram v1.2F BUILD117_SETTINGS_PROFILE_SCOPE1
 private func ghostBaseAppendingProfilePanes(
     _ availablePanes: [PeerInfoPaneKey],
     peer: EnginePeer?,

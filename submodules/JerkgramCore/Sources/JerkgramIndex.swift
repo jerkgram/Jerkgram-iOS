@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_REFERENCE_INDEX1
 public struct JerkgramCanonicalLocator: Codable, Equatable {
     public let kind: JerkgramEventKind
     public let relativeFile: String

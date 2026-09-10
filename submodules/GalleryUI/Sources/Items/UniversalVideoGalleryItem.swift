@@ -3684,10 +3684,9 @@ final class UniversalVideoGalleryItemNode: ZoomableContentGalleryItemNode {
                     }
                 }
             } else {
-                let ghostBaseProtectedVideoSave = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.GallerySave") as? Bool) ?? true))
-                // MARK: GhostBase v0.8I one-time/timed video preview save gate
+                let ghostBaseProtectedVideoSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.GallerySave") as? Bool) ?? true))
                 if let (message, maybeFile, _) = strongSelf.contentInfo(), let file = maybeFile {
-                    let ghostBaseTimedVideoSave = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
+                    let ghostBaseTimedVideoSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
                     if (!item.isSecret || ghostBaseTimedVideoSave) && message.paidContent == nil && (ghostBaseProtectedVideoSave || (!message.isCopyProtected() && !item.peerIsCopyProtected) || ghostBaseTimedVideoSave) {
                     items.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Gallery_MenuSaveToGallery, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Download"), color: theme.actionSheet.primaryTextColor) }, action: { c, _ in
                         guard let self else {

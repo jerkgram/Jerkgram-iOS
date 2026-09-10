@@ -121,8 +121,7 @@ import ChatMediaInputStickerGridItem
 
 extension ChatControllerImpl {
     func openViewOnceMediaMessage(_ message: EngineMessage) {
-        // MARK: GhostBase v0.8G one-time screen recording gate
-        let ghostBaseAllowOneTimeScreenRecording = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenRecording") as? Bool) ?? false) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
+        let ghostBaseAllowOneTimeScreenRecording = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenRecording") as? Bool) ?? false) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
         if self.screenCaptureManager?.isRecordingActive == true && !ghostBaseAllowOneTimeScreenRecording {
             let controller = textAlertController(context: self.context, updatedPresentationData: self.updatedPresentationData, title: nil, text: self.presentationData.strings.Chat_PlayOnceMesasge_DisableScreenCapture, actions: [TextAlertAction(type: .defaultAction, title: self.presentationData.strings.Common_OK, action: {
             })])

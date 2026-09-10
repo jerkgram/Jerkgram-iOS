@@ -80,10 +80,7 @@ private func paidContentGroupType(paidContent: TelegramMediaPaidContent) -> Mess
 public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, contentSettings: ContentSettings, messages originalMessages: [EngineMessage], chatPeer: EngineRenderedPeer, accountPeerId: EnginePeer.Id, enableMediaEmoji: Bool = true, isPeerGroup: Bool = false) -> (peer: EnginePeer?, hideAuthor: Bool, messageText: String, messageEntities: [MessageTextEntity], spoilers: [NSRange]?, customEmojiRanges: [(NSRange, ChatTextInputTextCustomEmojiAttribute)]?, richTextPreview: NSAttributedString?) {
     let peer: EnginePeer?
 
-    // MARK: GhostBase v1.0T deleted chat-list preview filter
-    let ghostBaseShowDeleted = ((UserDefaults.standard.object(
-        forKey: "jerkgram.Messages.ShowDeleted"
-    ) as? Bool) ?? true)
+    let ghostBaseShowDeleted = ((JerkgramHotSettings.object(forKey: "jerkgram.Messages.ShowDeleted") as? Bool) ?? true)
 
     let messages: [EngineMessage]
     if ghostBaseShowDeleted {

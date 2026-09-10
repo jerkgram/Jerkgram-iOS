@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2G BUILD118_TEXT_DIFF1
 public enum JerkgramTextDiffOperation: Equatable {
     case equal(String)
     case insert(String)

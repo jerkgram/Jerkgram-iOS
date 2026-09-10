@@ -131,7 +131,6 @@ public enum TelegramPaidReactionPrivacy: Equatable, Codable {
     }
 }
 
-// MARK: GhostBase v1.0ZD PROFILEINTEL1 Core
 
 private func ghostBaseProfileIntelPeerSettingsText(
     label: String,
@@ -254,7 +253,6 @@ private func ghostBaseProfileIntelNormalizedUsername(
     return result
 }
 
-// MARK: GhostBase v1.0ZF PROFILEINTEL2 Core
 
 private struct GhostBaseProfileIntel2Security {
     let registrationMonth: String?
@@ -2410,7 +2408,6 @@ public extension TelegramEngine {
                             }
 
                             if events.isEmpty {
-                                // MARK: GhostBase v1.0ZG PROFILEINTEL2 no-change events are report-only
                                 // The current report may say that nothing changed, but the timeline stays clean.
                             }
 
@@ -2665,7 +2662,6 @@ public extension TelegramEngine {
             }
         }
 
-        // MARK: GhostBase v1.0ZB Bot getDifference Probe
         public func ghostBaseBotDifferenceProbe() -> Signal<String, NoError> {
             return self.account.postbox.transaction {
                 transaction -> AuthorizedAccountState.State? in
@@ -2788,7 +2784,6 @@ public extension TelegramEngine {
             }
         }
 
-        // MARK: GhostBase v1.0ZA Bot Account Capability Probe
         public func ghostBaseBotCapabilityProbe() -> Signal<String, NoError> {
             let localState =
                 self.account.postbox.transaction {
@@ -2881,7 +2876,6 @@ public extension TelegramEngine {
                     """)
                 }
 
-            // MARK: GhostBase v1.0ZE BOTSAFE1 capability guard
             let dialogs = Signal<String, NoError>.single("""
             messages.getDialogs
             blockedBy: BOTSAFE1

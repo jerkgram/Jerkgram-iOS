@@ -116,6 +116,7 @@ public final class AccountContextImpl: AccountContext {
     }
     public let account: Account
     public let engine: TelegramEngine
+    private let jerkgramBlockedPeersObserver: JerkgramBlockedPeersObserver?
     
     public let fetchManager: FetchManager
     public let prefetchManager: PrefetchManager?
@@ -277,6 +278,9 @@ public final class AccountContextImpl: AccountContext {
         self.sharedContextImpl = sharedContext
         self.account = account
         self.engine = TelegramEngine(account: account)
+        self.jerkgramBlockedPeersObserver = sharedContext.applicationBindings.isMainApp && !temp
+            ? JerkgramBlockedPeersObserver(account: account)
+            : nil
         
         self.imageCache = DirectMediaImageCache(account: account)
         

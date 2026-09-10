@@ -197,6 +197,44 @@ public func tagsForStoreMessage(incoming: Bool, attributes: [MessageAttribute], 
     return (tags, globalTags)
 }
 
+
+private func jerkgramBuild133FilteredActivityTags(
+    accountPeerId: PeerId,
+    chatPeerId: PeerId,
+    authorId: PeerId?,
+    attributes: [MessageAttribute],
+    tags: MessageTags
+) -> MessageTags {
+    var tags = tags
+
+    // Api.Message does not carry the TelegramChannelInfo required to
+    // distinguish a supergroup from a broadcast channel. Filter only legacy
+    // groups here; supergroups are filtered later where the full Message peer
+    // is available. Private chats and broadcast channels remain stock.
+    guard chatPeerId.namespace == Namespaces.Peer.CloudGroup else {
+        return tags
+    }
+
+    if tags.contains(.unseenPersonalMessage),
+       JerkgramBlockedReactionPolicy.hideBlockedMessages(accountPeerId: accountPeerId),
+       let authorId,
+       authorId != accountPeerId,
+       JerkgramBlockedReactionPolicy.isBlocked(accountPeerId: accountPeerId, peerId: authorId) {
+        tags.remove(.unseenPersonalMessage)
+    }
+
+    if tags.contains(.unseenReaction),
+       let attribute = attributes.first(where: { $0 is ReactionsMessageAttribute }) as? ReactionsMessageAttribute,
+       !JerkgramBlockedReactionPolicy.hasVisibleUnseenReactionInGroup(
+            accountPeerId: accountPeerId,
+            attribute: attribute
+       ) {
+        tags.remove(.unseenReaction)
+    }
+
+    return tags
+}
+
 func apiMessagePeerId(_ messsage: Api.Message) -> PeerId? {
     switch messsage {
         case let .message(messageData):
@@ -1478,7 +1516,14 @@ extension StoreMessage {
                 
                 let isPinned = (flags & (1 << 24)) != 0
                 
-                let (tags, globalTags) = tagsForStoreMessage(incoming: storeFlags.contains(.Incoming), attributes: attributes, media: medias, textEntities: entitiesAttribute?.entities, isPinned: isPinned)
+                let (jerkgramBuild133RawTags, globalTags) = tagsForStoreMessage(incoming: storeFlags.contains(.Incoming), attributes: attributes, media: medias, textEntities: entitiesAttribute?.entities, isPinned: isPinned)
+                let tags = jerkgramBuild133FilteredActivityTags(
+                    accountPeerId: accountPeerId,
+                    chatPeerId: peerId,
+                    authorId: authorId,
+                    attributes: attributes,
+                    tags: jerkgramBuild133RawTags
+                )
                 
                 storeFlags.insert(.CanBeGroupedIntoFeed)
                 
@@ -1622,7 +1667,14 @@ extension StoreMessage {
                     attributes.append(AutoremoveTimeoutMessageAttribute(timeout: ttlPeriod, countdownBeginTime: date))
                 }
                 
-                let (tags, globalTags) = tagsForStoreMessage(incoming: storeFlags.contains(.Incoming), attributes: attributes, media: media, textEntities: nil, isPinned: false)
+                let (jerkgramBuild133RawTags, globalTags) = tagsForStoreMessage(incoming: storeFlags.contains(.Incoming), attributes: attributes, media: media, textEntities: nil, isPinned: false)
+                let tags = jerkgramBuild133FilteredActivityTags(
+                    accountPeerId: accountPeerId,
+                    chatPeerId: peerId,
+                    authorId: authorId,
+                    attributes: attributes,
+                    tags: jerkgramBuild133RawTags
+                )
                 
                 storeFlags.insert(.CanBeGroupedIntoFeed)
                 

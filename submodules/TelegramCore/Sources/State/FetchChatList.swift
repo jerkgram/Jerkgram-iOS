@@ -238,7 +238,6 @@ struct FetchedChatList {
 }
 
 func fetchChatList(accountPeerId: PeerId, postbox: Postbox, network: Network, location: FetchChatListLocation, upperBound: MessageIndex, hash: Int64, limit: Int32) -> Signal<FetchedChatList?, NoError> {
-    // MARK: GhostBase v1.0ZC Bot local chat list
     if ghostBaseIsBotAccount(accountPeerId) {
         return .single(nil)
     }

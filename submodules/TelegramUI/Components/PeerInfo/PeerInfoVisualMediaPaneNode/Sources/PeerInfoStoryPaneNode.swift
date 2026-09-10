@@ -1156,7 +1156,7 @@ private final class SparseItemGridBindingImpl: SparseItemGridBinding {
     }
 
     func createLayer(item: SparseItemGrid.Item) -> SparseItemGridLayer? {
-        if let item = item as? VisualMediaItem, item.story.isForwardingDisabled && !(((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) {
+        if let item = item as? VisualMediaItem, item.story.isForwardingDisabled && !(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) {
             let layer = ItemLayer()
             setLayerDisableScreenshots(layer, true)
             return layer

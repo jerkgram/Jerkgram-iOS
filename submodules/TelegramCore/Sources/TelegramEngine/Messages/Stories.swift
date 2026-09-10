@@ -2071,7 +2071,6 @@ func _internal_deleteStories(account: Account, peerId: PeerId, ids: [Int32]) -> 
 }
 
 func _internal_markStoryAsSeen(account: Account, peerId: PeerId, id: Int32, asPinned: Bool) -> Signal<Never, NoError> {
-    // MARK: GhostBase v0.6C Story Read Ghost markStoryAsSeen guard
     let ghostBaseReadGhostExtras = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.ReadMessages") as? Bool) ?? false
     if ghostBaseReadGhostExtras {
         return .complete()

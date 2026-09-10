@@ -1,6 +1,5 @@
 import Foundation
 
-// MARK: Jerkgram v1.2E BUILD116_SETTINGS_FOUNDATION1
 public enum JerkgramSendStyleV1: String, Codable, CaseIterable {
     case normal
     case bold

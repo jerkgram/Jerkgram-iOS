@@ -43,7 +43,6 @@ private final class AccountPresenceManagerImpl {
     }
     
     private func updatePresence(_ isOnline: Bool) {
-        // MARK: GhostBase v0.6A Hide Online runtime
         let ghostBaseHideOnline = (UserDefaults.standard.object(forKey: "jerkgram.GhostMode.Presence") as? Bool) ?? false
         let effectiveIsOnline = ghostBaseHideOnline ? false : isOnline
 

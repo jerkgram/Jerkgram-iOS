@@ -5478,7 +5478,6 @@ final class GiftViewSheetComponent: CombinedComponent {
                 }
             }
             
-            // MARK: GhostBase v1.1R GIFT_READABLE_GLASS1
             let ghostBaseSheetColor =
                 environment.theme.actionSheet.opaqueItemBackgroundColor
                     .withAlphaComponent(

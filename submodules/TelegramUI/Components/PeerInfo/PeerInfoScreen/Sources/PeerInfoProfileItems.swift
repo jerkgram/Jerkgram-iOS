@@ -20,7 +20,6 @@ import BoostLevelIconComponent
 private let enabledPublicBioEntities: EnabledEntityTypes = [.allUrl, .mention, .hashtag]
 private let enabledPrivateBioEntities: EnabledEntityTypes = [.internalUrl, .mention, .hashtag]
 
-// MARK: GhostBase v1.1G PROFILEMETRICS1
 struct GhostBaseProfileMetricsSettings {
     let enabled: Bool
     let showIds: Bool
@@ -95,7 +94,6 @@ func infoItems(
     }
 
 
-    // MARK: GhostBase v1.1H PROFILEMETRICS2
     // These are normal Telegram labeled-value rows again. They belong to
     // peerInfo, not to a second standalone "Сведения" card.
     if ghostBaseMetricsSettings.enabled, let peer = data.peer {
@@ -299,7 +297,6 @@ func infoItems(
             ))
         }
         
-        // MARK: GhostBase v1.0U hide own phone profile
         let ghostBaseHideOwnPhone = ghostBaseMetricsSettings.hideOwnPhone
 
         if let phone = user.phone, !(ghostBaseHideOwnPhone && isMyProfile) {
@@ -1050,7 +1047,6 @@ func infoItems(
         }
     }
     
-    // MARK: Jerkgram v1.2L BUILD123_REMOVE_PRIVATE_LINK_PROBE1
 
     var result: [(AnyHashable, [PeerInfoScreenItem])] = []
     for section in InfoSection.allCases {

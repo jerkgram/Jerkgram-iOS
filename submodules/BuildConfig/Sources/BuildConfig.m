@@ -91,13 +91,6 @@ API_AVAILABLE(ios(10))
 
 @end
 
-// MARK: Jerkgram Build124 API identity proof
-#define JERKGRAM_BUILD124_STRINGIFY_INNER(value) #value
-#define JERKGRAM_BUILD124_STRINGIFY(value) JERKGRAM_BUILD124_STRINGIFY_INNER(value)
-__attribute__((used))
-static const char jerkgramBuild124ApiIdOwner[] =
-    "JERKGRAM_BUILD124_API_ID=" JERKGRAM_BUILD124_STRINGIFY(APP_CONFIG_API_ID);
-
 @implementation BuildConfig
 
 + (NSString *)bundleId {
@@ -507,7 +500,6 @@ static const char jerkgramBuild124ApiIdOwner[] =
 @end
 
 
-// MARK: Jerkgram v1.2E BUILD116_EXTENSION_DIAGNOSTICS1
 static NSString *JerkgramDiagnosticsDirectory(NSString *sharedContainerPath) {
     return [sharedContainerPath stringByAppendingPathComponent:@"telegram-data/jerkgram-extension-diagnostics"];
 }
@@ -606,7 +598,6 @@ static NSString *JerkgramResolvedDiagnosticsGroup(void) {
 }
 
 
-// MARK: Jerkgram v1.2F BUILD117_EXTENSION_BOUNDARY_CLASSIFIER1
 + (NSString *)jerkgramExtensionContainerClassificationForPath:(NSString *)path {
     if (path.length == 0) {
         return @"missing";

@@ -211,7 +211,6 @@ public final class AuthorizationSequencePhoneEntryController: ViewController, MF
         self.loadAndPresentPasskey(force: false)
     }
     
-    // MARK: GhostBase v1.0ZF BOTSAFE2 first bot login
     private func openGhostBaseBotLogin() {
         guard self.account != nil,
               !self.ghostBaseBotLoginOpening else {
@@ -286,7 +285,6 @@ public final class AuthorizationSequencePhoneEntryController: ViewController, MF
                         let text: String
 
                         switch error {
-                        // MARK: GhostBase v1.0ZH BOTDEDUPE1 duplicate UI
                         case .alreadyAdded:
                             text = self.presentationData.strings.jerkgram.botAlreadyAdded
 

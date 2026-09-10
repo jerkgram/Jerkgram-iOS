@@ -19,6 +19,236 @@ public enum BlockedPeersContextRemoveError {
     case generic
 }
 
+
+
+// A single per-account O(1) presentation cache. The server/Postbox reaction
+// attributes remain untouched; only presentation owners consult this policy.
+public enum JerkgramBlockedReactionPolicy {
+    public static let hideBlockedReactionsKey = "jerkgram.Messages.HideBlockedReactions"
+    public static let hideBlockedMessagesKey = "jerkgram.Messages.HideBlockedMessages"
+
+    private static let blockedPeerIdsByAccount = Atomic(value: [PeerId: Set<PeerId>]())
+
+    private struct JerkgramBuild137BlockedSettings {
+        let hideReactions: Bool
+        let hideMessages: Bool
+    }
+    private static let settingsByAccount = Atomic(value: [PeerId: JerkgramBuild137BlockedSettings]())
+
+    private static func settings(accountPeerId: PeerId) -> JerkgramBuild137BlockedSettings {
+        let result = self.settingsByAccount.modify { current in
+            if current[accountPeerId] != nil { return current }
+            let defaults = UserDefaults.standard
+            func value(_ key: String) -> Bool {
+                let scopedKey = "jerkgram.account.\(accountPeerId.toInt64()).setting.\(key)"
+                if let value = defaults.object(forKey: scopedKey) as? Bool { return value }
+                if let value = defaults.object(forKey: key) as? Bool { return value }
+                return true
+            }
+            let loaded = JerkgramBuild137BlockedSettings(
+                hideReactions: value(self.hideBlockedReactionsKey),
+                hideMessages: value(self.hideBlockedMessagesKey)
+            )
+            var current = current
+            current[accountPeerId] = loaded
+            return current
+        }
+        // Every closure path returns a dictionary containing this account.
+        return result[accountPeerId]!
+    }
+    private static let presentationRevision = Atomic(value: Int32(0))
+    private static let presentationRevisionPromise = ValuePromise<Int32>(0, ignoreRepeated: false)
+
+    public static var presentationUpdates: Signal<Int32, NoError> {
+        return self.presentationRevisionPromise.get()
+    }
+
+    public static var presentationRevisionValue: Int32 {
+        return self.presentationRevision.with { value in value }
+    }
+
+    private static func notifyPresentationChanged() {
+        let revision = self.presentationRevision.modify { current in
+            return current == Int32.max ? 0 : current + 1
+        }
+        self.presentationRevisionPromise.set(revision)
+    }
+
+    public static func notifySettingsChanged() {
+        let _ = self.settingsByAccount.modify { _ in [:] }
+        self.notifyPresentationChanged()
+    }
+
+    public static func replaceBlockedPeerIds(accountPeerId: PeerId, peerIds: Set<PeerId>) {
+        let previous = self.blockedPeerIdsByAccount.with { current in
+            return current[accountPeerId] ?? Set()
+        }
+        if previous == peerIds {
+            return
+        }
+        let _ = self.blockedPeerIdsByAccount.modify { current in
+            var current = current
+            current[accountPeerId] = peerIds
+            return current
+        }
+        self.notifyPresentationChanged()
+    }
+
+    public static func blockedPeerIds(accountPeerId: PeerId) -> Set<PeerId> {
+        return self.blockedPeerIdsByAccount.with { current in
+            return current[accountPeerId] ?? Set()
+        }
+    }
+
+    public static func isBlocked(accountPeerId: PeerId, peerId: PeerId) -> Bool {
+        return self.blockedPeerIdsByAccount.with { current in
+            return current[accountPeerId]?.contains(peerId) ?? false
+        }
+    }
+
+    public static func isGroupChat(_ peer: Peer?) -> Bool {
+        if peer is TelegramGroup {
+            return true
+        }
+        if let channel = peer as? TelegramChannel, case .group = channel.info {
+            return true
+        }
+        return false
+    }
+
+    public static func isGroupMessage(_ message: Message) -> Bool {
+        return self.isGroupChat(message.peers[message.id.peerId])
+    }
+
+    public static func hideBlockedReactions(accountPeerId: PeerId) -> Bool {
+        return self.settings(accountPeerId: accountPeerId).hideReactions
+    }
+
+    public static func hideBlockedMessages(accountPeerId: PeerId) -> Bool {
+        return self.settings(accountPeerId: accountPeerId).hideMessages
+    }
+
+    public static func isMessageHidden(accountPeerId: PeerId, message: Message) -> Bool {
+        return self.isMessageHidden(
+            accountPeerId: accountPeerId,
+            chatPeer: message.peers[message.id.peerId],
+            message: message
+        )
+    }
+
+    public static func isMessageHidden(
+        accountPeerId: PeerId,
+        chatPeer: Peer?,
+        message: Message
+    ) -> Bool {
+        guard self.isGroupChat(chatPeer) else {
+            return false
+        }
+        guard self.hideBlockedMessages(accountPeerId: accountPeerId) else {
+            return false
+        }
+        let authorId = message.author?.id
+        guard let authorId, authorId != accountPeerId else {
+            return false
+        }
+        return self.isBlocked(accountPeerId: accountPeerId, peerId: authorId)
+    }
+
+    public static func updateBlockedPeer(
+        accountPeerId: PeerId,
+        peerId: PeerId,
+        isBlocked: Bool
+    ) {
+        let previous = self.isBlocked(accountPeerId: accountPeerId, peerId: peerId)
+        if previous == isBlocked {
+            return
+        }
+        let _ = self.blockedPeerIdsByAccount.modify { current in
+            var current = current
+            var peerIds = current[accountPeerId] ?? Set()
+            if isBlocked {
+                peerIds.insert(peerId)
+            } else {
+                peerIds.remove(peerId)
+            }
+            current[accountPeerId] = peerIds
+            return current
+        }
+        self.notifyPresentationChanged()
+    }
+
+    public static func hasVisibleUnseenReactionInGroup(
+        accountPeerId: PeerId,
+        attribute: ReactionsMessageAttribute
+    ) -> Bool {
+        guard attribute.hasUnseen else {
+            return false
+        }
+        guard self.hideBlockedReactions(accountPeerId: accountPeerId) else {
+            return true
+        }
+
+        var sawUnseen = false
+        for recentPeer in attribute.recentPeers where recentPeer.isUnseen {
+            sawUnseen = true
+            if recentPeer.isMy || recentPeer.peerId == accountPeerId {
+                return true
+            }
+            if !self.isBlocked(accountPeerId: accountPeerId, peerId: recentPeer.peerId) {
+                return true
+            }
+        }
+
+        if !sawUnseen {
+            return true
+        }
+        return false
+    }
+
+    public static func hasVisibleUnseenReaction(
+        accountPeerId: PeerId,
+        message: Message,
+        attribute: ReactionsMessageAttribute
+    ) -> Bool {
+        guard self.isGroupMessage(message) else {
+            return attribute.hasUnseen
+        }
+        return self.hasVisibleUnseenReactionInGroup(
+            accountPeerId: accountPeerId,
+            attribute: attribute
+        )
+    }
+}
+
+// Retained once per live AccountContext. It owns the normal Telegram
+// BlockedPeersContext and drains all pages; there is no request per message.
+public final class JerkgramBlockedPeersObserver {
+    private let context: BlockedPeersContext
+    private let disposable = MetaDisposable()
+
+    public init(account: Account) {
+        assert(Queue.mainQueue().isCurrent())
+        let context = BlockedPeersContext(account: account, subject: .blocked)
+        self.context = context
+        self.disposable.set((context.state
+        |> deliverOnMainQueue).start(next: { state in
+            JerkgramBlockedReactionPolicy.replaceBlockedPeerIds(
+                accountPeerId: account.peerId,
+                peerIds: Set(state.peers.map { $0.peerId })
+            )
+            if state.canLoadMore && !state.isLoadingMore {
+                Queue.mainQueue().async {
+                    context.loadMore()
+                }
+            }
+        }))
+    }
+
+    deinit {
+        self.disposable.dispose()
+    }
+}
+
 public final class BlockedPeersContext {
     public enum Subject {
         case blocked
@@ -31,6 +261,12 @@ public final class BlockedPeersContext {
         didSet {
             if self._state != oldValue {
                 self._statePromise.set(.single(self._state))
+                if case .blocked = self.subject {
+                    JerkgramBlockedReactionPolicy.replaceBlockedPeerIds(
+                        accountPeerId: self.account.peerId,
+                        peerIds: Set(self._state.peers.map { $0.peerId })
+                    )
+                }
             }
         }
     }

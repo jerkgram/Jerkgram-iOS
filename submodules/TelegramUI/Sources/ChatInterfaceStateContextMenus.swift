@@ -1229,25 +1229,21 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             })))
         }
 
-        // MARK: GhostBase v1.0S edit-history visibility gate
-        let ghostBaseShowEditHistory = ((UserDefaults.standard.object(forKey: "jerkgram.Messages.ShowEditHistory") as? Bool) ?? true)
+        let ghostBaseShowEditHistory = ((JerkgramHotSettings.object(forKey: "jerkgram.Messages.ShowEditHistory") as? Bool) ?? true)
         let ghostBaseEditHistoryVersions = ghostBaseLoadEditHistoryVersions(message: messages[0])
 
         if ghostBaseShowEditHistory && !ghostBaseEditHistoryVersions.isEmpty {
-            actions.append(.action(ContextMenuActionItem(text: "История", icon: { theme in
+            actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.jerkgram.messageHistory, icon: { theme in
                 return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
             }, action: { _, f in
                 let contents = GhostBaseEditHistoryChatContents(baseMessage: messages[0], versions: ghostBaseEditHistoryVersions)
                 let controller = context.sharedContext.makeChatController(context: context, chatLocation: .customChatContents, subject: .customChatContents(contents: contents), botStart: nil, mode: .standard(.previewing), params: nil)
-                controller.title = "История"
+                controller.title = chatPresentationInterfaceState.strings.jerkgram.messageHistory
                 controllerInteraction.navigationController()?.pushViewController(controller)
                 f(.default)
             })))
         }
 
-        // MARK: GhostBase v1.0W official forward without author
-        // MARK: Jerkgram v1.2M BUILD124_SINGLE_FORWARD_ACCOUNT_SCOPE1
-        // Settings are account-scoped since Build118. Resolve the same value
         // for focused single-message actions, with the canonical jerkgram.*
         // key retained only as migration/default fallback.
         let legacyForwardWithoutAuthorKey = "jerkgram.Messages.ForwardWithoutAuthor"
@@ -1259,12 +1255,9 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             defaults.object(forKey: legacyForwardWithoutAuthorKey) as? Bool
         ) ?? true
 
-        // MARK: Jerkgram v1.2L BUILD123_PORTABLE_MENU_RESTRICTIONS1
-        // MARK: Jerkgram v1.2M BUILD124_SINGLE_FORWARD_TARGET_SCOPE1
         // Long-pressing one album item must validate that one item. Validating
         // the whole visual message group hid this action when an unrelated
         // neighbour was expired or unsupported.
-        // MARK: Jerkgram v1.2N BUILD125_SINGLE_FORWARD_DIRECT_ACTION1
         let jerkgramForwardWithoutAuthorTargets = selectAll ? messages : [message]
         if ghostBaseForwardWithoutAuthor,
            jerkgramForwardWithoutAuthorTargets.allSatisfy({ message in
@@ -1277,7 +1270,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
            }) {
             // data.messageActions.options.contains(.forward) survived portable gate
             actions.append(.action(ContextMenuActionItem(
-                text: "Переслать без автора",
+                text: chatPresentationInterfaceState.strings.jerkgram.forwardWithoutAuthor,
                 icon: { theme in
                     generateTintedImage(
                         image: UIImage(
@@ -1421,8 +1414,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         if !messageText.isEmpty || richMessageMarkdown != nil || (resourceAvailable && isImage) || diceEmoji != nil {
             if !isExpired {
                 if !isPoll {
-                    // MARK: GhostBase v0.8D chat copy action gate
-                    let ghostBaseProtectedChatCopy = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatCopy") as? Bool) ?? true) && !message.containsSecretMedia)
+                    let ghostBaseProtectedChatCopy = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatCopy") as? Bool) ?? true) && !message.containsSecretMedia)
                     if !isCopyProtected || ghostBaseProtectedChatCopy {
                         actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuCopy, icon: { theme in
                             return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
@@ -1568,13 +1560,10 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }
         }
 
-        // MARK: GhostBase v0.8D chat save action gate
-        let ghostBaseProtectedChatSave = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatSave") as? Bool) ?? true))
+        let ghostBaseProtectedChatSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatSave") as? Bool) ?? true))
 
-        // MARK: GhostBase v0.8I one-time/timed media long-press save gate
-        let ghostBaseTimedMediaSave = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
+        let ghostBaseTimedMediaSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil && message.minAutoremoveOrClearTimeout != nil)
 
-        // MARK: GhostBase v0.8I.1 timed image long-press resource bypass
         let ghostBaseTimedImageMediaSave = ghostBaseTimedMediaSave && message.media.contains(where: { $0 is TelegramMediaImage })
 
         if (resourceAvailable || ghostBaseTimedImageMediaSave), (!message.containsSecretMedia || ghostBaseTimedMediaSave) && (!isCopyProtected || ghostBaseProtectedChatSave || ghostBaseTimedMediaSave) {
@@ -2020,8 +2009,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         }
 
         if data.messageActions.options.contains(.forward) {
-            // MARK: GhostBase v0.8D chat forward menu gate
-            let ghostBaseProtectedChatForwardMenu = (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true) && !message.containsSecretMedia && message.paidContent == nil)
+            let ghostBaseProtectedChatForwardMenu = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true) && !message.containsSecretMedia && message.paidContent == nil)
             if !isCopyProtected || ghostBaseProtectedChatForwardMenu {
                 actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuForward, icon: { theme in
                     return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
@@ -2786,9 +2774,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                             }
                         }
                         if !message.containsSecretMedia && !isAction && !isShareProtected {
-                            // MARK: GhostBase v0.8D chat forward action gate
-                            // MARK: GhostBase v0.8D chat forward available gate
-                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && (!message.isCopyProtected() || (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true))) {
+                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && (!message.isCopyProtected() || (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true))) {
                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                     optionsMap[id]!.insert(.forward)
                                 }
@@ -2804,7 +2790,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                         }
                     } else if let group = peer as? TelegramGroup {
                         if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia {
-                            if !isAction && (!message.isCopyProtected() || (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true))) && !isShareProtected {
+                            if !isAction && (!message.isCopyProtected() || (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true))) && !isShareProtected {
                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                     optionsMap[id]!.insert(.forward)
                                 }
@@ -2823,7 +2809,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
                             optionsMap[id]!.insert(.report)
                         }
                     } else if let user = peer as? TelegramUser {
-                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && (!message.isCopyProtected() || (((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((UserDefaults.standard.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true))) && !isShareProtected {
+                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && (!message.isCopyProtected() || (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true))) && !isShareProtected {
                             if !(message.flags.isSending || message.flags.contains(.Failed)) {
                                 optionsMap[id]!.insert(.forward)
                             }
@@ -4119,7 +4105,6 @@ private final class ChatRateTranscriptionContextItemNode: ASDisplayNode, Context
         return self
     }
 }// MARK: GhostBase v0.9F.1 Native Edit History Chat
-// MARK: Jerkgram v1.2L BUILD123_HISTORY_ENTITIES1
 private struct GhostBaseEditHistoryVersion: Equatable {
     let index: Int
     let text: String
@@ -4172,7 +4157,6 @@ private func ghostBaseLoadEditHistoryVersions(message: Message) -> [GhostBaseEdi
         }
 
         if result.isEmpty, let originalText = attribute.originalText, originalText != message.text {
-            // MARK: Jerkgram v1.2M BUILD124_HISTORY_NATIVE_DATE1
             // Never synthesize a zero timestamp: Telegram's ordinary chat date
             // header is derived from the message timestamp. For legacy snapshots
             // the current EditedMessageAttribute is the best available edit-event
@@ -4195,7 +4179,6 @@ private func ghostBaseLoadEditHistoryVersions(message: Message) -> [GhostBaseEdi
         result = ghostBaseLoadEditHistoryVersions(messageId: message.id)
     }
 
-    // MARK: Jerkgram v1.2M BUILD124_HISTORY_NO_CURRENT_DUP1
     // `editHistoryTexts` already contains exactly one snapshot for each actual
     // edit event. The live message is not a historical version, so appending it
     // here made one edit appear as two rows/messages in «История».
