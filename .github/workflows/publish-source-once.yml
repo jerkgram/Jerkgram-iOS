@@ -431,14 +431,14 @@ jobs:
           IPA              Jerkgram-1.0.0.ipa
           Source archive   Jerkgram-1.0.0-source.zip
           Manifest         SOURCE_MANIFEST.sha256
-          ```'''.replace('          ', '')
+          ```'''
           new_naming = '''```text
           Git tag          v<VERSION>
           GitHub release   Jerkgram <VERSION>
           IPA              Jerkgram-<VERSION>.ipa
           Source archive   Jerkgram-<VERSION>-source.tar.xz
           Manifest         public-source-manifest.json
-          ```'''.replace('          ', '')
+          ```'''
           if text.count(old_naming) != 1:
               raise SystemExit('docs/RELEASES.md: naming block did not match exactly once')
           text = text.replace(old_naming, new_naming, 1)
@@ -450,7 +450,7 @@ jobs:
           - **Canonical release:** [Jerkgram 1.0.0](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.0)
           - **Canonical source tag:** `v1.0.0`
           - **Canonical IPA:** `Jerkgram-1.0.0.ipa`, attached to the GitHub Release above
-          - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)'''.replace('          ', '')
+          - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)'''
           new_current = '''## Current Stable
 
           Jerkgram 1.0.2 is the current Stable release.
@@ -458,7 +458,7 @@ jobs:
           - **Canonical release:** [Jerkgram 1.0.2](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.2)
           - **Canonical source tag:** `v1.0.2`
           - **Canonical IPA:** `Jerkgram-1.0.2.ipa`, attached to the GitHub Release above
-          - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)'''.replace('          ', '')
+          - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)'''
           if text.count(old_current) != 1:
               raise SystemExit('docs/RELEASES.md: Current Stable block did not match exactly once')
           releases.write_text(text.replace(old_current, new_current, 1), encoding='utf-8')
@@ -509,7 +509,7 @@ jobs:
           ## Build environment
 
           Jerkgram keeps the Telegram for iOS build system that is present in the corresponding release source. Local signing, provisioning and developer-specific configuration are intentionally not published as part of the Stable source record.
-          '''.replace('          ', ''), encoding='utf-8')
+          ''', encoding='utf-8')
           PY
 
       - name: Verify release metadata and public documentation
