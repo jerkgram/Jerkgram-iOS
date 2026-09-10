@@ -1,0 +1,596 @@
+name: Publish Jerkgram 1.0.2 source once
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jerkgram-v1.0.2-source-publish
+  cancel-in-progress: false
+
+env:
+  TAG: v1.0.2
+  VERSION: 1.0.2
+  BUILD_NUMBER: "138"
+  TELEGRAM_BASE: 12.9.2
+  UPSTREAM_TAG: release-12.9.2
+  UPSTREAM_COMMIT: 6ad963e5b62d354da79040f388ae2b9132fb17b8
+  IPA_NAME: Jerkgram-1.0.2.ipa
+  IPA_SHA256: b0dfe74816fc6b11562390733852390235768d6c1f5ae6fc9710314fd65030c0
+  IPA_SIZE: "87462123"
+  SOURCE_NAME: Jerkgram-1.0.2-source.tar.xz
+  SOURCE_SHA256: 5f0eb1e6dbfcd7d955eba10e6aa6caddfa755f2960e86aedb824a84e1b060731
+  SOURCE_SIZE: "183766204"
+  MANIFEST_NAME: public-source-manifest.json
+  MANIFEST_SHA256: b50c660c2d2069d8d51393e7f86696a23fd2ec1daddc21c5141127de4fdccbfb
+  MANIFEST_SIZE: "8756660"
+
+jobs:
+  publish-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.JERKGRAM_RELEASE_TOKEN }}
+
+      - name: Preflight repository state
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ secrets.JERKGRAM_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          test -n "$RELEASE_TOKEN" || {
+            echo "Repository secret JERKGRAM_RELEASE_TOKEN is missing." >&2
+            echo "It must be a token with Contents: read/write and Workflows: read/write for jerkgram/Jerkgram-iOS." >&2
+            exit 1
+          }
+
+          test "${GITHUB_REPOSITORY}" = "jerkgram/Jerkgram-iOS"
+          test "$(git branch --show-current)" = "main"
+          test -f .github/workflows/publish-source-once.yml
+
+          mapfile -t workflows < <(find .github/workflows -maxdepth 1 -type f -print | sort)
+          if [ "${#workflows[@]}" -ne 1 ] || [ "${workflows[0]}" != ".github/workflows/publish-source-once.yml" ]; then
+            printf 'Unexpected workflow files found:\n%s\n' "${workflows[*]:-<none>}" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists. Refusing to overwrite it." >&2
+            exit 1
+          fi
+
+      - name: Locate the draft release and required assets
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.JERKGRAM_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          release_json="$({
+            gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100"
+          } | jq -c --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | if length == 1 then .[0] else empty end')"
+
+          if [ -z "$release_json" ]; then
+            echo "Exactly one release draft for ${TAG} was not found." >&2
+            exit 1
+          fi
+
+          test "$(jq -r '.draft' <<<"$release_json")" = "true"
+          test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
+          test "$(jq -r '.name' <<<"$release_json")" = "Jerkgram 1.0.2"
+          test "$(jq -r '.target_commitish' <<<"$release_json")" = "main"
+
+          release_id="$(jq -r '.id' <<<"$release_json")"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+          for name in "$IPA_NAME" "$SOURCE_NAME" "$MANIFEST_NAME"; do
+            count="$(jq --arg name "$name" '[.assets[] | select(.name == $name)] | length' <<<"$release_json")"
+            if [ "$count" -ne 1 ]; then
+              echo "Expected exactly one release asset named ${name}; found ${count}." >&2
+              exit 1
+            fi
+          done
+
+          ipa_asset_id="$(jq -r --arg name "$IPA_NAME" '.assets[] | select(.name == $name) | .id' <<<"$release_json")"
+          source_asset_id="$(jq -r --arg name "$SOURCE_NAME" '.assets[] | select(.name == $name) | .id' <<<"$release_json")"
+          manifest_asset_id="$(jq -r --arg name "$MANIFEST_NAME" '.assets[] | select(.name == $name) | .id' <<<"$release_json")"
+
+          echo "ipa_asset_id=$ipa_asset_id" >> "$GITHUB_OUTPUT"
+          echo "source_asset_id=$source_asset_id" >> "$GITHUB_OUTPUT"
+          echo "manifest_asset_id=$manifest_asset_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download draft release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.JERKGRAM_RELEASE_TOKEN }}
+          IPA_ASSET_ID: ${{ steps.release.outputs.ipa_asset_id }}
+          SOURCE_ASSET_ID: ${{ steps.release.outputs.source_asset_id }}
+          MANIFEST_ASSET_ID: ${{ steps.release.outputs.manifest_asset_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-assets"
+
+          download_asset() {
+            local asset_id="$1"
+            local output="$2"
+            curl --fail --location --retry 3 --retry-delay 2 \
+              -H "Accept: application/octet-stream" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              --output "$output"
+          }
+
+          download_asset "$IPA_ASSET_ID" "$RUNNER_TEMP/release-assets/$IPA_NAME"
+          download_asset "$SOURCE_ASSET_ID" "$RUNNER_TEMP/release-assets/$SOURCE_NAME"
+          download_asset "$MANIFEST_ASSET_ID" "$RUNNER_TEMP/release-assets/$MANIFEST_NAME"
+
+      - name: Verify uploaded asset hashes and sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release-assets"
+
+          check_file() {
+            local file="$1"
+            local expected_sha="$2"
+            local expected_size="$3"
+            local actual_sha actual_size
+            actual_sha="$(sha256sum "$file" | awk '{print $1}')"
+            actual_size="$(stat -c '%s' "$file")"
+
+            test "$actual_sha" = "$expected_sha" || {
+              echo "SHA-256 mismatch for $file: $actual_sha" >&2
+              exit 1
+            }
+            test "$actual_size" = "$expected_size" || {
+              echo "Size mismatch for $file: $actual_size" >&2
+              exit 1
+            }
+          }
+
+          check_file "$IPA_NAME" "$IPA_SHA256" "$IPA_SIZE"
+          check_file "$SOURCE_NAME" "$SOURCE_SHA256" "$SOURCE_SIZE"
+          check_file "$MANIFEST_NAME" "$MANIFEST_SHA256" "$MANIFEST_SIZE"
+          xz -t "$SOURCE_NAME"
+
+      - name: Verify source archive against the public manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import posixpath
+          import tarfile
+          from pathlib import PurePosixPath
+          import os
+
+          temp = os.environ['RUNNER_TEMP']
+          source_name = os.environ['SOURCE_NAME']
+          manifest_name = os.environ['MANIFEST_NAME']
+          source_path = os.path.join(temp, 'release-assets', source_name)
+          manifest_path = os.path.join(temp, 'release-assets', manifest_name)
+          root = 'Jerkgram-1.0.2-source/'
+
+          with open(manifest_path, 'r', encoding='utf-8') as f:
+              manifest = json.load(f)
+
+          assert manifest['schemaVersion'] == 1
+          assert manifest['project'] == 'Jerkgram'
+          assert manifest['version'] == '1.0.2'
+          assert str(manifest['build']) == '138'
+          assert manifest['upstream'] == {
+              'repository': 'TelegramMessenger/Telegram-iOS',
+              'tag': 'release-12.9.2',
+              'commit': '6ad963e5b62d354da79040f388ae2b9132fb17b8',
+          }
+          assert manifest['sourceArchive'] == {
+              'filename': source_name,
+              'sha256': os.environ['SOURCE_SHA256'],
+              'size': int(os.environ['SOURCE_SIZE']),
+          }
+
+          expected = {}
+          for entry in manifest['files']:
+              path = entry['path']
+              assert path and not path.startswith('/') and '..' not in PurePosixPath(path).parts
+              assert path not in expected, f'duplicate manifest path: {path}'
+              expected[path] = entry
+
+          actual = {}
+          with tarfile.open(source_path, mode='r:xz') as tf:
+              for member in tf:
+                  name = member.name
+                  if name == root[:-1]:
+                      continue
+                  assert name.startswith(root), f'unexpected archive root: {name}'
+                  rel = name[len(root):]
+                  if not rel:
+                      continue
+                  parts = PurePosixPath(rel).parts
+                  assert not rel.startswith('/') and '..' not in parts, f'unsafe path: {rel}'
+                  assert parts[0] != '.git', f'.git is forbidden in source archive: {rel}'
+                  assert not rel.startswith('.github/workflows/'), f'workflow is forbidden in source archive: {rel}'
+
+                  mode = format(member.mode & 0o777, 'o')
+                  if member.isfile():
+                      f = tf.extractfile(member)
+                      assert f is not None
+                      h = hashlib.sha256()
+                      size = 0
+                      while True:
+                          chunk = f.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          h.update(chunk)
+                          size += len(chunk)
+                      actual[rel] = {
+                          'mode': mode,
+                          'path': rel,
+                          'sha256': h.hexdigest(),
+                          'size': size,
+                          'type': 'file',
+                      }
+                  elif member.issym():
+                      base = posixpath.dirname(rel)
+                      resolved = posixpath.normpath(posixpath.join(base, member.linkname))
+                      assert resolved != '..' and not resolved.startswith('../') and not resolved.startswith('/'), f'escaping symlink: {rel} -> {member.linkname}'
+                      actual[rel] = {
+                          'mode': mode,
+                          'path': rel,
+                          'target': member.linkname,
+                          'type': 'symlink',
+                      }
+                  elif member.isdir():
+                      continue
+                  else:
+                      raise AssertionError(f'unsupported tar member type: {rel}')
+
+          assert len(expected) == 44254, len(expected)
+          assert set(actual) == set(expected), f'leaf-set mismatch: actual={len(actual)} expected={len(expected)}'
+          for path, entry in expected.items():
+              assert actual[path] == entry, f'manifest mismatch: {path}'
+
+          print(f'Verified {len(expected)} source leaves against {manifest_name}.')
+          PY
+
+      - name: Extract verified source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_tree="$RUNNER_TEMP/source-tree"
+          rm -rf "$source_tree"
+          mkdir -p "$source_tree"
+          tar -xJf "$RUNNER_TEMP/release-assets/$SOURCE_NAME" \
+            --strip-components=1 \
+            -C "$source_tree"
+
+          test -f "$source_tree/submodules/TelegramPresentationData/Sources/JerkgramStrings.swift"
+          grep -Fq 'public static let displayVersion = "1.0.2"' "$source_tree/submodules/TelegramPresentationData/Sources/JerkgramStrings.swift"
+          grep -Fq 'public static let technicalVersion = "1.0.2"' "$source_tree/submodules/TelegramPresentationData/Sources/JerkgramStrings.swift"
+          grep -Fq 'public static let build = "138"' "$source_tree/submodules/TelegramPresentationData/Sources/JerkgramStrings.swift"
+          grep -Fq 'public static let telegramBase = "12.9.2"' "$source_tree/submodules/TelegramPresentationData/Sources/JerkgramStrings.swift"
+
+      - name: Preserve the public repository layer
+        shell: bash
+        run: |
+          set -euo pipefail
+          overlay="$RUNNER_TEMP/public-overlay"
+          rm -rf "$overlay"
+          mkdir -p "$overlay/docs"
+
+          for path in \
+            .github \
+            assets \
+            CONTRIBUTING.md \
+            LICENSE \
+            README.md \
+            README_RU.md \
+            SECURITY.md \
+            SUPPORT.md \
+            THIRD_PARTY_NOTICES.md \
+            UPSTREAM.md; do
+            test -e "$path" || { echo "Missing public overlay path: $path" >&2; exit 1; }
+            cp -a "$path" "$overlay/"
+          done
+
+          for path in \
+            docs/BUILDING.md \
+            docs/JERKGRAM_RELEASE.schema.json \
+            docs/RELEASES.md \
+            docs/RELEASE_TEMPLATE.md \
+            docs/SOURCE_TRANSPARENCY.md; do
+            test -f "$path" || { echo "Missing public overlay file: $path" >&2; exit 1; }
+            cp -a "$path" "$overlay/docs/"
+          done
+
+      - name: Replace source tree and restore public repository files
+        shell: bash
+        run: |
+          set -euo pipefail
+          overlay="$RUNNER_TEMP/public-overlay"
+          source_tree="$RUNNER_TEMP/source-tree"
+
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a "$source_tree"/. .
+
+          rm -rf .github assets
+          cp -a "$overlay/.github" .
+          cp -a "$overlay/assets" .
+
+          for path in \
+            CONTRIBUTING.md \
+            LICENSE \
+            README.md \
+            README_RU.md \
+            SECURITY.md \
+            SUPPORT.md \
+            THIRD_PARTY_NOTICES.md \
+            UPSTREAM.md; do
+            cp -a "$overlay/$path" "$path"
+          done
+
+          mkdir -p docs
+          for name in \
+            BUILDING.md \
+            JERKGRAM_RELEASE.schema.json \
+            RELEASES.md \
+            RELEASE_TEMPLATE.md \
+            SOURCE_TRANSPARENCY.md; do
+            cp -a "$overlay/docs/$name" "docs/$name"
+          done
+
+          cp "$RUNNER_TEMP/release-assets/$MANIFEST_NAME" "$MANIFEST_NAME"
+
+      - name: Write Jerkgram 1.0.2 release provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > JERKGRAM_RELEASE.json <<'JSON'
+          {
+            "$schema": "./docs/JERKGRAM_RELEASE.schema.json",
+            "schemaVersion": 1,
+            "project": "Jerkgram",
+            "repository": "jerkgram/Jerkgram-iOS",
+            "status": "stable",
+            "jerkgramVersion": "1.0.2",
+            "buildNumber": 138,
+            "upstream": {
+              "repository": "TelegramMessenger/Telegram-iOS",
+              "tag": "release-12.9.2",
+              "commit": "6ad963e5b62d354da79040f388ae2b9132fb17b8"
+            },
+            "publicSourceTag": "v1.0.2",
+            "ipa": {
+              "filename": "Jerkgram-1.0.2.ipa",
+              "sha256": "b0dfe74816fc6b11562390733852390235768d6c1f5ae6fc9710314fd65030c0"
+            },
+            "sourceSnapshot": {
+              "filename": "Jerkgram-1.0.2-source.tar.xz",
+              "sha256": "5f0eb1e6dbfcd7d955eba10e6aa6caddfa755f2960e86aedb824a84e1b060731"
+            },
+            "sourceManifest": {
+              "filename": "public-source-manifest.json",
+              "sha256": "b50c660c2d2069d8d51393e7f86696a23fd2ec1daddc21c5141127de4fdccbfb"
+            }
+          }
+          JSON
+
+      - name: Update public Stable documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one occurrence, found {count}: {old!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'README.md',
+              '> Jerkgram 1.0.0 is the first Stable public-source release. The canonical source tag is `v1.0.0`; release artifact hashes are recorded in `JERKGRAM_RELEASE.json`.',
+              '> Jerkgram 1.0.2 is the current Stable public-source release. The canonical source tag is `v1.0.2`; release artifact hashes are recorded in `JERKGRAM_RELEASE.json`.'
+          )
+          replace_once(
+              'README.md',
+              'The first Stable source snapshot will include release-verified build instructions for that exact tree.',
+              'Stable source snapshots use the release tree recorded in `JERKGRAM_RELEASE.json`; public build requirements are documented for the tagged source.'
+          )
+          replace_once(
+              'README_RU.md',
+              '> Сейчас Jerkgram готовит первый Stable-релиз с публичными исходниками. SHA-256 IPA и source tag намеренно не публикуются до появления окончательного Stable-артефакта.',
+              '> Jerkgram 1.0.2 — текущий Stable-релиз с публичными исходниками. Канонический source tag — `v1.0.2`; хеши артефактов зафиксированы в `JERKGRAM_RELEASE.json`.'
+          )
+          replace_once(
+              'README_RU.md',
+              'Первый Stable snapshot исходников получит build-инструкцию, проверенную именно против этого release tree.',
+              'Stable snapshot исходников использует release tree, зафиксированный в `JERKGRAM_RELEASE.json`; требования к публичной сборке описаны для соответствующего source tag.'
+          )
+
+          releases = Path('docs/RELEASES.md')
+          text = releases.read_text(encoding='utf-8')
+          old_naming = '''```text
+          Git tag          v1.0.0
+          GitHub release   Jerkgram 1.0.0
+          IPA              Jerkgram-1.0.0.ipa
+          Source archive   Jerkgram-1.0.0-source.zip
+          Manifest         SOURCE_MANIFEST.sha256
+          ```'''.replace('          ', '')
+          new_naming = '''```text
+          Git tag          v<VERSION>
+          GitHub release   Jerkgram <VERSION>
+          IPA              Jerkgram-<VERSION>.ipa
+          Source archive   Jerkgram-<VERSION>-source.tar.xz
+          Manifest         public-source-manifest.json
+          ```'''.replace('          ', '')
+          if text.count(old_naming) != 1:
+              raise SystemExit('docs/RELEASES.md: naming block did not match exactly once')
+          text = text.replace(old_naming, new_naming, 1)
+          text = text.replace('## First Stable release checklist', '## Stable release checklist', 1)
+          old_current = '''## Current Stable
+
+          Jerkgram 1.0.0 is the first Stable release.
+
+          - **Canonical release:** [Jerkgram 1.0.0](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.0)
+          - **Canonical source tag:** `v1.0.0`
+          - **Canonical IPA:** `Jerkgram-1.0.0.ipa`, attached to the GitHub Release above
+          - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)'''.replace('          ', '')
+          new_current = '''## Current Stable
+
+          Jerkgram 1.0.2 is the current Stable release.
+
+          - **Canonical release:** [Jerkgram 1.0.2](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.2)
+          - **Canonical source tag:** `v1.0.2`
+          - **Canonical IPA:** `Jerkgram-1.0.2.ipa`, attached to the GitHub Release above
+          - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)'''.replace('          ', '')
+          if text.count(old_current) != 1:
+              raise SystemExit('docs/RELEASES.md: Current Stable block did not match exactly once')
+          releases.write_text(text.replace(old_current, new_current, 1), encoding='utf-8')
+
+          template = Path('docs/RELEASE_TEMPLATE.md')
+          text = template.read_text(encoding='utf-8')
+          text = text.replace('Jerkgram-<VERSION>-source.zip', 'Jerkgram-<VERSION>-source.tar.xz')
+          text = text.replace('SOURCE_MANIFEST.sha256', 'public-source-manifest.json')
+          template.write_text(text, encoding='utf-8')
+
+          Path('docs/BUILDING.md').write_text('''# Building Jerkgram from Source
+
+          This guide describes the public build contract for Jerkgram Stable source snapshots.
+
+          ## Base
+
+          ```text
+          TelegramMessenger/Telegram-iOS
+          release-12.9.2
+          6ad963e5b62d354da79040f388ae2b9132fb17b8
+          ```
+
+          ## Stable source snapshot
+
+          The public Stable snapshot contains the release source tree and the corresponding build material included with that source, including the relevant Bazel/build definitions and source dependencies.
+
+          For Jerkgram 1.0.2, use the public source tag `v1.0.2` and verify the release metadata in `JERKGRAM_RELEASE.json` before building.
+
+          ## What you provide yourself
+
+          You are expected to provide your own:
+
+          - Telegram `api_id` / `api_hash`;
+          - Apple signing identity;
+          - provisioning setup;
+          - bundle identifiers and Apple configuration appropriate to your build.
+
+          The public repository does not provide personal certificates, provisioning profiles, private keys, user sessions or private secrets.
+
+          ## High-level flow
+
+          1. Check out the exact Stable source tag.
+          2. Verify `JERKGRAM_RELEASE.json` and `public-source-manifest.json`.
+          3. Configure your own Telegram API credentials and application identity.
+          4. Configure your own Apple signing environment.
+          5. Build using the build system included in the tagged release source tree.
+
+          ## Build environment
+
+          Jerkgram keeps the Telegram for iOS build system that is present in the corresponding release source. Local signing, provisioning and developer-specific configuration are intentionally not published as part of the Stable source record.
+          '''.replace('          ', ''), encoding='utf-8')
+          PY
+
+      - name: Verify release metadata and public documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          release = json.loads(Path('JERKGRAM_RELEASE.json').read_text(encoding='utf-8'))
+          assert release['status'] == 'stable'
+          assert release['jerkgramVersion'] == '1.0.2'
+          assert release['buildNumber'] == 138
+          assert release['publicSourceTag'] == 'v1.0.2'
+          assert release['ipa']['filename'] == 'Jerkgram-1.0.2.ipa'
+          assert release['ipa']['sha256'] == 'b0dfe74816fc6b11562390733852390235768d6c1f5ae6fc9710314fd65030c0'
+          assert release['sourceSnapshot']['sha256'] == '5f0eb1e6dbfcd7d955eba10e6aa6caddfa755f2960e86aedb824a84e1b060731'
+          assert release['sourceManifest']['sha256'] == 'b50c660c2d2069d8d51393e7f86696a23fd2ec1daddc21c5141127de4fdccbfb'
+
+          manifest = json.loads(Path('public-source-manifest.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == '1.0.2'
+          assert manifest['build'] == 138
+
+          assert 'Jerkgram 1.0.2 is the current Stable public-source release.' in Path('README.md').read_text(encoding='utf-8')
+          assert 'Jerkgram 1.0.2 — текущий Stable-релиз' in Path('README_RU.md').read_text(encoding='utf-8')
+          releases = Path('docs/RELEASES.md').read_text(encoding='utf-8')
+          assert 'Jerkgram 1.0.2 is the current Stable release.' in releases
+          assert 'Jerkgram-<VERSION>-source.tar.xz' in releases
+          assert 'public-source-manifest.json' in releases
+          assert 'before the first Stable snapshot' not in Path('docs/BUILDING.md').read_text(encoding='utf-8')
+          PY
+
+          test -f .github/workflows/publish-source-once.yml
+          test "$(find .github/workflows -maxdepth 1 -type f | wc -l)" -eq 1
+          test -z "$(find . -path './.git' -prune -o -name '*.ipa' -print -quit)"
+
+      - name: Commit, self-clean and tag Jerkgram 1.0.2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          rm -f .github/workflows/publish-source-once.yml
+          rmdir .github/workflows 2>/dev/null || true
+          test ! -e .github/workflows/publish-source-once.yml
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes detected; refusing to continue." >&2
+            exit 1
+          fi
+
+          git commit -m "Publish Jerkgram 1.0.2 source"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} appeared during the run. Refusing to move or overwrite it." >&2
+            exit 1
+          fi
+
+          final_commit="$(git rev-parse HEAD)"
+          git tag -a "$TAG" -m "Jerkgram 1.0.2"
+
+          # Push main and the release tag as one transaction: either both refs update or neither does.
+          git push --atomic origin HEAD:main "$TAG"
+
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          remote_tag="$(git ls-remote origin "refs/tags/${TAG}^{}" | awk '{print $1}')"
+
+          test "$remote_main" = "$final_commit"
+          test "$remote_tag" = "$final_commit"
+          echo "Jerkgram 1.0.2 source tag ${TAG} -> ${final_commit}"
+
+      - name: Confirm release is still a draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.JERKGRAM_RELEASE_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq '.draft')" = "true"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq '.tag_name')" = "$TAG"
+          echo "Source update complete. The GitHub Release remains a draft and must be published manually."
