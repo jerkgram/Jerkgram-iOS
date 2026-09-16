@@ -3,7 +3,7 @@
 <img src="assets/readme/hero.svg" alt="Jerkgram — Telegram, with more control." width="100%">
 
 <p align="center">
-  <a href="https://jerkgram.github.io/"><strong>Website</strong></a> ·
+  <a href="https://jerkgram.app/"><strong>Website</strong></a> ·
   <a href="https://github.com/jerkgram/Jerkgram-iOS/releases"><strong>Releases</strong></a> ·
   <a href="https://t.me/JerkgramApp"><strong>Stable channel</strong></a> ·
   <a href="https://t.me/JerkgramCommunity"><strong>Community</strong></a> ·
@@ -53,7 +53,7 @@ See [`UPSTREAM.md`](UPSTREAM.md) for the upstream relationship and comparison po
 
 ## See Jerkgram in action
 
-The [Jerkgram website](https://jerkgram.github.io/) contains the current product story and real interface captures, including recovery before/after examples. Repository visuals stay intentionally release-safe rather than fabricating screenshots that may drift from the eventual Stable UI.
+The [Jerkgram website](https://jerkgram.app/) contains the current product story and real interface captures, including recovery before/after examples. Repository visuals stay intentionally release-safe rather than fabricating screenshots that may drift from the eventual Stable UI.
 
 ## Source transparency
 
@@ -88,7 +88,7 @@ Each GitHub Stable release is the canonical release page for that version and is
 
 The Jerkgram website may link its **Download IPA** action directly to the IPA asset attached to the matching GitHub Release, while **View on GitHub** opens the full release page.
 
-**AltStore Classic** and **SideStore** use the official Jerkgram AltStore source at [`https://jerkgram.github.io/altstore-source.json`](https://jerkgram.github.io/altstore-source.json). The source contains metadata only: both channels install and update from the same canonical GitHub Release IPA, and SideStore does not use a separate Jerkgram JSON feed.
+**AltStore Classic** and **SideStore** use the official Jerkgram AltStore source at [`https://jerkgram.github.io/altstore-source.json`](https://jerkgram.app/altstore-source.json). The source contains metadata only: both channels install and update from the same canonical GitHub Release IPA, and SideStore does not use a separate Jerkgram JSON feed.
 
 Beta testing, bug reports and feedback live in [@JerkgramCommunity](https://t.me/JerkgramCommunity).
 
