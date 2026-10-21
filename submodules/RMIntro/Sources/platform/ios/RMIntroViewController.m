@@ -76,7 +76,7 @@ typedef enum {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-
+    
     if (_onLayout) {
         _onLayout();
     }
@@ -88,25 +88,25 @@ typedef enum {
 {
     id _didEnterBackgroundObserver;
     id _willEnterBackgroundObserver;
-
+    
     UIColor *_backgroundColor;
     UIColor *_primaryColor;
     UIColor *_buttonColor;
     UIColor *_accentColor;
     UIColor *_regularDotColor;
     UIColor *_highlightedDotColor;
-
+    
     TGModernButton *_alternativeLanguageButton;
-
+    
     SMetaDisposable *_localizationsDisposable;
     TGSuggestedLocalization *_alternativeLocalizationInfo;
-
+    
     SVariable *_alternativeLocalization;
     NSDictionary<NSString *, NSString *> *_englishStrings;
-
+    
     UIView *_wrapperView;
     UIView *_startButton;
-
+    
     bool _loadedView;
 }
 @end
@@ -120,14 +120,14 @@ typedef enum {
     if (self != nil)
     {
         _isEnabled = true;
-
+        
         _backgroundColor = backgroundColor;
         _primaryColor = primaryColor;
         _buttonColor = buttonColor;
         _accentColor = accentColor;
         _regularDotColor = regularDotColor;
         _highlightedDotColor = highlightedDotColor;
-
+                
         NSArray<NSString *> *stringKeys = @[
             @"Tour.Title1",
             @"Tour.Title2",
@@ -143,7 +143,7 @@ typedef enum {
             @"Tour.Text6",
             @"Tour.StartButton"
         ];
-
+        
         NSMutableDictionary *englishStrings = [[NSMutableDictionary alloc] init];
         NSBundle *bundle = [NSBundle bundleWithPath:[[NSBundle mainBundle] pathForResource:@"en" ofType:@"lproj"]];
         for (NSString *key in stringKeys) {
@@ -159,44 +159,44 @@ typedef enum {
             }
         }
         _englishStrings = englishStrings;
-
+        
         _headlines = @[ _englishStrings[@"Tour.Title1"], _englishStrings[@"Tour.Title2"],  _englishStrings[@"Tour.Title6"], _englishStrings[@"Tour.Title3"], _englishStrings[@"Tour.Title4"], _englishStrings[@"Tour.Title5"]];
         _descriptions = @[_englishStrings[@"Tour.Text1"], _englishStrings[@"Tour.Text2"],  _englishStrings[@"Tour.Text6"], _englishStrings[@"Tour.Text3"], _englishStrings[@"Tour.Text4"], _englishStrings[@"Tour.Text5"]];
-
+        
         __weak RMIntroViewController *weakSelf = self;
         _didEnterBackgroundObserver = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:nil usingBlock:^(__unused NSNotification *notification)
         {
             __strong RMIntroViewController *strongSelf = weakSelf;
             [strongSelf stopTimer];
         }];
-
+        
         _willEnterBackgroundObserver = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:nil usingBlock:^(__unused NSNotification *notification)
         {
             __strong RMIntroViewController *strongSelf = weakSelf;
             [strongSelf loadGL];
             [strongSelf startTimer];
         }];
-
+        
         _alternativeLanguageButton = [[TGModernButton alloc] init];
         _alternativeLanguageButton.modernHighlight = true;
         [_alternativeLanguageButton setTitleColor:accentColor];
-
+        
         _alternativeLanguageButton.titleLabel.font = [UIFont systemFontOfSize:18.0];
         _alternativeLanguageButton.hidden = true;
         [_alternativeLanguageButton addTarget:self action:@selector(alternativeLanguageButtonPressed) forControlEvents:UIControlEventTouchUpInside];
-
+        
         _alternativeLocalization = [[SVariable alloc] init];
-
+        
         _localizationsDisposable = [[suggestedLocalizationSignal deliverOn:[SQueue mainQueue]] startStrictWithNext:^(TGSuggestedLocalization *next) {
             __strong RMIntroViewController *strongSelf = weakSelf;
             if (strongSelf != nil && next != nil) {
                 if (strongSelf->_alternativeLocalizationInfo == nil) {
                     strongSelf->_alternativeLocalizationInfo = next;
-
+                    
                     [strongSelf->_alternativeLanguageButton setTitle:next.continueWithLanguageString forState:UIControlStateNormal];
                     strongSelf->_alternativeLanguageButton.hidden = false;
                     [strongSelf->_alternativeLanguageButton sizeToFit];
-
+                    
                     if ([strongSelf isViewLoaded]) {
                         strongSelf->_alternativeLanguageButton.alpha = 0.0;
                         [UIView animateWithDuration:0.3 animations:^{
@@ -232,22 +232,22 @@ typedef enum {
 - (void)animateIn {
     CGPoint logoTargetPosition = _glkView.center;
     _glkView.center = CGPointMake(self.view.bounds.size.width / 2.0, self.view.bounds.size.height / 2.0);
-
+    
     RMIntroPageView *firstPage = (RMIntroPageView *)[_pageViews firstObject];
     CGPoint headerTargetPosition = firstPage.headerLabel.center;
     firstPage.headerLabel.center = CGPointMake(headerTargetPosition.x, headerTargetPosition.y + 140.0);
-
+    
     CGPoint descriptionTargetPosition = firstPage.descriptionLabel.center;
     firstPage.descriptionLabel.center = CGPointMake(descriptionTargetPosition.x, descriptionTargetPosition.y + 160.0);
-
+    
     CGPoint pageControlTargetPosition = _pageControl.center;
     _pageControl.center = CGPointMake(pageControlTargetPosition.x, pageControlTargetPosition.y + 200.0);
-
+    
     CGPoint buttonTargetPosition = _startButton.center;
     _startButton.center = CGPointMake(buttonTargetPosition.x, buttonTargetPosition.y + 220.0);
-
+    
     _glkView.transform = CGAffineTransformMakeScale(0.66, 0.66);
-
+        
     [UIView animateWithDuration:0.65 delay:0.15 usingSpringWithDamping:1.2f initialSpringVelocity:0.0 options:kNilOptions animations:^{
         _glkView.center = logoTargetPosition;
         firstPage.headerLabel.center = headerTargetPosition;
@@ -256,12 +256,12 @@ typedef enum {
         _startButton.center = buttonTargetPosition;
         _glkView.transform = CGAffineTransformIdentity;
     } completion:nil];
-
+    
     _glkView.alpha = 0.0;
     _pageScrollView.alpha = 0.0;
     _pageControl.alpha = 0.0;
     _startButton.alpha = 0.0;
-
+    
     [UIView animateWithDuration:0.3 delay:0.15 options:kNilOptions animations:^{
         _glkView.alpha = 1.0;
         _pageScrollView.alpha = 1.0;
@@ -275,23 +275,23 @@ typedef enum {
 #if TARGET_OS_SIMULATOR && defined(__aarch64__)
     return;
 #endif
-
+    
     if (/*[[UIApplication sharedApplication] applicationState] != UIApplicationStateBackground*/true && !_isOpenGLLoaded)
     {
         _context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
         if (!_context)
             NSLog(@"Failed to create ES context");
-
+        
         bool isIpad = ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad);
-
+        
         CGFloat size = 200;
         if (isIpad)
             size *= 1.2;
-
+        
         int height = 50;
         if (isIpad)
             height += 138 / 2;
-
+        
         _glkView = [[GLKView alloc] initWithFrame:CGRectMake(self.view.bounds.size.width / 2 - size / 2, height, size, size) context:_context];
         _glkView.backgroundColor = _backgroundColor;
         _glkView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
@@ -300,10 +300,10 @@ typedef enum {
         _glkView.enableSetNeedsDisplay = false;
         _glkView.userInteractionEnabled = false;
         _glkView.delegate = self;
-
+        
         [self setupGL];
         [self.view addSubview:_glkView];
-
+        
         [self startTimer];
         _isOpenGLLoaded = true;
     }
@@ -315,7 +315,7 @@ typedef enum {
         return;
 
     [self stopTimer];
-
+    
     if ([EAGLContext currentContext] == _glkView.context)
         [EAGLContext setCurrentContext:nil];
 
@@ -334,26 +334,26 @@ typedef enum {
             [strongSelf updateLayout];
         }
     };
-
+    
     [self viewDidLoad];
 }
 
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-
+    
     if (_loadedView) {
         return;
     }
     _loadedView = true;
-
+    
     self.view.backgroundColor = _backgroundColor;
-
+    
     [self loadGL];
-
+    
     _wrapperView = [[UIScrollView alloc]initWithFrame:self.view.bounds];
     [self.view addSubview:_wrapperView];
-
+    
     _pageScrollView = [[UIScrollView alloc]initWithFrame:self.view.bounds];
     _pageScrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
     _pageScrollView.clipsToBounds = true;
@@ -365,9 +365,9 @@ typedef enum {
     _pageScrollView.contentSize = CGSizeMake(_headlines.count * self.view.bounds.size.width, self.view.bounds.size.height);
     _pageScrollView.delegate = self;
     [_wrapperView addSubview:_pageScrollView];
-
+    
     _pageViews = [NSMutableArray array];
-
+    
     for (NSUInteger i = 0; i < _headlines.count; i++)
     {
         RMIntroPageView *p = [[RMIntroPageView alloc]initWithFrame:CGRectMake(i * self.view.bounds.size.width, 0, self.view.bounds.size.width, 0) headline:[_headlines objectAtIndex:i] description:[_descriptions objectAtIndex:i] color:_primaryColor];
@@ -377,9 +377,9 @@ typedef enum {
         [_pageScrollView addSubview:p];
     }
     [_pageScrollView setPage:0];
-
+    
     [self.view addSubview:_alternativeLanguageButton];
-
+    
     _pageControl = [[UIPageControl alloc] init];
     _pageControl.autoresizingMask = UIViewAutoresizingFlexibleBottomMargin;
     _pageControl.userInteractionEnabled = false;
@@ -406,7 +406,7 @@ typedef enum {
 {
     if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad)
         return true;
-
+    
     return false;
 }
 
@@ -414,7 +414,7 @@ typedef enum {
 {
     if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad)
         return UIInterfaceOrientationMaskAll;
-
+    
     return UIInterfaceOrientationMaskPortrait;
 }
 
@@ -422,9 +422,9 @@ typedef enum {
 {
     CGSize viewSize = self.view.frame.size;
     int max = (int)MAX(viewSize.width, viewSize.height);
-
+    
     DeviceScreen deviceScreen = Inch55;
-
+    
     if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad)
     {
         switch (max)
@@ -432,7 +432,7 @@ typedef enum {
             case 1366:
                 deviceScreen = iPadPro;
                 break;
-
+                
             default:
                 deviceScreen = iPad;
                 break;
@@ -459,24 +459,24 @@ typedef enum {
                 break;
         }
     }
-
+    
     return deviceScreen;
 }
 
 - (void)updateLayout
 {
     UIInterfaceOrientation isVertical = (self.view.bounds.size.height / self.view.bounds.size.width > 1.0f);
-
+    
     CGFloat statusBarHeight = 0;
-
+    
     CGFloat pageControlY = 0;
     CGFloat glViewY = 0;
     CGFloat startButtonY = 0;
     CGFloat pageY = 0;
-
+    
     CGFloat languageButtonSpread = 60.0f;
     CGFloat languageButtonOffset = 26.0f;
-
+    
     DeviceScreen deviceScreen = [self deviceScreen];
     switch (deviceScreen)
     {
@@ -486,14 +486,14 @@ typedef enum {
             pageY = isVertical ? 485 : 335;
             pageControlY = pageY + 200.0f;
             break;
-
+            
         case iPadPro:
             glViewY = isVertical ? 221 + 110 : 221;
             startButtonY = 120;
             pageY = isVertical ? 605 : 435;
             pageControlY = pageY + 200.0f;
             break;
-
+            
         case Inch35:
             pageControlY = 162 / 2;
             glViewY = 62 - 20;
@@ -509,7 +509,7 @@ typedef enum {
             languageButtonSpread = 65.0f;
             languageButtonOffset = 15.0f;
             break;
-
+            
         case Inch4:
             glViewY = 62;
             startButtonY = 75;
@@ -518,7 +518,7 @@ typedef enum {
             languageButtonSpread = 50.0f;
             languageButtonOffset = 20.0f;
             break;
-
+            
         case Inch47:
             pageControlY = 162 / 2 + 10;
             glViewY = 62 + 25;
@@ -526,32 +526,32 @@ typedef enum {
             pageY = 245 + 50;
             pageControlY = pageY + 160.0f;
             break;
-
+            
         case Inch55:
             glViewY = 62 + 45;
             startButtonY = 75 + 20;
             pageY = 245 + 85;
             pageControlY = pageY + 160.0f;
             break;
-
+            
         case Inch65:
             glViewY = 62 + 85;
             startButtonY = 75 + 30;
             pageY = 245 + 125;
             pageControlY = pageY + 160.0f;
             break;
-
+            
         default:
             break;
     }
-
+    
     if (!_alternativeLanguageButton.isHidden) {
         startButtonY += languageButtonSpread;
     }
-
+    
     _pageControl.frame = CGRectMake(0, pageControlY, self.view.bounds.size.width, 7);
     _glkView.frame = CGRectChangedOriginY(_glkView.frame, glViewY - statusBarHeight);
-
+    
     CGFloat startButtonWidth = MIN(430.0 - 48.0, self.view.bounds.size.width - 48.0f);
     UIView *startButton = self.createStartButton(startButtonWidth);
     if (startButton.superview == nil) {
@@ -559,14 +559,14 @@ typedef enum {
         [self.view addSubview:startButton];
     }
     startButton.frame = CGRectMake(floor((self.view.bounds.size.width - startButtonWidth) / 2.0f), self.view.bounds.size.height - startButtonY - statusBarHeight - 60.0f, startButtonWidth, 110.0f);
-
+    
     _alternativeLanguageButton.frame = CGRectMake(floor((self.view.bounds.size.width - _alternativeLanguageButton.frame.size.width) / 2.0f), CGRectGetMaxY(startButton.frame) + languageButtonOffset, _alternativeLanguageButton.frame.size.width, _alternativeLanguageButton.frame.size.height);
-
+    
     _wrapperView.frame = CGRectMake(0, 0, self.view.bounds.size.width, self.view.bounds.size.height);
     _pageScrollView.frame=CGRectMake(0, 20, self.view.bounds.size.width, self.view.bounds.size.height - 20);
     _pageScrollView.contentSize=CGSizeMake(_headlines.count * self.view.bounds.size.width, 150);
     _pageScrollView.contentOffset = CGPointMake(_currentPage * self.view.bounds.size.width, 0);
-
+    
     [_pageViews enumerateObjectsUsingBlock:^(UIView *pageView, NSUInteger index, __unused BOOL *stop) {
         pageView.frame = CGRectMake(index * self.view.bounds.size.width, (pageY - statusBarHeight), self.view.bounds.size.width, 150);
     }];
@@ -575,14 +575,14 @@ typedef enum {
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
-
+    
     [self loadGL];
 }
 
 - (void)viewDidDisappear:(BOOL)animated
 {
     [super viewDidDisappear:animated];
-
+    
     [self freeGL];
 }
 
@@ -602,18 +602,18 @@ typedef enum {
 {
     [[NSNotificationCenter defaultCenter] removeObserver:_didEnterBackgroundObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_willEnterBackgroundObserver];
-
+    
     [_localizationsDisposable dispose];
-
+    
     [self freeGL];
 }
 
 - (void)setupGL
 {
     [EAGLContext setCurrentContext:_glkView.context];
-
+    
     UIColor *color = _backgroundColor;
-
+    
     CGFloat red = 0.0f;
     CGFloat green = 0.0f;
     CGFloat blue = 0.0f;
@@ -623,19 +623,19 @@ typedef enum {
         blue = red;
     }
     set_intro_background_color(red, green, blue);
-
+    
     set_telegram_textures(setup_texture(@"telegram_sphere.png", color), setup_texture(@"telegram_plane1.png", color));
-
+    
     set_ic_textures(setup_texture(@"ic_bubble_dot.png", color), setup_texture(@"ic_bubble.png", color), setup_texture(@"ic_cam_lens.png", color), setup_texture(@"ic_cam.png", color), setup_texture(@"ic_pencil.png", color), setup_texture(@"ic_pin.png", color), setup_texture(@"ic_smile_eye.png", color), setup_texture(@"ic_smile.png", color), setup_texture(@"ic_videocam.png", color));
-
+    
     set_fast_textures(setup_texture(@"fast_body.png", color), setup_texture(@"fast_spiral.png", color), setup_texture(@"fast_arrow.png", color), setup_texture(@"fast_arrow_shadow.png", color));
-
+    
     set_free_textures(setup_texture(@"knot_up1.png", color), setup_texture(@"knot_down.png", color));
-
+    
     set_powerful_textures(setup_texture(@"powerful_mask.png", color), setup_texture(@"powerful_star.png", color), setup_texture(@"powerful_infinity.png", color), setup_texture(@"powerful_infinity_white.png", color));
-
+    
     set_private_textures(setup_texture(@"private_door.png", color), setup_texture(@"private_screw.png", color));
-
+    
     on_surface_created();
     on_surface_changed(200, 200, 1, 0,0,0,0,0);
 }
@@ -645,10 +645,10 @@ typedef enum {
 - (void)glkView:(GLKView *)__unused view drawInRect:(CGRect)__unused rect
 {
     double time = CFAbsoluteTimeGetCurrent();
-
+    
     set_page((int)_currentPage);
     set_date(time);
-
+    
     on_draw_frame();
 }
 
@@ -666,28 +666,28 @@ NSInteger _current_page_end;
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView
 {
     CGFloat offset = (scrollView.contentOffset.x - _currentPage * scrollView.frame.size.width) / self.view.frame.size.width;
-
+    
     set_scroll_offset((float)offset);
-
+    
     if (justEndDragging)
     {
         justEndDragging = false;
-
+        
         CGFloat page = scrollView.contentOffset.x / scrollView.frame.size.width;
         CGFloat sign = scrollView.contentOffset.x - x;
-
+        
         if (sign > 0)
         {
             if (page > _currentPage)
                 _currentPage++;
         }
-
+        
         if (sign < 0)
         {
             if (page < _currentPage)
                 _currentPage--;
         }
-
+        
         _currentPage = MAX(0, MIN(5, _currentPage));
         _current_page_end = _currentPage;
     }
@@ -709,7 +709,7 @@ NSInteger _current_page_end;
             }
         }
     }
-
+    
     [_pageControl setCurrentPage:_currentPage];
 }
 

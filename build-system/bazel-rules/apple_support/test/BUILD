@@ -4,6 +4,7 @@ load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test", "objc_library")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//rules:apple_genrule.bzl", "apple_genrule")
+load("//xcode:xcode_config.bzl", "xcode_config")
 load(":apple_support_test.bzl", "apple_support_test")
 load(":available_xcodes_test.bzl", "available_xcodes_test")
 load(":binary_tests.bzl", "binary_test_suite")
@@ -12,6 +13,7 @@ load(":compiling_tests.bzl", "compiling_test_suite")
 load(":linking_tests.bzl", "linking_test_suite")
 load(":sanitizer_tests.bzl", "sanitizer_test_suite")
 load(":starlark_apple_binary.bzl", "starlark_apple_binary")
+load(":toolchains_test.bzl", "toolchain_config_test_suite")
 load(":universal_binary_test.bzl", "universal_binary_test")
 load(":xcode_config_test.bzl", "xcode_config_test")
 load(":xcode_support_test.bzl", "xcode_support_test")
@@ -31,6 +33,8 @@ compiling_test_suite(name = "compiling")
 linking_test_suite(name = "linking")
 
 sanitizer_test_suite(name = "sanitizer")
+
+toolchain_config_test_suite(name = "toolchain_config")
 
 xcode_config_test(name = "xcode_config_test")
 
@@ -73,6 +77,7 @@ bzl_library(
         "//xcode:available_xcodes",
         "//xcode:xcode_config",
         "//xcode:xcode_version",
+        "//xcode/private:providers",
         "@bazel_skylib//lib:unittest",
     ],
 )
@@ -95,14 +100,6 @@ universal_binary_test(
     ],
     cpu = "darwin_arm64",
     target_under_test = "//test/test_data:multi_arch_cc_binary",
-)
-
-# Consumed by bazel tests.
-filegroup(
-    name = "for_bazel_tests",
-    testonly = True,
-    srcs = glob(["**"]),
-    visibility = ["//test/shell:__pkg__"],
 )
 
 cc_binary(
@@ -199,4 +196,10 @@ cc_shared_library(
     name = "nested_library_so",
     dynamic_deps = [":loadable_library_so"],
     deps = [":nested_library"],
+)
+
+xcode_config(
+    name = "empty_xcode_config",
+    tags = ["manual"],  # TODO: Remove when we drop 7.x
+    versions = [],
 )

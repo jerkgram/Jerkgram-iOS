@@ -1,5 +1,8 @@
 """Tests for compilation behavior."""
 
+load("@bazel_features//:features.bzl", "bazel_features")
+load("@rules_cc//cc/toolchains:args.bzl", "cc_args")
+load("@rules_cc//cc/toolchains:feature.bzl", "cc_feature")
 load(
     "//test/rules:action_command_line_test.bzl",
     "make_action_command_line_test_rule",
@@ -10,10 +13,25 @@ default_test = make_action_command_line_test_rule()
 copt_order_test = make_action_command_line_test_rule(
     config_settings = {
         "//command_line_option:compilation_mode": "opt",
+        "//command_line_option:conlyopt": ["-DFROM_CONLY_FLAG=1"],
         "//command_line_option:copt": ["-DFROM_COPTS_FLAG=1"],
         "//command_line_option:cxxopt": ["-DFROM_CXX_FLAG=1"],
         "//command_line_option:objccopt": ["-DFROM_OBJCCOPTS_FLAG=1"],
         "//command_line_option:process_headers_in_dependencies": "true",
+    },
+)
+
+extra_enabled_features_order_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:compilation_mode": "opt",
+        str(Label("//toolchain:extra_enabled_features")): str(Label("//test:compiling_extra_enabled_feature")),
+    },
+)
+
+extra_known_features_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:features": ["apple_support_test_extra_known_feature"],
+        str(Label("//toolchain:extra_known_features")): str(Label("//test:compiling_extra_known_feature")),
     },
 )
 
@@ -53,6 +71,14 @@ save_temps_test = make_action_command_line_test_rule(
     },
 )
 
+empty_xcodes_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:xcode_version_config": str(Label(
+            "//test:empty_xcode_config",
+        )),
+    },
+)
+
 disable_ns_block_assertions_feature_test = make_action_command_line_test_rule(
     config_settings = {
         "//command_line_option:compilation_mode": "opt",
@@ -68,6 +94,32 @@ def compiling_test_suite(name):
     Args:
         name: The name to be included in test names and tags.
     """
+    cc_args(
+        name = "{}_extra_enabled_feature_args".format(name),
+        actions = ["@rules_cc//cc/toolchains/actions:compile_actions"],
+        args = ["-DFROM_EXTRA_ENABLED_FEATURE=1"],
+    )
+
+    cc_feature(
+        name = "{}_extra_enabled_feature".format(name),
+        feature_name = "apple_support_test_extra_enabled_feature",
+        args = [":{}_extra_enabled_feature_args".format(name)],
+        visibility = ["//visibility:public"],
+    )
+
+    cc_args(
+        name = "{}_extra_known_feature_args".format(name),
+        actions = ["@rules_cc//cc/toolchains/actions:compile_actions"],
+        args = ["-DFROM_EXTRA_KNOWN_FEATURE=1"],
+    )
+
+    cc_feature(
+        name = "{}_extra_known_feature".format(name),
+        feature_name = "apple_support_test_extra_known_feature",
+        args = [":{}_extra_known_feature_args".format(name)],
+        visibility = ["//visibility:public"],
+    )
+
     default_test(
         name = "{}_default_apple_macos_compile_test".format(name),
         tags = [name],
@@ -178,6 +230,18 @@ def compiling_test_suite(name):
         mnemonic = "ObjcCompile",
         target_under_test = "//test/test_data:objc_lib",
     )
+
+    if bazel_features.apple.xcode_config_migrated:
+        empty_xcodes_test(
+            name = "{}_empty_xcodes_target_test".format(name),
+            tags = [name],
+            expected_argv = [
+                "-target",
+                "arm64-apple-macosx10.11",
+            ],
+            mnemonic = "CppCompile",
+            target_under_test = "//test/test_data:cc_lib",
+        )
 
     default_test(
         name = "{}_macos_objc_compile_test".format(name),
@@ -295,6 +359,34 @@ def compiling_test_suite(name):
         target_under_test = "//test/test_data:cc_lib",
     )
 
+    extra_enabled_features_order_test(
+        name = "{}_extra_enabled_features_order_test".format(name),
+        tags = [
+            name,
+            "requires_rules_based_toolchain",
+        ],
+        expected_argv = [
+            "-DCOPTS_ENV=1",
+            "-DFROM_EXTRA_ENABLED_FEATURE=1",
+            "-DFROM_BUILD_COPTS=1",
+        ],
+        mnemonic = "CppCompile",
+        target_under_test = "//test/test_data:cc_lib",
+    )
+
+    extra_known_features_test(
+        name = "{}_extra_known_features_test".format(name),
+        tags = [
+            name,
+            "requires_rules_based_toolchain",
+        ],
+        expected_argv = [
+            "-DFROM_EXTRA_KNOWN_FEATURE=1",
+        ],
+        mnemonic = "CppCompile",
+        target_under_test = "//test/test_data:cc_lib",
+    )
+
     copt_order_test(
         name = "{}_header_parsing_copt_order_test".format(name),
         tags = [name],
@@ -304,7 +396,11 @@ def compiling_test_suite(name):
             "-O2",  # From --compilation_mode=opt
             "-isysroot",
             "__BAZEL_XCODE_SDKROOT__",
+            "-DCOPTS_ENV=1",
+            "-std=c++17",
+            "-DCXXOPTS_ENV=1",
             "-DFROM_COPTS_FLAG=1",
+            "-DFROM_CXX_FLAG=1",
             "-D__DATE__=\"redacted\"",
             "test/header_parsing/valid_header.h",
             "-o",
@@ -312,9 +408,38 @@ def compiling_test_suite(name):
         ],
         not_expected_argv = [
             "-c",  # Produces a clang warning since we don't compile anything in this action
+            "-DCONLY_ENV=1",
+            "-DFROM_CONLY_FLAG=1",
         ],
         mnemonic = "CppCompile",
         target_under_test = "//test/header_parsing:valid_header",
+    )
+
+    copt_order_test(
+        name = "{}_header_parsing_as_c_copt_order_test".format(name),
+        tags = [name],
+        expected_argv = [
+            "-xc-header",
+            "-fsyntax-only",
+            "-O2",  # From --compilation_mode=opt
+            "-isysroot",
+            "__BAZEL_XCODE_SDKROOT__",
+            "-DCOPTS_ENV=1",
+            "-DCONLY_ENV=1",
+            "-DFROM_COPTS_FLAG=1",
+            "-D__DATE__=\"redacted\"",
+            "test/header_parsing/c_only_header.h",
+            "-o",
+            "$(BIN_DIR)/test/header_parsing/_objs/c_only_header/c_only_header.h.processed",
+        ],
+        not_expected_argv = [
+            "-c",  # Produces a clang warning since we don't compile anything in this action
+            "-xc++-header",
+            "-std=c++17",
+            "-DCXXOPTS_ENV=1",
+        ],
+        mnemonic = "CppCompile",
+        target_under_test = "//test/header_parsing:c_only_header",
     )
 
     default_test(

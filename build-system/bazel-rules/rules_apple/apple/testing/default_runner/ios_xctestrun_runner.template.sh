@@ -21,6 +21,7 @@ custom_xcodebuild_args=(%(xcodebuild_args)s)
 device_id=""
 command_line_args=(%(command_line_args)s)
 attachment_lifetime="%(attachment_lifetime)s"
+screen_capture_format="%(screen_capture_format)s"
 destination_timeout="%(destination_timeout)s"
 while [[ $# -gt 0 ]]; do
   arg="$1"
@@ -37,6 +38,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --xctestrun_attachment_lifetime=*)
       attachment_lifetime="${arg##*=}"
+      ;;
+    --xctestrun_screen_capture_format=*)
+      screen_capture_format="${arg##*=}"
       ;;
     *)
       echo "error: Unsupported argument '${arg}'" >&2
@@ -335,6 +339,105 @@ if [[ -n "$main_thread_checker_dyld_env" ]]; then
   fi
 fi
 
+# Emits the inner body of a `[Skip|Only]TestingIdentifiers` <dict> for the given
+# "Class/method" identifiers: a `suites` bucket (Swift Testing) and an
+# `xctestClasses` bucket (XCTest), grouping every method under a single entry per
+# class. Each identifier is placed in both buckets; the bucket that doesn't match
+# the test's framework is a no-op at runtime.
+#
+# Example: `testing_identifiers_dict_body FooTests/testA FooTests/testB` emits
+#
+#       <key>suites</key>
+#       <array>
+#         <dict>
+#           <key>name</key>
+#           <string>FooTests</string>
+#           <key>testFunctions</key>
+#           <array>
+#             <string>testA</string>
+#             <string>testB</string>
+#           </array>
+#         </dict>
+#       </array>
+#       <key>xctestClasses</key>
+#       <array>
+#         <dict>
+#           <key>name</key>
+#           <string>FooTests</string>
+#           <key>xctestMethods</key>
+#           <array>
+#             <string>testA</string>
+#             <string>testB</string>
+#           </array>
+#         </dict>
+#       </array>
+function testing_identifiers_dict_body() {
+  local -a class_names=()    # ordered, unique class names
+  local -a class_methods=()  # parallel: newline-joined methods per class
+  local identifier class method index i
+
+  # Group the test identifiers into the class names array and the parallel class methods array
+  for identifier in "$@"; do
+    if [[ -z "$identifier" ]]; then
+      continue;
+    fi
+
+    if [[ "$identifier" == */* ]]; then
+      class="${identifier%%/*}"
+      method="${identifier#*/}"
+    else
+      class="$identifier"
+      method=""
+    fi
+
+    # Find this class's index, or append a new slot.
+    index=-1
+    for (( i = 0; i < ${#class_names[@]}; i++ )); do
+      if [[ "${class_names[$i]}" == "$class" ]]; then
+        index=$i
+        break
+      fi
+    done
+    if (( index < 0 )); then
+      class_names+=("$class")
+      class_methods+=("")
+      index=$(( ${#class_names[@]} - 1 ))
+    fi
+
+    # Append the method to this class's list.
+    if [[ -n "$method" ]]; then
+      class_methods[$index]="${class_methods[$index]}${method}"$'\n'
+    fi
+  done
+
+  # Render the shared list of <dict> entries once. The two buckets are identical
+  # apart from the per-method key name, so emit it as a placeholder here and
+  # substitute the real key when wrapping each bucket below.
+  local dicts=""
+  local -a method_names
+  for (( i = 0; i < ${#class_names[@]}; i++ )); do
+    dicts="${dicts}        <dict>\n          <key>name</key>\n          <string>${class_names[$i]}</string>\n"
+    if [[ -n "${class_methods[$i]}" ]]; then
+      # Split this class's newline-joined methods into an array so they can be
+      # printed with a single printf.
+      local saved_IFS=$IFS
+      IFS=$'\n'
+      method_names=(${class_methods[$i]})
+      IFS=$saved_IFS
+
+      dicts="${dicts}          <key>@METHOD_KEY@</key>\n          <array>\n"
+      dicts="${dicts}$(printf '            <string>%s</string>\\n' "${method_names[@]}")"
+      dicts="${dicts}          </array>\n"
+    fi
+    dicts="${dicts}        </dict>\n"
+  done
+
+  # Wrap the shared entries in each bucket, substituting the per-method key
+  printf '%s' \
+    "      <key>suites</key>\n      <array>\n${dicts//@METHOD_KEY@/testFunctions}      </array>\n" \
+    "      <key>xctestClasses</key>\n      <array>\n${dicts//@METHOD_KEY@/xctestMethods}      </array>\n"
+}
+
 TEST_FILTER="%(test_filter)s"
 xctestrun_skip_test_section=""
 xctestrun_only_test_section=""
@@ -353,39 +456,30 @@ if [[ -n "${TESTBRIDGE_TEST_ONLY:-}" || -n "${TEST_FILTER:-}" ]]; then
     ALL_TESTS="$TEST_FILTER"
   fi
 
+  SKIP_TESTS_ARRAY=()
+  ONLY_TESTS_ARRAY=()
   saved_IFS=$IFS
   IFS=","; for TEST in $ALL_TESTS; do
     if [[ $TEST == -* ]]; then
-      if [[ -n "${SKIP_TESTS:-}" ]]; then
-        SKIP_TESTS+=",${TEST:1}"
-      else
-        SKIP_TESTS="${TEST:1}"
-      fi
+      SKIP_TESTS_ARRAY+=("${TEST:1}")
     else
-      if [[ -n "${ONLY_TESTS:-}" ]]; then
-          ONLY_TESTS+=",$TEST"
-      else
-          ONLY_TESTS="$TEST"
-      fi
+      ONLY_TESTS_ARRAY+=("$TEST")
     fi
   done
-
   IFS=$saved_IFS
 
-  if [[ -n "${SKIP_TESTS:-}" ]]; then
-    xctestrun_skip_test_section="\n"
-    for skip_test in ${SKIP_TESTS//,/ }; do
-      xctestrun_skip_test_section+="      <string>$skip_test</string>\n"
-    done
-    xctestrun_skip_test_section="    <key>SkipTestIdentifiers</key>\n    <array>$xctestrun_skip_test_section    </array>"
+  # Starting with Xcode 26.4, Swift Testing tests are only filtered when using the
+  # newer `[Skip|Only]TestingIdentifiers` dicts. Emit both the newer format and
+  # the legacy `[Skip|Only]TestIdentifiers` arrays. When the dictionary entries
+  # are present, Xcode ignores the legacy flat arrays.
+  if (( ${#SKIP_TESTS_ARRAY[@]} )); then
+    xctestrun_skip_test_section="    <key>SkipTestIdentifiers</key>\n    <array>\n$(printf '      <string>%s</string>\\n' "${SKIP_TESTS_ARRAY[@]}")    </array>"
+    xctestrun_skip_test_section="$xctestrun_skip_test_section\n    <key>SkipTestingIdentifiers</key>\n    <dict>\n$(testing_identifiers_dict_body "${SKIP_TESTS_ARRAY[@]}")    </dict>"
   fi
 
-  if [[ -n "${ONLY_TESTS:-}" ]]; then
-    xctestrun_only_test_section="\n"
-    for only_test in ${ONLY_TESTS//,/ }; do
-      xctestrun_only_test_section+="      <string>$only_test</string>\n"
-    done
-    xctestrun_only_test_section="    <key>OnlyTestIdentifiers</key>\n    <array>$xctestrun_only_test_section    </array>"
+  if (( ${#ONLY_TESTS_ARRAY[@]} )); then
+    xctestrun_only_test_section="    <key>OnlyTestIdentifiers</key>\n    <array>\n$(printf '      <string>%s</string>\\n' "${ONLY_TESTS_ARRAY[@]}")    </array>"
+    xctestrun_only_test_section="$xctestrun_only_test_section\n    <key>OnlyTestingIdentifiers</key>\n    <dict>\n$(testing_identifiers_dict_body "${ONLY_TESTS_ARRAY[@]}")    </dict>"
   fi
 fi
 
@@ -399,7 +493,12 @@ fi
 
 simulator_id="unused"
 if [[ "$build_for_device" == false ]]; then
-  simulator_id="$(SIMULATOR_DEVICE_TYPE="%(device_type)s" SIMULATOR_OS_VERSION="%(os_version)s" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" "%(create_simulator_action_binary)s")"
+  if [[ -z "%(device_type)s" ]]; then
+    echo "error: to create a simulator; the device type must always be set on the test runner or with the ios_simulator_device build setting" >&2
+    exit 1
+  fi
+
+  simulator_id="$(SIMULATOR_DEVICE_TYPE="%(device_type)s" SIMULATOR_OS_VERSION="%(os_version)s" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" SIMULATOR_SDK_VERSION="%(sdk_version)s" XCTESTRUN_RUNNER_PID="${BASHPID:-$$}" "%(create_simulator_action_binary)s")"
 fi
 
 test_exit_code=0
@@ -443,6 +542,16 @@ if (( ${#custom_xcodebuild_args[@]} )); then
   echo "note: Using 'xcodebuild' because '--xcodebuild_args' was provided"
   should_use_xcodebuild=true
 fi
+if [[ -n "$screen_capture_format" ]]; then
+  echo "note: Using 'xcodebuild' because a screen capture format was requested"
+  should_use_xcodebuild=true
+  # The capture is only observable in the XCResult bundle, so force one.
+  create_xcresult_bundle=true
+  if [[ "$attachment_lifetime" == "keepNever" ]]; then
+    echo "error: 'screen_capture_format' requires 'attachment_lifetime' to be 'keepAlways' or 'deleteOnSuccess'; with 'keepNever' the capture would be discarded before it reaches the .xcresult bundle" >&2
+    exit 1
+  fi
+fi
 
 # Run a pre-action binary, if provided.
 pre_action_binary=%(pre_action_binary)s
@@ -461,6 +570,14 @@ if [[ "$should_use_xcodebuild" == true ]]; then
   xctestrun_attachment_lifetime_section+="    <key>UserAttachmentLifetime</key>\n"
   xctestrun_attachment_lifetime_section+="    <string>$attachment_lifetime</string>"
 
+  # Set the preferred screen capture format (Xcode 15+). Left empty when the
+  # attribute is unset so we don't override Xcode's platform default.
+  xctestrun_screen_capture_format_section=""
+  if [[ -n "$screen_capture_format" ]]; then
+    xctestrun_screen_capture_format_section+="    <key>PreferredScreenCaptureFormat</key>\n"
+    xctestrun_screen_capture_format_section+="    <string>$screen_capture_format</string>"
+  fi
+
   readonly xctestrun_file="$test_tmp_dir/tests.xctestrun"
   /usr/bin/sed \
     -e "s${sed_delim}BAZEL_INSERT_LIBRARIES${sed_delim}$xctestrun_libraries${sed_delim}g" \
@@ -478,6 +595,7 @@ if [[ "$should_use_xcodebuild" == true ]]; then
     -e "s${sed_delim}BAZEL_COVERAGE_OUTPUT_DIR${sed_delim}$test_tmp_dir${sed_delim}g" \
     -e "s${sed_delim}BAZEL_COMMAND_LINE_ARGS_SECTION${sed_delim}$xctestrun_cmd_line_args_section${sed_delim}g" \
     -e "s${sed_delim}BAZEL_ATTACHMENT_LIFETIME_SECTION${sed_delim}$xctestrun_attachment_lifetime_section${sed_delim}g" \
+    -e "s${sed_delim}BAZEL_SCREEN_CAPTURE_FORMAT_SECTION${sed_delim}$xctestrun_screen_capture_format_section${sed_delim}g" \
     -e "s${sed_delim}BAZEL_SKIP_TEST_SECTION${sed_delim}$xctestrun_skip_test_section${sed_delim}g" \
     -e "s${sed_delim}BAZEL_ONLY_TEST_SECTION${sed_delim}$xctestrun_only_test_section${sed_delim}g" \
     -e "s${sed_delim}BAZEL_ARCHITECTURE${sed_delim}$architecture${sed_delim}g" \
@@ -496,6 +614,16 @@ if [[ "$should_use_xcodebuild" == true ]]; then
   args=(
     -xctestrun "$xctestrun_file" \
   )
+
+  # Contain everything xcodebuild writes to disk. Without -derivedDataPath,
+  # every invocation creates a ~/Library/Developer/Xcode/DerivedData/
+  # temporary-<hash>/ directory that nothing ever deletes: when no result
+  # bundle path is passed it receives a full .xcresult of the run, and even
+  # with one it still leaks a bookkeeping directory per run. Pointing derived
+  # data into the test's temp dir routes all of it somewhere the runner
+  # already deletes on exit. An explicit -resultBundlePath (below, or via
+  # xcodebuild_args) still wins for the result bundle itself.
+  args+=(-derivedDataPath "$test_tmp_dir/derived_data")
 
   if [[ -n "$destination_timeout" ]]; then
     args+=(-destination-timeout "$destination_timeout")
@@ -657,7 +785,7 @@ if [[
   rm -r "$result_bundle_path"
 fi
 
-SIMULATOR_UDID="$simulator_id" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" "%(clean_up_simulator_action_binary)s"
+SIMULATOR_UDID="$simulator_id" SIMULATOR_REUSE_SIMULATOR="${reuse_simulator:-}" XCTESTRUN_RUNNER_PID="${BASHPID:-$$}" "%(clean_up_simulator_action_binary)s"
 
 if [[ "$post_action_determines_exit_code" == true ]]; then
   if [[ "$post_action_exit_code" -ne 0 ]]; then

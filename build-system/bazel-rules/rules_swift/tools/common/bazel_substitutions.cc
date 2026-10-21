@@ -43,30 +43,31 @@ static const char kBazelXcodeSdkRoot[] = "__BAZEL_XCODE_SDKROOT__";
 // Either way, swift binaries are expected to be found at this location under
 // usr/bin, swift standard libraries are expected to be found at usr/lib/swift,
 // etc...
-static const char kBazelSwiftToolchainPath[] =
-    "__BAZEL_SWIFT_TOOLCHAIN_PATH__";
+static const char kBazelSwiftToolchainPath[] = "__BAZEL_SWIFT_TOOLCHAIN_PATH__";
 
 // Returns the value of the given environment variable, or the empty string if
 // it wasn't set.
-std::string GetAppleEnvironmentVariable(const char *name) {
-#if !defined(__APPLE__)
-  return "";
-#endif
-
-  char *env_value = getenv(name);
+std::string GetAppleEnvironmentVariable(const char* name) {
+  char* env_value = getenv(name);
   if (env_value == nullptr) {
-    std::cerr << "error: required Apple environment variable '" << name << "' was not set. Please file an issue on bazelbuild/rules_swift.\n";
+    std::cerr
+        << "error: required Apple environment variable '" << name
+        << "' was not set. Please file an issue on bazelbuild/rules_swift.\n";
     exit(EXIT_FAILURE);
   }
   return env_value;
 }
 
 std::string GetToolchainPath() {
-#if !defined(__APPLE__)
-  return "";
-#endif
+  // If TOOLCHAIN_PATH is set, we will use that as a toolchain path.
+  // Otherwise, we will try to derive it from DEVELOPER_DIR and TOOLCHAINS
+  // using xcrun by calling GetToolchainPath().
+  char* toolchain_path = getenv("TOOLCHAIN_PATH");
+  if (toolchain_path != nullptr) {
+    return std::string(toolchain_path);
+  }
 
-  char *toolchain_id = getenv("TOOLCHAINS");
+  char* toolchain_id = getenv("TOOLCHAINS");
   std::ostringstream output_stream;
   int exit_code =
       RunSubProcess({"/usr/bin/xcrun", "--find", "clang"},
@@ -82,8 +83,9 @@ std::string GetToolchainPath() {
     std::cerr << "Error: TOOLCHAINS was set to '" << toolchain_id
               << "' but no toolchain with that ID was found" << std::endl;
     exit(EXIT_FAILURE);
-  } else if ((toolchain_id != nullptr)
-             && output_stream.str().find("XcodeDefault.xctoolchain") != std::string::npos) {
+  } else if ((toolchain_id != nullptr) &&
+             output_stream.str().find("XcodeDefault.xctoolchain") !=
+                 std::string::npos) {
     // NOTE: Ideally xcrun would fail if the toolchain we asked for didn't exist
     // but it falls back to the DEVELOPER_DIR instead, so we have to check the
     // output ourselves.
@@ -94,9 +96,9 @@ std::string GetToolchainPath() {
     exit(EXIT_FAILURE);
   }
 
-  std::filesystem::path toolchain_path(output_stream.str());
+  std::filesystem::path clang_path(output_stream.str());
   // Remove usr/bin/clang components to get the root of the custom toolchain
-  return toolchain_path.parent_path().parent_path().parent_path().string();
+  return clang_path.parent_path().parent_path().parent_path().string();
 }
 
 }  // namespace
@@ -114,15 +116,14 @@ BazelPlaceholderSubstitutions::BazelPlaceholderSubstitutions() {
          return GetAppleEnvironmentVariable("SDKROOT");
        })},
       {kBazelSwiftToolchainPath,
-       PlaceholderResolver([]() { return GetToolchainPath(); })},
-  };
+       PlaceholderResolver([]() { return GetToolchainPath(); })}};
 }
 
-bool BazelPlaceholderSubstitutions::Apply(std::string &arg) {
+bool BazelPlaceholderSubstitutions::Apply(std::string& arg) {
   bool changed = false;
 
   // Replace placeholders in the string with their actual values.
-  for (auto &pair : placeholder_resolvers_) {
+  for (auto& pair : placeholder_resolvers_) {
     changed |= FindAndReplace(pair.first, pair.second, arg);
   }
 
@@ -130,9 +131,9 @@ bool BazelPlaceholderSubstitutions::Apply(std::string &arg) {
 }
 
 bool BazelPlaceholderSubstitutions::FindAndReplace(
-    const std::string &placeholder,
-    BazelPlaceholderSubstitutions::PlaceholderResolver &resolver,
-    std::string &str) {
+    const std::string& placeholder,
+    BazelPlaceholderSubstitutions::PlaceholderResolver& resolver,
+    std::string& str) {
   int start = 0;
   bool changed = false;
   while ((start = str.find(placeholder, start)) != std::string::npos) {

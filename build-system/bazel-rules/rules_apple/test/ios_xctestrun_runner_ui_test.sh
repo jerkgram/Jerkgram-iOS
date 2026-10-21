@@ -27,15 +27,15 @@ function tear_down() {
 function create_sim_runners() {
   cat > ios/BUILD <<EOF
 load(
-    "@build_bazel_rules_apple//apple:ios.bzl",
+    "@rules_apple//apple:ios.bzl",
     "ios_application",
     "ios_ui_test"
  )
-load("@build_bazel_rules_swift//swift:swift.bzl",
+load("@rules_swift//swift:swift.bzl",
      "swift_library"
 )
 load(
-    "@build_bazel_rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl",
+    "@rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl",
     "ios_xctestrun_runner"
 )
 load("@rules_cc//cc:objc_library.bzl", "objc_library")
@@ -87,7 +87,7 @@ ios_application(
     families = ["iphone"],
     infoplists = ["Info.plist"],
     minimum_os_version = "${MIN_OS_IOS_NPLUS1}",
-    provisioning_profile = "@build_bazel_rules_apple//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    provisioning_profile = "@rules_apple//test/testdata/provisioning:integration_testing_ios.mobileprovision",
     deps = [":app_lib"],
 )
 EOF
@@ -478,6 +478,55 @@ function test_ios_ui_test_attachment_lifetime_arg() {
     expect_log "<string>deleteOnSuccess</string>"
     expect_log "<key>UserAttachmentLifetime</key>"
     expect_log "<string>deleteOnSuccess</string>"
+}
+
+function test_ios_ui_test_default_screen_capture_format_arg() {
+  create_sim_runners
+  create_ios_app
+  create_ios_ui_tests
+  do_ios_test \
+    --test_env=DEBUG_XCTESTRUNNER=1 \
+    --test_filter=PassingUITest/testPass2 \
+    //ios:PassingUITest || fail "should pass"
+
+    # When unset, PreferredScreenCaptureFormat must not be emitted so we don't
+    # override Xcode's platform default.
+    expect_not_log "<key>PreferredScreenCaptureFormat</key>"
+}
+
+function test_ios_ui_test_screen_capture_format_keep_never_fails() {
+  create_sim_runners
+  create_ios_app
+  create_ios_ui_tests
+  # Screen captures are system attachments; with the default
+  # attachment_lifetime of "keepNever" the capture would be silently
+  # discarded, so the runner must fail instead.
+  ! do_ios_test \
+    --test_filter=PassingUITest/testPass2 \
+    --test_arg=--xctestrun_screen_capture_format=screenRecording \
+    //ios:PassingUITest || fail "should fail"
+
+    expect_log "error: 'screen_capture_format' requires 'attachment_lifetime' to be 'keepAlways' or 'deleteOnSuccess'"
+}
+
+function test_ios_ui_test_screen_capture_format_arg() {
+  create_sim_runners
+  create_ios_app
+  create_ios_ui_tests
+  # Screen captures are system attachments, so attachment_lifetime must not
+  # be "keepNever" or the capture is discarded before landing in .xcresult.
+  do_ios_test \
+    --test_env=DEBUG_XCTESTRUNNER=1 \
+    --test_filter=PassingUITest/testPass2 \
+    --test_arg=--xctestrun_screen_capture_format=screenRecording \
+    --test_arg=--xctestrun_attachment_lifetime=keepAlways \
+    //ios:PassingUITest || fail "should pass"
+
+    expect_log "note: Using 'xcodebuild' because a screen capture format was requested"
+    expect_log "<key>PreferredScreenCaptureFormat</key>"
+    expect_log "<string>screenRecording</string>"
+    expect_log "<key>SystemAttachmentLifetime</key>"
+    expect_log "<string>keepAlways</string>"
 }
 
 run_suite "ios_ui_test with iOS xctestrun runner bundling tests"

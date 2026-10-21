@@ -58,12 +58,15 @@
 #include "v2/ExternalSignalingConnection.h"
 #include "v2/SignalingSctpConnection.h"
 #include "v2/ReflectorRelayPortFactory.h"
+#include "v2/MtProtoDtlsTransport.h"
+#include "v2/CustomParameters.h"
 #ifdef WEBRTC_IOS
 #include "platform/darwin/iOS/tgcalls_audio_device_module_ios.h"
 #endif
 #include <random>
 #include <sstream>
 #include <map>
+#include <set>
 
 #include "third-party/json11.hpp"
 #include "utils/gzip.h"
@@ -379,6 +382,16 @@ public:
     _eventLog(std::make_unique<webrtc::RtcEventLogNull>()),
     _taskQueueFactory(webrtc::CreateDefaultTaskQueueFactory()),
     _videoCapture(descriptor.videoCapture) {
+        if (!descriptor.config.customParameters.empty()) {
+            std::string parsingError;
+            auto customParametersJson = json11::Json::parse(descriptor.config.customParameters, parsingError);
+            if (customParametersJson.is_object()) {
+                _customParameters = customParametersJson.object_items();
+            }
+        }
+
+        _useAddTrack = getCustomParameterBool(_customParameters, "network_reference_use_addtrack");
+
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
             "WebRTC-Audio-iOS-Holding/Enabled/"
@@ -386,6 +399,7 @@ public:
     }
 
     ~InstanceV2ReferenceImplInternal() {
+        disconnectAllIncomingVideoSinks();
         _currentStrongSink.reset();
 
         _threads->getWorkerThread()->BlockingCall([&]() {
@@ -477,6 +491,19 @@ public:
 
         _peerConnectionFactory = webrtc::CreateModularPeerConnectionFactory(std::move(peerConnectionFactoryDependencies));
 
+        _useMtProto = getCustomParameterBool(_customParameters, "network_use_mtproto");
+        if (_useMtProto) {
+            // Half one of two that MUST travel together (the other is the
+            // MtProtoDtlsTransportFactory on the dependencies below). Selects the
+            // plain RtpTransport (no SRTP) while DTLS stays enabled for SDP, so
+            // certificates, fingerprints, the SCTP factory and data-channel
+            // negotiation are stock; the factory then puts mtproto in the DTLS
+            // slot with no handshake. Must precede CreatePeerConnectionOrError.
+            webrtc::PeerConnectionFactoryInterface::Options factoryOptions;
+            factoryOptions.external_transport_security = true;
+            _peerConnectionFactory->SetOptions(factoryOptions);
+        }
+
         webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
 
         PeerConnectionDelegateAdapter::Parameters delegateParameters;
@@ -484,6 +511,16 @@ public:
             threads->getMediaThread()->PostTask([weak]() {
                 const auto strong = weak.lock();
                 if (!strong) {
+                    return;
+                }
+
+                if (strong->_isMakingOffer) {
+                    // An offer is already in flight and it already covers whatever
+                    // triggered this event - the data channel created moments ago in
+                    // start(). Stock suppresses this via the is_negotiation_needed_
+                    // latch; we override the legacy OnRenegotiationNeeded, which
+                    // bypasses that, so we suppress it here instead.
+                    RTC_LOG(LS_INFO) << "onRenegotiationNeeded: offer already in flight, skipping";
                     return;
                 }
 
@@ -588,16 +625,19 @@ public:
                 return;
             }
 
-            std::string mid = receiver->track()->id();
-            if (mid.empty()) {
-                return;
-            }
+            // _incomingVideoTransceivers is keyed by mid (see onTransceiverAdded),
+            // but RtpReceiverInterface exposes no mid() - receiver->track()->id()
+            // is the TRACK id, so looking it up by that never matched and entries
+            // were never erased. Find the entry by its receiver instead.
+            for (auto it = strong->_incomingVideoTransceivers.begin(); it != strong->_incomingVideoTransceivers.end(); it++) {
+                if (it->second->receiver() != receiver) {
+                    continue;
+                }
 
-            const auto transceiver = strong->_incomingVideoTransceivers.find(mid);
-            if (transceiver != strong->_incomingVideoTransceivers.end()) {
-                strong->disconnectIncomingVideoSink();
+                strong->disconnectIncomingVideoSink(it->second);
+                strong->_incomingVideoTransceivers.erase(it);
 
-                strong->_incomingVideoTransceivers.erase(transceiver);
+                break;
             }
         };
         delegateParameters.onCandidatePairChangeEvent = [weak](const cricket::CandidatePairChangeEvent &event) {
@@ -623,9 +663,37 @@ public:
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
         _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
         _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
-        _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver());
+        _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBool(_customParameters, "network_reflector_resolve_remote_candidate_ip"));
         
         auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+
+        if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
+            bool hasStunServer = false;
+            for (const auto &server : _rtcServers) {
+                // Unlike the mapping loop below, this does not check address.IsComplete(),
+                // so a malformed STUN host still counts as "has STUN" here. That only
+                // suppresses PORTALLOCATOR_DISABLE_STUN, i.e. it errs on the safe side.
+                if (!server.isTurn && !server.isTcp) {
+                    hasStunServer = true;
+                    break;
+                }
+            }
+            if (!hasStunServer) {
+                // PeerConnection forces PORTALLOCATOR_ENABLE_SHARED_SOCKET on every
+                // allocator, which auto-promotes each UDP relay into the STUN server
+                // set and sends it real Binding Requests. A reflector cannot parse
+                // those - it expects a 16-byte peer tag first.
+                //
+                // The WebRTC-UseTurnServerAsStunServer field trial does NOT help
+                // here: BasicPortAllocator bypasses it when the STUN set is empty,
+                // which is exactly the reflector case.
+                //
+                // InitializePortAllocator_n ORs onto the existing flags, so setting
+                // this before the allocator is moved survives.
+                portAllocator->set_flags(portAllocator->flags() | cricket::PORTALLOCATOR_DISABLE_STUN);
+            }
+        }
+
         peerConnectionDependencies.allocator = std::move(portAllocator);
 
         webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;
@@ -644,18 +712,47 @@ public:
         peerConnectionConfiguration.audio_jitter_buffer_fast_accelerate = true;
         peerConnectionConfiguration.prioritize_most_likely_ice_candidate_pairs = true;
 
+        const bool allowHostnameIceServers = getCustomParameterBoolDefaultTrue(_customParameters, "network_reference_allow_hostname_ice_servers");
+
         for (auto &server : _rtcServers) {
             if (server.isTcp) {
                 continue;
             }
 
             rtc::SocketAddress address(server.host, server.port);
+
+            // SocketAddress is only "complete" for IP literals, so this check used
+            // to discard every TURN/STUN server given as a DNS name - which is how
+            // Cloudflare TURN is configured. With enableP2P=false (kRelay) and TCP
+            // candidates disabled, a hostname-only server set gathers ZERO
+            // candidates and the call can never connect.
+            //
+            // HostAsURIString() already returns a non-literal host unchanged and
+            // brackets IPv6 literals, and ParseIceServersOrError resolves names
+            // itself, so passing the hostname through is all that is needed.
+            //
+            // Reflectors are exempt: ReflectorRelayPortFactory matches the
+            // allocator's relay address against SocketAddress(host, port) by
+            // equality, which cannot match an unresolved hostname - it would
+            // return no port at all. Reflectors are always IP literals in
+            // practice, so this only keeps the previous behaviour for them.
             if (!address.IsComplete()) {
-                RTC_LOG(LS_ERROR) << "Invalid ICE server host: " << server.host;
-                continue;
+                const bool isReflector = server.isTurn && server.login == "reflector";
+                if (!allowHostnameIceServers || isReflector || server.host.empty()) {
+                    RTC_LOG(LS_ERROR) << "Invalid ICE server host: " << server.host;
+                    continue;
+                }
+                RTC_LOG(LS_INFO) << "Passing through non-literal ICE server host: " << server.host;
             }
 
             if (server.isTurn) {
+                if (server.login.empty() || server.password.empty()) {
+                    // ParseIceServersOrError returns on the FIRST bad entry, so one
+                    // empty credential would kill the whole list. Skip just this one.
+                    RTC_LOG(LS_ERROR) << "Skipping TURN server with empty credentials: " << server.host;
+                    continue;
+                }
+
                 webrtc::PeerConnectionInterface::IceServer mappedServer;
 
                 mappedServer.urls.push_back(
@@ -674,9 +771,19 @@ public:
             }
         }
 
+        if (_useMtProto) {
+            // Half two: see the factory option above.
+            peerConnectionDependencies.dtls_transport_factory = std::make_unique<MtProtoDtlsTransportFactory>(_encryptionKey);
+        }
+
         auto peerConnectionOrError = _peerConnectionFactory->CreatePeerConnectionOrError(peerConnectionConfiguration, std::move(peerConnectionDependencies));
         if (peerConnectionOrError.ok()) {
             _peerConnection = peerConnectionOrError.value();
+        } else {
+            RTC_LOG(LS_ERROR) << "CreatePeerConnectionOrError failed: " << peerConnectionOrError.error().message();
+            _isFailed = true;
+            onNetworkStateUpdated();
+            return;
         }
 
         if (_peerConnection) {
@@ -697,7 +804,26 @@ public:
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
             webrtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
-            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = _peerConnection->AddTransceiver(audioTrack, transceiverInit);
+            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = [&]() -> webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> {
+                if (!_useAddTrack) {
+                    return _peerConnection->AddTransceiver(audioTrack, transceiverInit);
+                }
+                // AddTrack sets created_by_addtrack(), which
+                // FindAvailableTransceiverToReceive requires before it will associate
+                // the callee's own transceiver with the offerer's m= section. Without
+                // it the callee mints a fresh recvonly transceiver and needs a second
+                // offer/answer before it can send.
+                auto senderOrError = _peerConnection->AddTrack(audioTrack, transceiverInit.stream_ids);
+                if (!senderOrError.ok()) {
+                    return senderOrError.MoveError();
+                }
+                for (const auto &transceiver : _peerConnection->GetTransceivers()) {
+                    if (transceiver->sender() == senderOrError.value()) {
+                        return transceiver;
+                    }
+                }
+                return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
+            }();
             if (audioTransceiverOrError.ok()) {
                 _outgoingAudioTrack = audioTrack;
                 _outgoingAudioTransceiver = audioTransceiverOrError.value();
@@ -748,6 +874,11 @@ public:
         beginLogTimer(0);
         _lastDisconnectedTimestamp = rtc::TimeMillis();
         beginCheckConnectionTimer();
+
+        // Emit a baseline record so a call that never transitions still uploads a
+        // timeline with a call-start origin. InstanceV2Impl::start() ends the same
+        // way, which is why 13.0.0 cannot produce an empty "network" array.
+        onNetworkStateUpdated();
     }
 
     void sendPendingSignalingServiceData(int cause) {
@@ -778,7 +909,13 @@ public:
                         if (const auto compressedData = gzipData(data)) {
                             packetData = std::move(compressedData.value());
                         } else {
+                            // Do NOT fall through to the send: packetData is still
+                            // empty, and encrypting and sending it produces a packet
+                            // the peer drops after decrypt/JSON-parse. If the dropped
+                            // message was the offer or answer, the call would simply
+                            // never connect, with no error on either side.
                             RTC_LOG(LS_ERROR) << "Could not gzip signaling message";
+                            break;
                         }
                     } else {
                         packetData = data;
@@ -959,21 +1096,69 @@ public:
         _isMakingOffer = true;
 
         webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask([weak]() {
+            const bool isOk = error.ok();
+            if (!isOk) {
+                RTC_LOG(LS_ERROR) << "SetLocalDescription failed: " << error.message();
+            }
+            threads->getMediaThread()->PostTask([weak, isOk]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
                 }
 
-                strong->doSendLocalDescription();
-
+                // Always clear the in-flight flag, or a failure would wedge
+                // renegotiation permanently (see the guard in onRenegotiationNeeded).
                 strong->_isMakingOffer = false;
 
+                if (!isOk) {
+                    return;
+                }
+
+                strong->doSendLocalDescription();
+
                 strong->maybeCommitPendingIceCandidates();
+
+                // An answer just took us back to stable; after an offer this is
+                // a no-op until its answer lands.
+                strong->flushPendingRenegotiation();
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetLocalDescription";
         _peerConnection->SetLocalDescription(observer);
+    }
+
+    void requestRenegotiation() {
+        // A capture change wants a new offer, but only from a quiet stable
+        // state: never while our own offer is in flight, never while we owe or
+        // await an answer, and on the callee never before the caller's first
+        // offer has arrived - an unsolicited callee offer collides with it and
+        // rolls it back, and a rollback of the very first offer orphans the
+        // data-channel mid in WebRTC (an endless offer/answer loop; this is
+        // what wedged every 18/19 video call). Otherwise remember it and send
+        // once the exchange settles, rather than trusting WebRTC to re-raise
+        // OnRenegotiationNeeded past its negotiation-needed latch.
+        if (!_didBeginNegotiation) {
+            return;
+        }
+        _pendingRenegotiation = true;
+        flushPendingRenegotiation();
+    }
+
+    void flushPendingRenegotiation() {
+        if (!_pendingRenegotiation) {
+            return;
+        }
+        if (_isMakingOffer || _isSettingRemoteAnswerPending) {
+            return;
+        }
+        if (_peerConnection->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
+            return;
+        }
+        if (!_encryptionKey.isOutgoing && !_peerConnection->remote_description()) {
+            return;
+        }
+        _pendingRenegotiation = false;
+        sendLocalDescription();
     }
 
     void sendIceCandidate(const webrtc::IceCandidateInterface *iceCandidate) {
@@ -1211,7 +1396,11 @@ public:
 
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
         webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, type](webrtc::RTCError error) {
-            threads->getMediaThread()->PostTask([weak, type]() {
+            const bool isOk = error.ok();
+            if (!isOk) {
+                RTC_LOG(LS_ERROR) << "SetRemoteDescription failed: " << error.message();
+            }
+            threads->getMediaThread()->PostTask([weak, type, isOk]() {
                 const auto strong = weak.lock();
                 if (!strong) {
                     return;
@@ -1219,11 +1408,23 @@ public:
 
                 strong->_isSettingRemoteAnswerPending = false;
 
+                if (!isOk) {
+                    // Do NOT fall through to sendLocalDescription(): a failed
+                    // SetRemoteDescription(offer) leaves signaling state at kStable,
+                    // and the implicit SetLocalDescription overload picks
+                    // offer-vs-answer from signaling_state() - so we would send an
+                    // offer where the peer awaits an answer.
+                    return;
+                }
+
                 strong->maybeCommitPendingIceCandidates();
 
                 if (type == "offer") {
                     strong->sendLocalDescription();
                 }
+                // After an offer we are now making the answer (no-op); after an
+                // answer we are stable and a deferred capture change may go out.
+                strong->flushPendingRenegotiation();
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetRemoteDescription";
@@ -1365,31 +1566,15 @@ public:
         sendDataChannelMessage(message);
     }
 
-    void sendCandidate(const cricket::Candidate &candidate) {
-        cricket::Candidate patchedCandidate = candidate;
-        patchedCandidate.set_component(1);
-
-        signaling::CandidatesMessage data;
-
-        signaling::IceCandidate serializedCandidate;
-
-        webrtc::JsepIceCandidate iceCandidate{ std::string(), 0 };
-        iceCandidate.SetCandidate(patchedCandidate);
-        std::string serialized;
-        const auto success = iceCandidate.ToString(&serialized);
-        assert(success);
-        (void)success;
-
-        serializedCandidate.sdpString = serialized;
-
-        data.iceCandidates.push_back(std::move(serializedCandidate));
-
-        signaling::Message message;
-        message.data = std::move(data);
-        sendSignalingMessage(message);
-    }
-
     void setVideoCapture(std::shared_ptr<VideoCaptureInterface> videoCapture) {
+        if (!_peerConnection) {
+            // start() bailed out because CreatePeerConnectionOrError failed. The app
+            // can still call setVideoCapture() through the public Instance interface,
+            // and _peerConnectionFactory is valid here, so CreateVideoTrack would
+            // succeed and the AddTransceiver below would dereference null.
+            return;
+        }
+
         _isPerformingConfiguration = true;
 
         if (_outgoingVideoTransceiver) {
@@ -1411,6 +1596,9 @@ public:
                     webrtc::RtpTransceiverInit transceiverInit;
                     transceiverInit.stream_ids = { "0" };
 
+                    // Deliberately still AddTransceiver: see network_reference_use_addtrack.
+                    // AddTrack reuse is once-only, so it would not cure m-line growth on
+                    // repeated camera toggles, and it would add a second variable to the A/B.
                     webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> videoTransceiverOrError = _peerConnection->AddTransceiver(videoTrack, transceiverInit);
                     if (videoTransceiverOrError.ok()) {
                         _outgoingVideoTrack = videoTrack;
@@ -1464,7 +1652,7 @@ public:
 
         if (_didBeginNegotiation) {
             sendMediaState();
-            sendLocalDescription();
+            requestRenegotiation();
         }
     }
 
@@ -1487,16 +1675,48 @@ public:
     }
 
     void connectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
-        if (_currentStrongSink) {
-            webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)transceiver->receiver()->track().get();
-            videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        if (!_currentStrongSink) {
+            return;
         }
+        auto track = transceiver->receiver()->track();
+        if (!track) {
+            return;
+        }
+        webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+        videoTrack->AddOrUpdateSink(_currentStrongSink.get(), rtc::VideoSinkWants());
+        _attachedSinkTracks.insert(videoTrack);
     }
 
-    void disconnectIncomingVideoSink() {
+    void disconnectIncomingVideoSink(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
+        if (!_currentStrongSink) {
+            return;
+        }
+        auto track = transceiver->receiver()->track();
+        if (!track) {
+            return;
+        }
+        webrtc::VideoTrackInterface *videoTrack = (webrtc::VideoTrackInterface *)track.get();
+        if (_attachedSinkTracks.erase(videoTrack) == 0) {
+            // Never attached to this track - RemoveSink would trip
+            // RTC_DCHECK(FindSinkPair(sink)) in a debug build.
+            return;
+        }
+        videoTrack->RemoveSink(_currentStrongSink.get());
+    }
+
+    void disconnectAllIncomingVideoSinks() {
+        if (!_currentStrongSink) {
+            return;
+        }
+        for (const auto &it : _incomingVideoTransceivers) {
+            disconnectIncomingVideoSink(it.second);
+        }
+        _attachedSinkTracks.clear();
     }
 
     void setIncomingVideoOutput(std::weak_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> sink) {
+        disconnectAllIncomingVideoSinks();
+
         _currentStrongSink = sink.lock();
 
         if (_currentStrongSink) {
@@ -1530,7 +1750,9 @@ public:
 
     void stop(std::function<void(FinalState)> completion) {
         _isStopped = true;
-        _peerConnection->Close();
+        if (_peerConnection) {
+            _peerConnection->Close();
+        }
 
         FinalState finalState;
 
@@ -1650,6 +1872,7 @@ private:
     SignalingProtocolVersion _signalingProtocolVersion;
     std::shared_ptr<Threads> _threads;
     std::vector<RtcServer> _rtcServers;
+    std::map<std::string, json11::Json> _customParameters;
     std::unique_ptr<Proxy> _proxy;
     bool _enableP2P = false;
     EncryptionKey _encryptionKey;
@@ -1681,7 +1904,12 @@ private:
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
+    // setVideoCapture() asked for a new offer while one was in flight, an
+    // answer was pending, or (callee) the first remote offer had not arrived.
+    bool _pendingRenegotiation = false;
     bool _isPerformingConfiguration = false;
+    bool _useAddTrack = false;
+    bool _useMtProto = false;
 
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;
     webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> _outgoingAudioTransceiver;
@@ -1718,6 +1946,11 @@ private:
     std::atomic<bool> _isStopped{false};
 
     std::shared_ptr<rtc::VideoSinkInterface<webrtc::VideoFrame>> _currentStrongSink;
+    // Exactly the tracks we called AddOrUpdateSink on. RemoveSink DCHECKs when the
+    // sink was never added, and attachment is asymmetric (a transceiver added while
+    // no sink is set is never attached, and setIncomingVideoOutput attaches only the
+    // first entry), so removal must be driven by this set, not by the transceiver map.
+    std::set<webrtc::VideoTrackInterface*> _attachedSinkTracks;
 
     std::shared_ptr<VideoCaptureInterface> _videoCapture;
 };

@@ -17,11 +17,7 @@ A rule for handling the cc_toolchains and their constraints for a potential "fat
 """
 
 load(
-    "@bazel_skylib//lib:dicts.bzl",
-    "dicts",
-)
-load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
+    "@apple_support//lib:apple_support.bzl",
     "apple_support",
 )
 load(
@@ -44,15 +40,7 @@ def _cc_toolchain_forwarder_impl(ctx):
 
 cc_toolchain_forwarder = rule(
     implementation = _cc_toolchain_forwarder_impl,
-    attrs = dicts.add(
-        apple_support.platform_constraint_attrs(),
-        {
-            # Legacy style toolchain assignment.
-            "_cc_toolchain": attr.label(
-                default = Label("@rules_cc//cc:current_cc_toolchain"),
-            ),
-        },
-    ),
+    attrs = apple_support.platform_constraint_attrs(),
     doc = """
 Shared rule that returns CcToolchainInfo, plus a rules_apple defined provider based on querying
 ctx.target_platform_has_constraint(...) that covers all Apple cpu, platform, environment constraints

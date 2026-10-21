@@ -17,6 +17,7 @@
 load("//swift:providers.bzl", "SwiftInfo")
 load(":action_names.bzl", "SWIFT_ACTION_SYNTHESIZE_INTERFACE")
 load(":actions.bzl", "run_toolchain_action")
+load(":compiling.bzl", "transitive_swift_dependency_inputs")
 load(":features.bzl", "gather_toolchains")
 load(":toolchain_utils.bzl", "SWIFT_TOOLCHAIN_TYPE")
 load(":utils.bzl", "merge_compilation_contexts")
@@ -78,11 +79,9 @@ def synthesize_interface(
     # conditionally.
     transitive_modules = merged_swift_info.transitive_modules.to_list()
 
-    transitive_swiftmodules = []
-    for module in transitive_modules:
-        swift_module = module.swift
-        if swift_module:
-            transitive_swiftmodules.append(swift_module.swiftmodule)
+    transitive_swift_dependency_inputs_list = transitive_swift_dependency_inputs(
+        transitive_modules,
+    )
 
     prerequisites = struct(
         bin_dir = feature_configuration._bin_dir,
@@ -93,7 +92,7 @@ def synthesize_interface(
         output_file = output_file,
         target_label = feature_configuration._label,
         transitive_modules = transitive_modules,
-        transitive_swiftmodules = transitive_swiftmodules,
+        transitive_swift_dependency_inputs = transitive_swift_dependency_inputs_list,
     )
 
     run_toolchain_action(

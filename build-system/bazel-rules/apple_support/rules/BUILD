@@ -18,11 +18,6 @@ bzl_library(
 )
 
 bzl_library(
-    name = "toolchain_substitution",
-    srcs = ["toolchain_substitution.bzl"],
-)
-
-bzl_library(
     name = "universal_binary",
     srcs = ["universal_binary.bzl"],
     deps = [
@@ -33,7 +28,7 @@ bzl_library(
 )
 
 bzl_library(
-    name = "rules",
+    name = "rules.doc",
     srcs = ["rules.doc.bzl"],
     deps = [
         ":toolchain_substitution",
@@ -42,12 +37,7 @@ bzl_library(
     ],
 )
 
-# Consumed by bazel tests.
-filegroup(
-    name = "for_bazel_tests",
-    testonly = 1,
-    srcs = glob(["**"]) + [
-        "//rules/private:for_bazel_tests",
-    ],
-    visibility = ["//:__pkg__"],
+bzl_library(
+    name = "toolchain_substitution",
+    srcs = ["toolchain_substitution.bzl"],
 )

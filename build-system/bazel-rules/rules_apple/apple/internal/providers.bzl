@@ -229,7 +229,7 @@ dependencies of the given target if any were generated.
     init = _make_banned_init(provider_name = "AppleDsymBundleInfo"),
 )
 
-_AppleDynamicFrameworkInfo = provider(
+AppleDynamicFrameworkInfo, new_appledynamicframeworkinfo = provider(
     doc = "Contains information about an Apple dynamic framework.",
     fields = {
         "framework_dirs": """\
@@ -246,37 +246,15 @@ A `CcInfo` which contains information about the transitive dependencies linked
 into the binary.
 """,
     },
+    init = _make_banned_init(provider_name = "AppleDynamicFrameworkInfo"),
 )
 
-# TODO: Remove when we drop 7.x
-AppleDynamicFrameworkInfo = getattr(
-    apple_common,
-    "AppleDynamicFramework",
-    _AppleDynamicFrameworkInfo,
-)
-
-# TODO: Remove when we drop 7.x
-def new_appledynamicframeworkinfo(**kwargs):
-    legacy_initializer = getattr(
-        apple_common,
-        "new_dynamic_framework_provider",
-        None,
-    )
-    if legacy_initializer:
-        return legacy_initializer(**kwargs)
-
-    return AppleDynamicFrameworkInfo(**kwargs)
-
-_AppleExecutableBinaryInfo = provider(
+AppleExecutableBinaryInfo, new_appleexecutablebinaryinfo = provider(
     doc = """
 Contains the executable binary output that was built using
 `link_multi_arch_binary` with the `executable` binary type.
 """,
     fields = {
-        # TODO: Remove when we drop 7.x
-        "objc": """\
-apple_common.Objc provider used for legacy linking behavior.
-""",
         "binary": """\
 The executable binary artifact output by `link_multi_arch_binary`.
 """,
@@ -285,17 +263,8 @@ A `CcInfo` which contains information about the transitive dependencies linked
 into the binary.
 """,
     },
+    init = _make_banned_init(provider_name = "AppleExecutableBinaryInfo"),
 )
-
-AppleExecutableBinaryInfo = getattr(apple_common, "AppleExecutableBinary", _AppleExecutableBinaryInfo)
-
-# TODO: Use common init pattern when we drop 7.x
-def new_appleexecutablebinaryinfo(**kwargs):
-    legacy_initializer = getattr(apple_common, "new_executable_binary_provider", None)
-    if legacy_initializer:
-        return legacy_initializer(**kwargs)
-
-    return AppleExecutableBinaryInfo(**kwargs)
 
 AppleExtraOutputsInfo, new_appleextraoutputsinfo = provider(
     doc = """
@@ -480,47 +449,11 @@ requirement.
 AppleTestInfo, new_appletestinfo = provider(
     doc = """
 Provider that test targets propagate to be used for IDE integration.
-
-This includes information regarding test source files, transitive include paths,
-transitive module maps, and transitive Swift modules. Test source files are
-considered to be all of which belong to the first-level dependencies on the test
-target.
 """,
     fields = {
-        "includes": """
-`depset` of `String`s representing transitive include paths which are needed by
-IDEs to be used for indexing the test sources.
-""",
-        "module_maps": """
-`depset` of `File`s representing module maps which are needed by IDEs to be used
-for indexing the test sources.
-""",
-        "module_name": """
-`String` representing the module name used by the test's sources. This is only
-set if the test only contains a single top-level Swift dependency. This may be
-used by an IDE to identify the Swift module (if any) used by the test's sources.
-""",
-        "non_arc_sources": """
-`depset` of `File`s containing non-ARC sources from the test's immediate
-deps.
-""",
-        "sources": """
-`depset` of `File`s containing sources and headers from the test's immediate deps.
-""",
-        "swift_modules": """
-`depset` of `File`s representing transitive swift modules which are needed by
-IDEs to be used for indexing the test sources.
-""",
         "test_bundle": "The artifact representing the XCTest bundle for the test target.",
         "test_host": """
 The artifact representing the test host for the test target, if the test requires a test host.
-""",
-        "deps": """
-`depset` of `String`s representing the labels of all immediate deps of the test.
-Only source files from these deps will be present in `sources`. This may be used
-by IDEs to differentiate a test target's transitive module maps from its direct
-module maps, as including the direct module maps may break indexing for the
-source files of the immediate deps.
 """,
     },
     init = _make_banned_init(provider_name = "AppleTestInfo"),
@@ -691,6 +624,20 @@ that requirement.
 """,
     fields = {},
     init = _make_banned_init(provider_name = "IosImessageExtensionBundleInfo"),
+)
+
+IosKernelExtensionBundleInfo, new_ioskernelextensionbundleinfo = provider(
+    doc = """
+Denotes that a target is an iOS kernel extension.
+
+This provider does not contain any fields of its own at this time but is used as
+a "marker" to indicate that a target is specifically an iOS kernel extension
+bundle (and not some other Apple bundle). Rule authors who wish to require that
+a dependency is an iOS kernel extension should use this provider to describe that
+requirement.
+""",
+    fields = {},
+    init = _make_banned_init(provider_name = "IosKernelExtensionBundleInfo"),
 )
 
 IosXcTestBundleInfo, new_iosxctestbundleinfo = provider(

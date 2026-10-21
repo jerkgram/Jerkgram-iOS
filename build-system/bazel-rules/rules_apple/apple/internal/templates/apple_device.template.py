@@ -50,6 +50,16 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 import zipfile
 
+_RUN_MODE_ENV_VAR = "BAZEL_APPLE_RUN_MODE"
+_RUN_MODE_INSTALL_AND_RUN = "install_and_run"
+_RUN_MODE_INSTALL_WITHOUT_RUNNING = "install_without_running"
+_RUN_MODE_RUN_WITHOUT_INSTALLING = "run_without_installing"
+_VALID_RUN_MODES = frozenset((
+    _RUN_MODE_INSTALL_AND_RUN,
+    _RUN_MODE_INSTALL_WITHOUT_RUNNING,
+    _RUN_MODE_RUN_WITHOUT_INSTALLING,
+))
+
 
 logging.basicConfig(
     format="%(asctime)s.%(msecs)03d %(levelname)s %(message)s",
@@ -351,7 +361,18 @@ def extracted_app(
       )
       with zipfile.ZipFile(application_output_path) as ipa_zipfile:
         ipa_zipfile.extractall(temp_dir)
-        yield os.path.join(temp_dir, "Payload", app_name + ".app")
+        # iOS/tvOS apps use Payload/ directory structure, while watchOS apps
+        # have the .app bundle at the root of the archive.
+        payload_path = os.path.join(temp_dir, "Payload", app_name + ".app")
+        root_path = os.path.join(temp_dir, app_name + ".app")
+        if os.path.isdir(payload_path):
+          yield payload_path
+        elif os.path.isdir(root_path):
+          yield root_path
+        else:
+          raise FileNotFoundError(
+              f"Couldn't find {app_name}.app in the archive."
+          )
 
 
 def bundle_id(bundle_path: str) -> str:
@@ -384,6 +405,37 @@ def devicectl_launch_environ(device_identifier: str) -> Dict[str, str]:
   return result
 
 
+def app_run_mode() -> str:
+  """Returns the configured app run mode."""
+  run_mode = os.environ.get(_RUN_MODE_ENV_VAR, _RUN_MODE_INSTALL_AND_RUN)
+  if run_mode not in _VALID_RUN_MODES:
+    valid_modes = ", ".join(sorted(_VALID_RUN_MODES))
+    raise ValueError(
+        f"Invalid {_RUN_MODE_ENV_VAR} value {run_mode!r}; "
+        f"expected one of: {valid_modes}"
+    )
+  return run_mode
+
+
+def clear_launch_info_path() -> None:
+  """Deletes any stale launch info file written by a prior run."""
+  launch_info_path = os.environ.get("BAZEL_APPLE_LAUNCH_INFO_PATH")
+  if not launch_info_path:
+    return
+
+  try:
+    os.remove(launch_info_path)
+  except FileNotFoundError:
+    pass
+
+
+def ensure_devicectl_terminate_existing(launch_args: list[str]) -> list[str]:
+  """Ensures `devicectl launch` terminates any existing app instance first."""
+  if "--terminate-existing" in launch_args:
+    return launch_args
+  return launch_args + ["--terminate-existing"]
+
+
 def run_app(
     *,
     device_identifier: str,
@@ -391,7 +443,7 @@ def run_app(
     application_output_path: str,
     app_name: str,
 ) -> None:
-  """Installs and runs an app on the specified device.
+  """Installs and/or runs an app on the specified device.
 
   Args:
     device_identifier: The identifier of the device.
@@ -401,20 +453,27 @@ def run_app(
   """
   root_dir = os.path.dirname(application_output_path)
   register_dsyms(root_dir)
+  run_mode = app_run_mode()
   with extracted_app(application_output_path, app_name) as app_path:
-    logger.info("Installing app %s to device %s", app_path, device_identifier)
-    subprocess.run(
-        [
-          devicectl_path,
-          "device",
-          "install",
-          "app",
-          "--device",
-          device_identifier,
-          app_path
-        ],
-        check=True,
-    )
+    if run_mode != _RUN_MODE_RUN_WITHOUT_INSTALLING:
+      logger.info("Installing app %s to device %s", app_path, device_identifier)
+      subprocess.run(
+          [
+            devicectl_path,
+            "device",
+            "install",
+            "app",
+            "--device",
+            device_identifier,
+            app_path,
+          ],
+          check=True,
+      )
+
+    if run_mode == _RUN_MODE_INSTALL_WITHOUT_RUNNING:
+      clear_launch_info_path()
+      return
+
     app_bundle_id = bundle_id(app_path)
     launch_args = shlex.split(
       os.environ.get(
@@ -435,8 +494,11 @@ def run_app(
         "--device",
         device_identifier,
     ]
+    launch_args = ensure_devicectl_terminate_existing(launch_args)
     # Append optional launch arguments.
-    app_args = [app_bundle_id] + sys.argv[1:]
+    # devicectl keeps parsing dash-prefixed values as command options even
+    # after the bundle identifier. Terminate option parsing before app args.
+    app_args = ["--", app_bundle_id] + sys.argv[1:]
     launch_app(
         launch_args=launch_args,
         app_args=app_args,
@@ -549,6 +611,7 @@ def main(
   )
   developer_path = xcode_select_result.stdout.rstrip()
   devicectl_path = os.path.join(developer_path, "usr", "bin", "devicectl")
+  device_identifier = os.environ.get("BAZEL_APPLE_DEVICE_UDID", device_identifier)
 
   if not device_identifier:
     logger.info(

@@ -17,9 +17,10 @@ bzl_library(
         "//apple:utils",
         "//apple/internal:apple_product_type",
         "//apple/internal:bundling_support",
+        "//apple/internal:shared_environment",
         "//apple/internal/utils:xctoolrunner",
+        "@apple_support//lib:apple_support",
         "@bazel_skylib//lib:paths",
-        "@build_bazel_apple_support//lib:apple_support",
     ],
 )
 
@@ -31,7 +32,8 @@ bzl_library(
     ],
     deps = [
         "//apple/internal:intermediates",
-        "@build_bazel_apple_support//lib:apple_support",
+        "//apple/internal:shared_environment",
+        "@apple_support//lib:apple_support",
     ],
 )
 
@@ -42,8 +44,9 @@ bzl_library(
         "//apple/internal:__pkg__",
     ],
     deps = [
+        "//apple/internal:shared_environment",
         "//apple/internal/utils:xctoolrunner",
-        "@build_bazel_apple_support//lib:apple_support",
+        "@apple_support//lib:apple_support",
     ],
 )
 
@@ -54,9 +57,10 @@ bzl_library(
         "//apple/internal:__pkg__",
     ],
     deps = [
+        "//apple/internal:shared_environment",
         "//apple/internal/utils:xctoolrunner",
+        "@apple_support//lib:apple_support",
         "@bazel_skylib//lib:paths",
-        "@build_bazel_apple_support//lib:apple_support",
     ],
 )
 
@@ -67,8 +71,8 @@ bzl_library(
         "//apple/internal:__pkg__",
     ],
     deps = [
+        "@apple_support//lib:apple_support",
         "@bazel_skylib//lib:versions",
-        "@build_bazel_apple_support//lib:apple_support",
     ],
 )
 
@@ -79,8 +83,8 @@ bzl_library(
         "//apple/internal:__pkg__",
     ],
     deps = [
+        "@apple_support//lib:apple_support",
         "@bazel_skylib//lib:paths",
-        "@build_bazel_apple_support//lib:apple_support",
     ],
 )
 
@@ -92,7 +96,7 @@ bzl_library(
     ],
     deps = [
         "//apple/internal/utils:xctoolrunner",
-        "@build_bazel_apple_support//lib:apple_support",
+        "@apple_support//lib:apple_support",
     ],
 )
 
@@ -106,8 +110,9 @@ bzl_library(
         "//apple:providers",
         "//apple/internal:intermediates",
         "//apple/internal:platform_support",
+        "//apple/internal:shared_environment",
+        "@apple_support//lib:apple_support",
         "@bazel_skylib//lib:paths",
-        "@build_bazel_apple_support//lib:apple_support",
     ],
 )
 
@@ -118,7 +123,8 @@ bzl_library(
         "//apple/internal:__pkg__",
     ],
     deps = [
-        "@build_bazel_apple_support//lib:apple_support",
+        "//apple/internal:shared_environment",
+        "@apple_support//lib:apple_support",
     ],
 )
 
@@ -129,7 +135,8 @@ bzl_library(
         "//apple/internal:__pkg__",
     ],
     deps = [
-        "@build_bazel_apple_support//lib:apple_support",
+        "//apple/internal:shared_environment",
+        "@apple_support//lib:apple_support",
     ],
 )
 
@@ -141,7 +148,7 @@ bzl_library(
     ],
     deps = [
         "//apple/internal/utils:xctoolrunner",
-        "@build_bazel_apple_support//lib:apple_support",
+        "@apple_support//lib:apple_support",
     ],
 )
 

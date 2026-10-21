@@ -1,0 +1,220 @@
+//! Network, provider, and wallet-client configuration.
+
+use super::ProtectedSecretRef;
+use crate::{NonEmptyString, TonAddressString};
+
+/// Default end-to-end timeout for one provider request.
+pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS: u64 = 15_000;
+
+/// Default indexer-lag margin after a signed message validity window.
+pub const DEFAULT_RESOLUTION_MARGIN_SECONDS: u64 = 60;
+
+// Root snapshots read from blockchain configuration parameter #4 on 2026-08-24.
+const MAINNET_DNS_ROOT_ADDRESS: &str =
+    "-1:e56754f83426f69b09267bd876ac97c44821345b7e266bd956a7bfbfb98df35c";
+const TESTNET_DNS_ROOT_ADDRESS: &str =
+    "-1:efe71d13860afaa6aeaeaf636f9168487f80f1031b0bf8d939ae49d3ea7f7da0";
+
+/// Selects the TON network used for addresses, providers, and wallet derivation.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, uniffi::Enum,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum Network {
+    /// The production TON network.
+    Mainnet,
+    /// The public TON test network.
+    Testnet,
+}
+
+impl Network {
+    /// The TON `network_global_id` as TON Connect writes it (`NETWORK_ID`).
+    pub(crate) const fn global_id(self) -> &'static str {
+        match self {
+            Self::Mainnet => "-239",
+            Self::Testnet => "-3",
+        }
+    }
+}
+
+/// Configures the Toncenter endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfig {
+    /// The HTTPS base URL for a Toncenter-compatible provider.
+    ///
+    /// The engine appends the path for the API used by each request. An optional
+    /// deployment prefix is preserved, so `https://provider.example/toncenter`
+    /// produces paths below `/toncenter/api/...`.
+    /// Loopback HTTP URLs are accepted for local development networks.
+    /// Supply an already serialized ASCII URL, with any path escaping applied
+    /// and no credentials, query, or fragment. The engine does not normalize it.
+    pub toncenter_base_url: String,
+    /// Optional TON DNS root resolver override.
+    ///
+    /// When absent, the engine selects the built-in current root for the wallet
+    /// network. Set an explicit address to update the resolver without changing
+    /// the engine.
+    #[serde(default)]
+    pub dns_root_address: Option<TonAddressString>,
+    /// End-to-end timeout applied to every provider request, in milliseconds.
+    ///
+    /// The selected provider host must enforce this deadline across its
+    /// complete HTTP, relay, or protocol-proxy call.
+    #[serde(default = "default_provider_request_timeout_ms")]
+    pub request_timeout_ms: u64,
+}
+
+const fn default_provider_request_timeout_ms() -> u64 {
+    DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS
+}
+
+impl ProviderConfig {
+    /// Returns the standard Toncenter configuration for `network`.
+    ///
+    #[must_use]
+    pub fn standard(network: Network) -> Self {
+        let toncenter_base_url = match network {
+            Network::Mainnet => "https://toncenter.com",
+            Network::Testnet => "https://testnet.toncenter.com",
+        };
+        Self {
+            toncenter_base_url: toncenter_base_url.to_owned(),
+            dns_root_address: None,
+            request_timeout_ms: DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
+        }
+    }
+
+    pub(crate) fn effective_dns_root_address(&self, network: Network) -> &str {
+        self.dns_root_address.as_ref().map_or_else(
+            || default_dns_root_address(network),
+            TonAddressString::as_str,
+        )
+    }
+}
+
+const fn default_dns_root_address(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => MAINNET_DNS_ROOT_ADDRESS,
+        Network::Testnet => TESTNET_DNS_ROOT_ADDRESS,
+    }
+}
+
+/// Identifies one wallet client and its provider configuration.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletClientConfig {
+    /// The stable application record identifier for this wallet.
+    pub record_id: NonEmptyString,
+    /// The friendly TON address that the client reads and sends from.
+    pub address: TonAddressString,
+    /// The raw 32-byte Ed25519 public key used for wallet preflight.
+    ///
+    /// For an undeployed wallet, this must be the initial key that derives its
+    /// address and `StateInit`. For an active wallet, this can be the current
+    /// signing key after rotation; it need not derive the wallet address.
+    pub public_key: Vec<u8>,
+    /// The protected mnemonic reference used for local signing.
+    ///
+    /// `None` configures a public-key-only wallet. Read operations and send
+    /// previews remain available, while [`crate::WalletClient::send`] returns
+    /// [`crate::WalletClientError::LocalSigningUnavailable`].
+    #[serde(default)]
+    pub local_secret_ref: Option<ProtectedSecretRef>,
+    /// The network for the address and all provider requests.
+    pub network: Network,
+    /// Lifetime of a newly signed external message, in seconds.
+    ///
+    /// The engine adds this value to the synchronization timestamp returned by
+    /// the fresh account-state request. It does not use the host device clock.
+    /// A short value, including zero, can expire before the network includes
+    /// the message. A long value extends the period in which it can be submitted.
+    pub send_validity_seconds: u64,
+    /// Additional provider-time margin before an unseen message becomes expired.
+    ///
+    /// This protects against declaring expiration while the transaction index is
+    /// still catching up with the account state used by the resolver.
+    #[serde(default = "default_resolution_margin_seconds")]
+    pub resolution_margin_seconds: u64,
+    /// The provider endpoint.
+    pub providers: ProviderConfig,
+}
+
+const fn default_resolution_margin_seconds() -> u64 {
+    DEFAULT_RESOLUTION_MARGIN_SECONDS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS, DEFAULT_RESOLUTION_MARGIN_SECONDS,
+        MAINNET_DNS_ROOT_ADDRESS, Network, ProviderConfig, TESTNET_DNS_ROOT_ADDRESS,
+        WalletClientConfig,
+    };
+
+    #[test]
+    fn standard_provider_matches_each_network() {
+        assert_eq!(
+            ProviderConfig::standard(Network::Mainnet).toncenter_base_url,
+            "https://toncenter.com"
+        );
+        assert_eq!(
+            ProviderConfig::standard(Network::Testnet).toncenter_base_url,
+            "https://testnet.toncenter.com"
+        );
+        assert_eq!(
+            ProviderConfig::standard(Network::Mainnet).request_timeout_ms,
+            DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS
+        );
+        assert_eq!(
+            ProviderConfig::standard(Network::Mainnet).effective_dns_root_address(Network::Mainnet),
+            MAINNET_DNS_ROOT_ADDRESS
+        );
+        assert_eq!(
+            ProviderConfig::standard(Network::Testnet).effective_dns_root_address(Network::Testnet),
+            TESTNET_DNS_ROOT_ADDRESS
+        );
+        assert!(crate::TonAddressString::try_from(MAINNET_DNS_ROOT_ADDRESS).is_ok());
+        assert!(crate::TonAddressString::try_from(TESTNET_DNS_ROOT_ADDRESS).is_ok());
+    }
+
+    #[test]
+    fn previous_provider_json_uses_timeout_and_dns_defaults() {
+        let provider: ProviderConfig =
+            serde_json::from_str(r#"{"toncenterBaseUrl":"https://testnet.toncenter.com"}"#)
+                .expect("the previous provider JSON shape must remain readable");
+
+        assert_eq!(
+            provider,
+            ProviderConfig {
+                toncenter_base_url: "https://testnet.toncenter.com".to_owned(),
+                dns_root_address: None,
+                request_timeout_ms: DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
+            }
+        );
+        assert_eq!(
+            provider.effective_dns_root_address(Network::Testnet),
+            TESTNET_DNS_ROOT_ADDRESS
+        );
+    }
+
+    #[test]
+    fn client_json_from_before_resolution_support_uses_the_default_margin() {
+        let config: WalletClientConfig = serde_json::from_str(
+            r#"{
+                "recordId":"record",
+                "address":"0:0000000000000000000000000000000000000000000000000000000000000000",
+                "publicKey":[],
+                "network":"testnet",
+                "sendValiditySeconds":300,
+                "providers":{"toncenterBaseUrl":"https://testnet.toncenter.com"}
+            }"#,
+        )
+        .expect("the previous wallet config JSON shape must remain readable");
+
+        assert_eq!(
+            config.resolution_margin_seconds,
+            DEFAULT_RESOLUTION_MARGIN_SECONDS
+        );
+    }
+}

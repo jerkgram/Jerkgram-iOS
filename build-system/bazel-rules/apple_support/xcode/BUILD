@@ -1,10 +1,14 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
+load("//xcode:xcode_config_resolver.bzl", "xcode_config_resolver")
 
 licenses(["notice"])
 
 package(
     default_visibility = ["//visibility:public"],
 )
+
+exports_files(["xcode_configure.bzl"])
 
 bzl_library(
     name = "available_xcodes",
@@ -13,14 +17,21 @@ bzl_library(
 )
 
 bzl_library(
-    name = "providers",
-    srcs = ["providers.bzl"],
+    name = "xcode_config",
+    srcs = ["xcode_config.bzl"],
+    deps = [
+        "//build_settings",
+        "//xcode/private:providers",
+    ],
 )
 
 bzl_library(
-    name = "xcode_config",
-    srcs = ["xcode_config.bzl"],
-    deps = ["//xcode/private:providers"],
+    name = "xcode_config_resolver",
+    srcs = ["xcode_config_resolver.bzl"],
+    deps = [
+        ":providers",
+        "//build_settings",
+    ],
 )
 
 bzl_library(
@@ -32,12 +43,75 @@ bzl_library(
     ],
 )
 
-# Consumed by bazel tests.
-filegroup(
-    name = "for_bazel_tests",
-    testonly = True,
-    srcs = glob(["**"]) + [
-        "//xcode/private:for_bazel_tests",
-    ],
-    visibility = ["//:__pkg__"],
+bzl_library(
+    name = "xcode_sdk_variant",
+    srcs = ["xcode_sdk_variant.bzl"],
+    deps = [":providers"],
+)
+
+string_flag(
+    name = "version",
+    build_setting_default = "",
+    scope = "universal",
+)
+
+# TODO (b/469732626) - Rename to version_config once the migration is complete.
+label_flag(
+    name = "starlark_version_config",
+    build_setting_default = "@bazel_tools//tools/cpp:host_xcodes",
+)
+
+# The source of truth for Xcode configuration resolution.
+# Gates between the native field and the Starlark flag.
+# TODO (b/469732626) - Remove this once the migration is complete.
+xcode_config_resolver(
+    name = "version_config",
+)
+
+bool_flag(
+    name = "experimental_prefer_mutual_xcode",
+    build_setting_default = True,
+)
+
+bool_flag(
+    name = "include_xcode_exec_requirements",
+    build_setting_default = False,
+    scope = "universal",
+)
+
+string_flag(
+    name = "ios_minimum_os",
+    build_setting_default = "",
+)
+
+string_flag(
+    name = "watchos_minimum_os",
+    build_setting_default = "",
+)
+
+string_flag(
+    name = "tvos_minimum_os",
+    build_setting_default = "",
+)
+
+string_flag(
+    name = "host_macos_minimum_os",
+    build_setting_default = "",
+    scope = "universal",
+)
+
+string_flag(
+    name = "macos_minimum_os",
+    build_setting_default = "",
+    scope = "exec:--//xcode:host_macos_minimum_os",
+)
+
+bzl_library(
+    name = "providers",
+    srcs = ["providers.bzl"],
+)
+
+bzl_library(
+    name = "xcode_configure",
+    srcs = ["xcode_configure.bzl"],
 )

@@ -27,15 +27,15 @@ function tear_down() {
 function create_sim_runners() {
   cat > ios/BUILD <<EOF
 load(
-    "@build_bazel_rules_apple//apple:ios.bzl",
+    "@rules_apple//apple:ios.bzl",
     "ios_application",
     "ios_unit_test"
 )
-load("@build_bazel_rules_swift//swift:swift.bzl",
+load("@rules_swift//swift:swift.bzl",
      "swift_library"
 )
 load(
-    "@build_bazel_rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl",
+    "@rules_apple//apple/testing/default_runner:ios_xctestrun_runner.bzl",
     "ios_xctestrun_runner"
 )
 load("@rules_cc//cc:objc_library.bzl", "objc_library")
@@ -107,6 +107,12 @@ ios_xctestrun_runner(
     pre_action = ":pre_action",
     post_action = ":post_action",
 )
+
+ios_xctestrun_runner(
+    name = "ios_x86_64_sim_runner_with_test_environment",
+    device_type = "iPhone Xs",
+    test_environment = {"RUNNER_ENV_KEY1": "RUNNER_ENV_VALUE1"},
+)
 EOF
 }
 
@@ -149,7 +155,7 @@ ios_application(
     families = ["iphone"],
     infoplists = ["Info.plist"],
     minimum_os_version = "${MIN_OS_IOS}",
-    provisioning_profile = "@build_bazel_rules_apple//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    provisioning_profile = "@rules_apple//test/testdata/provisioning:integration_testing_ios.mobileprovision",
     deps = [":app_lib"],
 )
 EOF
@@ -466,6 +472,14 @@ ios_unit_test(
     minimum_os_version = "${MIN_OS_IOS}",
     test_host = ":app",
     runner = ":ios_x86_64_sim_runner",
+)
+
+ios_unit_test(
+    name = 'EnvFromRunner',
+    infoplists = ["EnvUnitTest-Info.plist"],
+    deps = [":env_unit_test_lib"],
+    minimum_os_version = "${MIN_OS_IOS}",
+    runner = ":ios_x86_64_sim_runner_with_test_environment",
 )
 EOF
 }
@@ -957,6 +971,23 @@ function test_ios_unit_test_with_host_with_env() {
   create_test_host_app
   create_ios_unit_env_test ENV_KEY1 ENV_VALUE2
   do_ios_test --test_env=ENV_KEY1=ENV_VALUE2 //ios:EnvWithHost || fail "should pass"
+
+  expect_log "Test Suite 'EnvUnitTest' passed"
+}
+
+function test_ios_unit_test_with_runner_test_environment() {
+  create_sim_runners
+  create_ios_unit_env_test RUNNER_ENV_KEY1 RUNNER_ENV_VALUE1
+  do_ios_test //ios:EnvFromRunner || fail "should pass"
+
+  expect_log "Test Suite 'EnvUnitTest' passed"
+}
+
+function test_ios_unit_test_with_runner_test_environment_overriding_test_env() {
+  create_sim_runners
+  create_ios_unit_env_test RUNNER_ENV_KEY1 RUNNER_ENV_VALUE1
+  do_ios_test --test_env=RUNNER_ENV_KEY1=FROM_COMMAND_LINE //ios:EnvFromRunner \
+    || fail "should pass"
 
   expect_log "Test Suite 'EnvUnitTest' passed"
 }

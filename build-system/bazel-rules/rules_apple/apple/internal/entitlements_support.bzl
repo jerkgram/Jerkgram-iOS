@@ -15,7 +15,7 @@
 """Actions that manipulate entitlements and provisioning profiles."""
 
 load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
+    "@apple_support//lib:apple_support.bzl",
     "apple_support",
 )
 load(
@@ -33,6 +33,10 @@ load(
 load(
     "//apple/internal:resource_actions.bzl",
     "resource_actions",
+)
+load(
+    "//apple/internal:shared_environment.bzl",
+    "shared_environment",
 )
 load(
     "//apple/internal/utils:defines.bzl",
@@ -100,6 +104,11 @@ def _include_debug_entitlements(*, platform_prerequisites):
     )
     if add_debugger_entitlement != None:
         return add_debugger_entitlement
+
+    build_settings = platform_prerequisites.build_settings
+    if build_settings and build_settings.add_debugger_entitlement:
+        return True
+
     if not platform_prerequisites.objc_fragment.uses_device_debug_entitlements:
         return False
     return True
@@ -176,6 +185,7 @@ def _extract_signing_info(
             actions = actions,
             apple_fragment = platform_prerequisites.apple_fragment,
             arguments = [control_file.path],
+            env = shared_environment.default_env,
             executable = provisioning_profile_tool,
             # Since the tools spawns openssl and/or security tool, it doesn't
             # support being sandboxed.
@@ -313,7 +323,7 @@ def _process_entitlements(
         plisttool = apple_mac_toolchain_info.plisttool,
     )
 
-    if platform_prerequisites.platform.is_device:
+    if platform_prerequisites.platform.is_device and product_type != apple_product_type.kernel_extension:
         return struct(
             bundle = final_entitlements,
             codesigning = final_entitlements,
@@ -399,6 +409,7 @@ def _generate_der_entitlements(
             der_entitlements.path,
             "--raw",
         ],
+        env = shared_environment.default_env,
         executable = "/usr/bin/derq",
         inputs = [entitlements],
         mnemonic = "ProcessDEREntitlements",

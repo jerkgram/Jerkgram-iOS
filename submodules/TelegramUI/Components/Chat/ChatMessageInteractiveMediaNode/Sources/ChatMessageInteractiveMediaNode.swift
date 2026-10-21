@@ -1,4 +1,5 @@
 import Foundation
+import LottieSettings
 import UIKit
 import AsyncDisplayKit
 import Postbox
@@ -49,7 +50,7 @@ public enum InteractiveMediaNodeSizeCalculation {
 public enum InteractiveMediaNodeContentMode {
     case aspectFit
     case aspectFill
-
+    
     public var bubbleVideoDecorationContentMode: ChatBubbleVideoDecorationContentMode {
         switch self {
         case .aspectFit:
@@ -154,7 +155,7 @@ public func roundedRectCgPath(roundRect rect: CGRect, topLeftRadius: CGFloat = 0
     }
 
     path.closeSubpath()
-
+            
     return path
 }
 
@@ -212,7 +213,7 @@ private class ExtendedMediaOverlayNode: ASDisplayNode {
     enum Icon {
         case lock
         case eye
-
+        
         var image: UIImage {
             switch self {
             case .lock:
@@ -223,47 +224,47 @@ private class ExtendedMediaOverlayNode: ASDisplayNode {
         }
     }
     private let context: AccountContext
-
+    
     private let blurredImageNode: TransformImageNode
     fileprivate let dustNode: MediaDustNode
     fileprivate let buttonNode: HighlightTrackingButtonNode
     private let highlightedBackgroundNode: ASDisplayNode
     private let iconNode: ASImageNode
     private let textNode: ImmediateTextNodeWithEntities
-
+    
     private var maskView: UIView?
     private var maskLayer: CAShapeLayer?
-
+    
     private var randomId: Int32?
     var isRevealed = false
     var tapped: () -> Void = {}
-
+    
     init(context: AccountContext, hasImageOverlay: Bool, icon: Icon?, enableAnimations: Bool) {
         self.context = context
-
+        
         self.blurredImageNode = TransformImageNode()
         self.blurredImageNode.contentAnimations = []
-
+         
         self.dustNode = MediaDustNode(enableAnimations: enableAnimations)
-
+        
         self.buttonNode = HighlightTrackingButtonNode()
         self.buttonNode.backgroundColor = UIColor(rgb: 0x000000, alpha: 0.3)
         self.buttonNode.clipsToBounds = true
         self.buttonNode.cornerRadius = 16.0
-
+        
         self.highlightedBackgroundNode = ASDisplayNode()
         self.highlightedBackgroundNode.backgroundColor = UIColor(rgb: 0xffffff, alpha: 0.2)
         self.highlightedBackgroundNode.alpha = 0.0
-
+        
         self.iconNode = ASImageNode()
         self.iconNode.displaysAsynchronously = false
         self.iconNode.image = icon?.image
-
+        
         self.textNode = ImmediateTextNodeWithEntities()
         self.textNode.isUserInteractionEnabled = false
-
+        
         super.init()
-
+                
         if hasImageOverlay {
             self.addSubnode(self.blurredImageNode)
         }
@@ -273,7 +274,7 @@ private class ExtendedMediaOverlayNode: ASDisplayNode {
         self.buttonNode.addSubnode(self.highlightedBackgroundNode)
         self.buttonNode.addSubnode(self.iconNode)
         self.buttonNode.addSubnode(self.textNode)
-
+        
         self.buttonNode.highligthedChanged = { [weak self] highlighted in
             if let strongSelf = self {
                 if highlighted {
@@ -285,32 +286,32 @@ private class ExtendedMediaOverlayNode: ASDisplayNode {
                 }
             }
         }
-
+        
         self.buttonNode.addTarget(self, action: #selector(self.buttonPressed), forControlEvents: .touchUpInside)
     }
-
+    
     @objc private func buttonPressed() {
         self.tapped()
     }
-
+        
     override func didLoad() {
         super.didLoad()
-
+        
         if #available(iOS 13.0, *) {
             self.buttonNode.layer.cornerCurve = .continuous
         }
-
+        
         let maskView = UIView()
         self.maskView = maskView
         self.dustNode.view.mask = maskView
-
+        
         let maskLayer = CAShapeLayer()
         maskLayer.fillRule = .evenOdd
         maskLayer.fillColor = UIColor.white.cgColor
         maskView.layer.addSublayer(maskLayer)
         self.maskLayer = maskLayer
     }
-
+    
     func reveal(animated: Bool = false) {
         self.isRevealed = true
         if animated {
@@ -321,7 +322,7 @@ private class ExtendedMediaOverlayNode: ASDisplayNode {
             self.dustNode.removeFromSupernode()
         }
     }
-
+    
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let result = super.hitTest(point, with: event)
         if self.isRevealed {
@@ -329,22 +330,22 @@ private class ExtendedMediaOverlayNode: ASDisplayNode {
         }
         return result
     }
-
+        
     func update(size: CGSize, text: String, imageSignal: (Signal<(TransformImageArguments) -> DrawingContext?, NoError>, CGSize, CGSize, Int32)?, imageFrame: CGRect, corners: ImageCorners?) {
         let spacing: CGFloat = 2.0
         let padding: CGFloat = 10.0
-
+        
         if let (imageSignal, drawingSize, boundingSize, randomId) = imageSignal {
             if self.randomId != randomId {
                 self.randomId = randomId
                 self.blurredImageNode.setSignal(imageSignal, attemptSynchronously: true)
-
+                
                 let imageLayout = self.blurredImageNode.asyncLayout()
                 let arguments = TransformImageArguments(corners: corners ?? ImageCorners(), imageSize: drawingSize, boundingSize: boundingSize, intrinsicInsets: UIEdgeInsets(), resizeMode: .blurBackground, emptyColor: .clear, custom: nil)
                 let apply = imageLayout(arguments)
                 apply()
             }
-
+            
             self.blurredImageNode.isHidden = false
 
             self.isRevealed = self.dustNode.isRevealed
@@ -369,41 +370,41 @@ private class ExtendedMediaOverlayNode: ASDisplayNode {
             self.isRevealed = true
         }
         self.blurredImageNode.frame = imageFrame
-
+                
         self.dustNode.frame = CGRect(origin: .zero, size: size)
         self.dustNode.update(size: size, color: .white, transition: .immediate)
-
+        
         if text.isEmpty {
             self.buttonNode.isHidden = true
             self.textNode.isHidden = true
         } else {
             self.buttonNode.isHidden = false
             self.textNode.isHidden = false
-
+            
             self.textNode.arguments = TextNodeWithEntities.Arguments(context: self.context, cache: self.context.animationCache, renderer: self.context.animationRenderer, placeholderColor: .clear, attemptSynchronous: true)
-
+            
             let string = NSMutableAttributedString(string: text, font: Font.semibold(15.0), textColor: .white)
             if let range = string.string.range(of: "⭐️") {
                 string.addAttribute(ChatTextInputAttributes.customEmoji, value: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: 0, file: nil, custom: .stars(tinted: false)), range: NSRange(range, in: string.string))
                 string.addAttribute(.baselineOffset, value: 0.5, range: NSRange(range, in: string.string))
             }
-
+        
             self.textNode.attributedText = string
             let textSize = self.textNode.updateLayout(size)
             let iconSize = self.iconNode.image?.size ?? .zero
-
+                
             var contentSize = CGSize(width: textSize.width + padding * 2.0, height: 32.0)
             if iconSize.width > 0.0 {
                 contentSize.width += iconSize.width + spacing
             }
-
+            
             self.buttonNode.frame = CGRect(origin: CGPoint(x: floorToScreenPixels((size.width - contentSize.width) / 2.0), y: floorToScreenPixels((size.height - contentSize.height) / 2.0)), size: contentSize)
             self.highlightedBackgroundNode.frame = CGRect(origin: .zero, size: contentSize)
-
+            
             self.iconNode.frame = CGRect(origin: CGPoint(x: padding, y: floorToScreenPixels((contentSize.height - iconSize.height) / 2.0) + 1.0 - UIScreenPixel), size: iconSize)
             self.textNode.frame = CGRect(origin: CGPoint(x: contentSize.width - padding - textSize.width, y: floorToScreenPixels((contentSize.height - textSize.height) / 2.0)), size: textSize)
         }
-
+        
         var leftOffset: CGFloat = 0.0
         var rightOffset: CGFloat = 0.0
         let corners = corners ?? ImageCorners(radius: 16.0)
@@ -448,16 +449,16 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
     }
     public let dateAndStatusNode: ChatMessageDateAndStatusNode
     private var badgeNode: ChatMessageInteractiveMediaBadge?
-
+    
     private var livePhotoIconNode: ASImageNode?
-
+    
     private var timestampContainerView: UIView?
     private var timestampMaskView: UIImageView?
     private var videoTimestampBackgroundLayer: SimpleLayer?
     private var videoTimestampForegroundLayer: SimpleLayer?
-
+    
     private var extendedMediaOverlayNode: ExtendedMediaOverlayNode?
-
+        
     private var context: AccountContext?
     private var message: Message?
     private var attributes: ChatMessageEntryAttributes?
@@ -470,17 +471,17 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
     public var automaticPlayback: Bool?
     private var preferredStoryHighQuality: Bool = false
     private var showSensitiveContent: Bool = false
-
+    
     private let statusDisposable = MetaDisposable()
     private let fetchControls = Atomic<FetchControls?>(value: nil)
     private var fetchStatus: MediaResourceStatus?
     private var actualFetchStatus: MediaResourceStatus?
     private let fetchDisposable = MetaDisposable()
     private let coverFetchDisposable = MetaDisposable()
-
+    
     private let videoNodeReadyDisposable = MetaDisposable()
     private let playerStatusDisposable = MetaDisposable()
-
+    
     private var playerUpdateTimer: SwiftSignalKit.Timer?
     private var playerStatus: MediaPlayerStatus? {
         didSet {
@@ -494,21 +495,21 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             }
         }
     }
-
+    
     private var secretTimer: SwiftSignalKit.Timer?
-
+    
     public var visibilityPromise = ValuePromise<Bool>(false, ignoreRepeated: true)
     public var visibility: Bool = false {
         didSet {
             self.updateVisibility()
         }
     }
-
+    
     private var internallyVisible = true
     private func updateVisibility() {
         let isPreview = self.themeAndStrings?.3 ?? false
         let visibility = self.visibility && self.internallyVisible && !isPreview
-
+        
         if let videoNode = self.videoNode {
             if visibility {
                 if !videoNode.canAttachContent {
@@ -524,23 +525,23 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         self.animatedStickerNode?.visibility = visibility
         self.visibilityPromise.set(visibility)
     }
-
+    
     public var activateLocalContent: (InteractiveMediaNodeActivateContent) -> Void = { _ in }
     public var activatePinch: ((PinchSourceContainerNode) -> Void)?
     public var updateMessageReaction: ((Message, ChatControllerInteractionReaction, Bool, ContextExtractedContentContainingView?) -> Void)?
     public var playMessageEffect: ((Message) -> Void)?
     public var activateAgeRestrictedMedia: (() -> Void)?
     public var requestInlineUpdate: (() -> Void)?
-
+    
     private var hlsInlinePlaybackRange: Range<Int64>?
     private var appliedHlsInlinePlaybackRange: Range<Int64>?
     private var hlsInlinePlaybackRangeDisposable: Disposable?
-
+    
     #if DEBUG && false
     private var testDeferHLSMedia: Bool = true
     private var deferHLSMediaTimer: Foundation.Timer?
     #endif
-
+    
     override public init() {
         self.pinchContainerNode = PinchSourceContainerNode()
 
@@ -548,14 +549,14 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
 
         self.imageNode = TransformImageNode()
         self.imageNode.contentAnimations = [.subsequentUpdates]
-
+        
         super.init()
 
         self.addSubnode(self.pinchContainerNode)
-
+        
         self.imageNode.displaysAsynchronously = false
         self.pinchContainerNode.contentNode.addSubnode(self.imageNode)
-
+        
         self.pinchContainerNode.activate = { [weak self] sourceNode in
             guard let strongSelf = self else {
                 return
@@ -638,7 +639,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             }
         }
     }
-
+    
     deinit {
         self.statusDisposable.dispose()
         self.videoNodeReadyDisposable.dispose()
@@ -648,7 +649,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         self.secretTimer?.invalidate()
         self.hlsInlinePlaybackRangeDisposable?.dispose()
     }
-
+    
     public func isAvailableForGalleryTransition() -> Bool {
         if let automaticPlayback = self.automaticPlayback, automaticPlayback, self.decoration != nil {
             return true
@@ -656,17 +657,17 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             return false
         }
     }
-
+    
     public func isAvailableForInstantPageTransition() -> Bool {
         return false
     }
-
+    
     override public func didLoad() {
         super.didLoad()
-
+        
         self.imageNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.imageTap(_:))))
     }
-
+    
     private func progressPressed(canActivate: Bool) {
         if let _ = self.attributes?.updatingMedia {
             if let message = self.message {
@@ -688,7 +689,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
                 return
             }
-
+            
             switch fetchStatus {
                 case .Fetching:
                     if let context = self.context, let message = self.message, message.flags.isSending {
@@ -733,12 +734,12 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             }
         }
     }
-
+    
     override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let result = super.hitTest(point, with: event)
         return result
     }
-
+    
     @objc private func imageTap(_ recognizer: UITapGestureRecognizer) {
         if case .ended = recognizer.state {
             let point = recognizer.location(in: self.imageNode.view)
@@ -753,26 +754,26 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     if let invoice = media as? TelegramMediaInvoice, let extendedMedia = invoice.extendedMedia, case let .full(fullMedia) = extendedMedia {
                         media = fullMedia
                     }
-
+                    
                     if let storyMedia = media as? TelegramMediaStory, let storyItem = self.message?.associatedStories[storyMedia.storyId]?.get(Stories.StoredItem.self) {
                         if case let .item(item) = storyItem, let _ = item.media {
                             media = selectStoryMedia(item: item, preferredHighQuality: self.preferredStoryHighQuality)
                         }
                     }
-
+                    
                     videoContentMatch = self.message?.stableId == stableId && media?.id == mediaId
                 } else if let content = self.videoContent as? PlatformVideoContent, case let .message(_, stableId, mediaId) = content.nativeId {
                     var media = self.media
                     if let invoice = media as? TelegramMediaInvoice, let extendedMedia = invoice.extendedMedia, case let .full(fullMedia) = extendedMedia {
                         media = fullMedia
                     }
-
+                    
                     if let storyMedia = media as? TelegramMediaStory, let storyItem = self.message?.associatedStories[storyMedia.storyId]?.get(Stories.StoredItem.self) {
                         if case let .item(item) = storyItem, let _ = item.media {
                             media = selectStoryMedia(item: item, preferredHighQuality: self.preferredStoryHighQuality)
                         }
                     }
-
+                    
                     videoContentMatch = self.message?.stableId == stableId && media?.id == mediaId
                 }
                 self.activateLocalContent((self.automaticPlayback ?? false) && videoContentMatch ? .automaticPlayback : .default)
@@ -797,13 +798,13 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             }
         }
     }
-
+    
     private struct MaskImageCornerKey: Hashable {
         var bottomLeft: CGFloat
         var bottomRight: CGFloat
         var leftInset: CGFloat
         var rightInset: CGFloat
-
+        
         init(bottomLeft: CGFloat, bottomRight: CGFloat, leftInset: CGFloat, rightInset: CGFloat) {
             self.bottomLeft = bottomLeft
             self.bottomRight = bottomRight
@@ -812,7 +813,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         }
     }
     private static var timestampMaskImageCache: [MaskImageCornerKey: UIImage] = [:]
-
+    
     private func generateTimestampMaskImage(corners: ImageCorners) -> UIImage? {
         var insets = corners.extendedEdges
         insets.top = 0.0
@@ -822,13 +823,13 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         if let image = ChatMessageInteractiveMediaNode.timestampMaskImageCache[cacheKey] {
             return image
         }
-
+        
         let imageSize = CGSize(width: corners.bottomLeft.radius + corners.bottomRight.radius + insets.left + insets.right + 1.0, height: 1.0 + max(corners.bottomLeft.radius, corners.bottomRight.radius))
-
+        
         guard let context = DrawingContext(size: imageSize, clear: true) else {
             return nil
         }
-
+        
         context.withContext { c in
             c.setFillColor(UIColor.white.cgColor)
             c.move(to: CGPoint(x: insets.left, y: insets.top))
@@ -840,7 +841,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             c.closePath()
             c.fillPath()
         }
-
+        
         let image = context.generateImage()?.resizableImage(
             withCapInsets: UIEdgeInsets(
                 top: 0,
@@ -850,38 +851,38 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             ),
             resizingMode: .stretch
         )
-
+        
         if let image {
             ChatMessageInteractiveMediaNode.timestampMaskImageCache[cacheKey] = image
         }
-
+        
         return image
     }
-
+    
     public func asyncLayout() -> (_ context: AccountContext, _ presentationData: ChatPresentationData, _ dateTimeFormat: PresentationDateTimeFormat, _ message: Message, _ associatedData: ChatMessageItemAssociatedData,  _ attributes: ChatMessageEntryAttributes, _ media: Media, _ mediaIndex: Int?, _ dateAndStatus: ChatMessageDateAndStatus?, _ automaticDownload: InteractiveMediaNodeAutodownloadMode, _ peerType: MediaAutoDownloadPeerType, _ peerId: EnginePeer.Id?, _ sizeCalculation: InteractiveMediaNodeSizeCalculation, _ layoutConstants: ChatMessageItemLayoutConstants, _ contentMode: InteractiveMediaNodeContentMode, _ presentationContext: ChatPresentationContext) -> (CGSize, CGFloat, (CGSize, Bool, Bool, ImageCorners) -> (CGFloat, (CGFloat) -> (CGSize, (ListViewItemUpdateAnimation, Bool) -> Void))) {
         let currentMessage = self.message
         let currentMedia = self.media
         let imageLayout = self.imageNode.asyncLayoutWithAnimation()
         let statusLayout = self.dateAndStatusNode.asyncLayout()
-
+        
         let currentVideoNode = self.videoNode
         let currentAnimatedStickerNode = self.animatedStickerNode
-
+        
         let hasCurrentVideoNode = currentVideoNode != nil
         let hasCurrentAnimatedStickerNode = currentAnimatedStickerNode != nil
         let currentAutomaticDownload = self.automaticDownload
         let currentAutomaticPlayback = self.automaticPlayback
-
+        
         let hlsInlinePlaybackRange = self.hlsInlinePlaybackRange
         let appliedHlsInlinePlaybackRange = self.appliedHlsInlinePlaybackRange
-
+        
         #if DEBUG && false
         let testDeferHLSMedia = self.testDeferHLSMedia
         #endif
-
+        
         return { [weak self] context, presentationData, dateTimeFormat, message, associatedData, attributes, media, mediaIndex, dateAndStatus, automaticDownload, peerType, peerId, sizeCalculation, layoutConstants, contentMode, presentationContext in
             let _ = peerType
-
+            
             #if DEBUG && false
             var media = media
             var maybeRestoreHLSMedia = false
@@ -904,7 +905,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
             }
             #endif
-
+            
             var useInlineHLS = true
             var displayInlineScrubber = true
             var startFromSavedPosition = true
@@ -919,9 +920,9 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     startFromSavedPosition = value != 0.0
                 }
             }
-
+            
             var nativeSize: CGSize
-
+            
             var isSecretMedia = message.containsSecretMedia
             let ghostBaseOneTimeVisualBypass = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenshots") as? Bool) ?? false) || ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeScreenRecording") as? Bool) ?? false) || ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false))) && message.minAutoremoveOrClearTimeout != nil && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
             if ghostBaseOneTimeVisualBypass {
@@ -939,14 +940,14 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     }
                 }
             }
-
+            
             var storeToDownloadsPeerId: EnginePeer.Id?
             for media in message.media {
                 if media is TelegramMediaImage {
                     storeToDownloadsPeerId = peerId
                 }
             }
-
+            
             let hasSpoiler = message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute })
             var isExtendedMediaPreview = false
             var isInlinePlayableVideo = false
@@ -955,9 +956,9 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             var maxHeight = layoutConstants.image.maxDimensions.height
             var isStory = false
             var isGift = false
-
+            
             let _ = isStory
-
+            
             var additionalWidthConstrainment = false
             var unboundSize: CGSize
             if let story = media as? TelegramMediaStory {
@@ -967,7 +968,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 } else {
                     unboundSize = CGSize(width: 1080, height: 1920)
                 }
-
+                
                 if let storyItem = message.associatedStories[story.storyId]?.get(Stories.StoredItem.self), case let .item(item) = storyItem, let media = item.media {
                     if let file = media as? TelegramMediaFile {
                         isInlinePlayableVideo = file.isVideo && !isSecretMedia
@@ -1087,7 +1088,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     unboundSize = CGSize(width: 54.0, height: 54.0)
                 }
             }
-
+            
             switch sizeCalculation {
                 case let .constrained(constrainedSize):
                     if isSticker || isGift {
@@ -1110,7 +1111,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
 
             var statusSize = CGSize()
             var statusApply: ((ListViewItemUpdateAnimation) -> Void)?
-
+            
             let messageEffect = message.messageEffect(availableMessageEffects: associatedData.availableMessageEffects)
 
             if let dateAndStatus = dateAndStatus {
@@ -1139,32 +1140,32 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     animationCache: presentationContext.animationCache,
                     animationRenderer: presentationContext.animationRenderer
                 ))
-
+                
                 let (size, apply) = statusSuggestedWidthAndContinue.1(statusSuggestedWidthAndContinue.0)
-
+                
                 statusSize = size
                 statusApply = apply
             }
-
+            
             let maxWidth: CGFloat
             if isSecretMedia {
                 maxWidth = 200.0
             } else {
                 maxWidth = maxDimensions.width
             }
-
+            
             return (nativeSize, maxWidth, { constrainedSize, automaticPlayback, wideLayout, corners in
                 var resultWidth: CGFloat
-
+                
                 var automaticPlayback = automaticPlayback
                 if let file = media as? TelegramMediaFile, NativeVideoContent.isHLSVideo(file: file) {
                     if automaticDownload != .full {
                         automaticPlayback = false
                     }
                 }
-
+                
                 isInlinePlayableVideo = isInlinePlayableVideo && automaticPlayback
-
+                
                 switch sizeCalculation {
                     case .constrained:
                         if isSecretMedia {
@@ -1182,11 +1183,11 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     case .unconstrained:
                         resultWidth = constrainedSize.width
                 }
-
+                
                 return (resultWidth, { boundingWidth in
                     var boundingSize: CGSize
                     var drawingSize: CGSize
-
+                    
                     switch sizeCalculation {
                         case .constrained:
                             if isSecretMedia {
@@ -1200,7 +1201,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 } else {
                                     filledSize = fittedSize.aspectFilled(CGSize(width: boundingWidth, height: fittedSize.height))
                                 }
-
+                                
                                 boundingSize = CGSize(width: boundingWidth, height: filledSize.height).cropped(CGSize(width: CGFloat.greatestFiniteMagnitude, height: maxHeight))
                                 boundingSize.height = max(boundingSize.height, layoutConstants.image.minDimensions.height)
                                 boundingSize.width = max(boundingSize.width, layoutConstants.image.minDimensions.width)
@@ -1218,21 +1219,21 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                             boundingSize = constrainedSize
                             drawingSize = nativeSize.aspectFilled(boundingSize)
                     }
-
+                    
                     var updateImageSignal: ((Bool, Bool) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError>)?
                     var updateBlurredImageSignal: ((Bool, Bool) -> Signal<(TransformImageArguments) -> DrawingContext?, NoError>)?
                     var updatedStatusSignal: Signal<(MediaResourceStatus, MediaResourceStatus?), NoError>?
                     var updatedFetchControls: FetchControls?
-
+                    
                     var mediaUpdated = false
                     if let currentMedia = currentMedia {
                         mediaUpdated = !media.isSemanticallyEqual(to: currentMedia)
-
+                        
                         if !mediaUpdated, let media = media as? TelegramMediaStory {
                             if message.associatedStories[media.storyId] != currentMessage?.associatedStories[media.storyId] {
                                 let previousStory = message.associatedStories[media.storyId]
                                 let updatedStory = currentMessage?.associatedStories[media.storyId]
-
+                                
                                 if let previousItem = previousStory?.get(Stories.StoredItem.self), let updatedItem = updatedStory?.get(Stories.StoredItem.self), case let .item(previousItemValue) = previousItem, case let .item(updatedItemValue) = updatedItem {
                                     if let previousItemMedia = previousItemValue.media, let updatedItemMedia = updatedItemValue.media {
                                         mediaUpdated = !previousItemMedia.isSemanticallyEqual(to: updatedItemMedia)
@@ -1246,30 +1247,30 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                         mediaUpdated = true
                     }
                     let inlinePlaybackRangeUpdated = hlsInlinePlaybackRange != appliedHlsInlinePlaybackRange
-
+                    
                     var isSendingUpdated = false
                     if let currentMessage = currentMessage {
                         isSendingUpdated = message.flags.isSending != currentMessage.flags.isSending
                     }
-
+                    
                     var automaticPlaybackUpdated = false
                     if let currentAutomaticPlayback = currentAutomaticPlayback {
                         automaticPlaybackUpdated = automaticPlayback != currentAutomaticPlayback
                     }
-
+                    
                     var statusUpdated = mediaUpdated
                     if currentMessage?.id != message.id || currentMessage?.flags != message.flags {
                         statusUpdated = true
                     }
-
+                    
                     var replaceVideoNode: Bool?
                     var replaceAnimatedStickerNode: Bool?
                     var updateVideoFile: TelegramMediaFile?
                     var updateAnimatedStickerFile: TelegramMediaFile?
                     var onlyFullSizeVideoThumbnail: Bool?
-
+                    
                     var loadHLSRangeVideoFile: TelegramMediaFile?
-
+                    
                     var emptyColor: UIColor
                     var patternArguments: PatternWallpaperArguments?
                     if isSticker {
@@ -1302,7 +1303,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                             patternArguments = PatternWallpaperArguments(colors: colors, rotation: rotation, customPatternColor: customPatternColor, bakePatternAlpha: bakePatternAlpha)
                         }
                     }
-
+                    
                     let reloadMedia = mediaUpdated || isSendingUpdated || automaticPlaybackUpdated
                     if mediaUpdated || isSendingUpdated || automaticPlaybackUpdated || inlinePlaybackRangeUpdated {
                         var media = media
@@ -1315,7 +1316,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 extendedMedia = paidContent.extendedMedia[selectedMediaIndex]
                             }
                         }
-
+                        
                         if let extendedMedia {
                             switch extendedMedia {
                             case let .preview(_, immediateThumbnailData, _):
@@ -1335,18 +1336,18 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 }
                             }
                         }
-
+                        
                         var effectiveFile: TelegramMediaFile? = media as? TelegramMediaFile
                         if let story = media as? TelegramMediaStory {
                             isStory = true
-
+                            
                             if hasCurrentVideoNode {
                                 replaceVideoNode = true
                             }
                             if hasCurrentAnimatedStickerNode {
                                 replaceAnimatedStickerNode = true
                             }
-
+                            
                             if let storyItem = message.associatedStories[story.storyId]?.get(Stories.StoredItem.self), case let .item(item) = storyItem, let media = selectStoryMedia(item: item, preferredHighQuality: associatedData.preferredStoryHighQuality) {
                                 if let image = media as? TelegramMediaImage {
                                     if hasCurrentVideoNode {
@@ -1367,7 +1368,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                             return chatSecretPhoto(account: context.account, userLocation: .peer(message.id.peerId), photoReference: .message(message: MessageReference(message), media: image), ignoreFullSize: true, synchronousLoad: true)
                                         }
                                     }
-
+                                    
                                     updatedFetchControls = FetchControls(fetch: { manual in
                                         if let strongSelf = self {
                                             if let representation = largestRepresentationForPhoto(image) {
@@ -1405,15 +1406,15 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                             }
                                         }
                                     }
-
+                                    
                                     var uploading = false
                                     if file.resource is VideoLibraryMediaResource {
                                         uploading = true
                                     }
-
+                                    
                                     if file.isVideo && !file.isVideoSticker && !isSecretMedia && automaticPlayback && !uploading {
                                         loadHLSRangeVideoFile = file
-
+                                        
                                         var passFile = true
                                         if NativeVideoContent.isHLSVideo(file: file), let minimizedQualityFile = HLSVideoContent.minimizedHLSQuality(file: .message(message: MessageReference(message), media: file), codecConfiguration: HLSCodecConfiguration(context: context)) {
                                             if !useInlineHLS {
@@ -1423,7 +1424,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                                 passFile = false
                                             }
                                         }
-
+                                        
                                         if passFile {
                                             updateVideoFile = file
                                             if hasCurrentVideoNode {
@@ -1448,7 +1449,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         if hasCurrentVideoNode {
                                             replaceVideoNode = false
                                         }
-
+                                        
                                         if file.isAnimatedSticker || file.isVideoSticker {
                                             updateAnimatedStickerFile = file
                                             if hasCurrentAnimatedStickerNode {
@@ -1464,7 +1465,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                             }
                                         }
                                     }
-
+                                    
                                     updatedFetchControls = FetchControls(fetch: { manual in
                                         if let strongSelf = self {
                                             if file.isAnimated {
@@ -1501,7 +1502,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     return chatSecretPhoto(account: context.account, userLocation: .peer(message.id.peerId), photoReference: .message(message: MessageReference(message), media: image), ignoreFullSize: true, synchronousLoad: true)
                                 }
                             }
-
+                            
                             updatedFetchControls = FetchControls(fetch: { manual in
                                 if let strongSelf = self {
                                     if let representation = largestRepresentationForPhoto(image) {
@@ -1514,13 +1515,13 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     messageMediaImageCancelInteractiveFetch(context: context, messageId: message.id, image: image, resource: resource)
                                 }
                             })
-
+                            
                             if var video = image.video {
                                 if video.immediateThumbnailData == nil {
                                     video = video.withUpdatedImmediateThumnailData(image.immediateThumbnailData)
                                 }
                                 effectiveFile = video
-                            }
+                            }                            
                         } else if let image = media as? TelegramMediaWebFile {
                             if hasCurrentVideoNode {
                                 replaceVideoNode = true
@@ -1531,7 +1532,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                             updateImageSignal = { synchronousLoad, _ in
                                 return chatWebFileImage(account: context.account, file: image)
                             }
-
+                            
                             updatedFetchControls = FetchControls(fetch: { _ in
                                 if let strongSelf = self {
                                     strongSelf.fetchDisposable.set(chatMessageWebFileInteractiveFetched(account: context.account, userLocation: .peer(message.id.peerId), image: image).startStrict())
@@ -1575,7 +1576,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         return solidColorImage(.black)
                                 }
                             }
-
+                            
                             if case let .file(file, _, _, _, _, _) = wallpaper.content {
                                 updatedFetchControls = FetchControls(fetch: { manual in
                                     if let strongSelf = self {
@@ -1594,10 +1595,10 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                             if file.resource is VideoLibraryMediaResource {
                                 uploading = true
                             }
-
+                            
                             if file.isVideo && !file.isVideoSticker && !isSecretMedia && automaticPlayback && !uploading {
                                 loadHLSRangeVideoFile = file
-
+                                
                                 var passFile = true
                                 if NativeVideoContent.isHLSVideo(file: file), let minimizedQualityFile = HLSVideoContent.minimizedHLSQuality(file: .message(message: MessageReference(message), media: file), codecConfiguration: HLSCodecConfiguration(context: context)) {
                                     if !useInlineHLS {
@@ -1607,7 +1608,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         passFile = false
                                     }
                                 }
-
+                                
                                 if passFile {
                                     updateVideoFile = file
                                     if hasCurrentVideoNode {
@@ -1632,7 +1633,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 if hasCurrentVideoNode {
                                     replaceVideoNode = false
                                 }
-
+                                
                                 if file.isAnimatedSticker || file.isVideoSticker {
                                     updateAnimatedStickerFile = file
                                     if hasCurrentAnimatedStickerNode {
@@ -1648,14 +1649,14 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                 }
                             }
-
+                            
                             if isSecretMedia {
                                 updateImageSignal = { synchronousLoad, _ in
                                     return chatSecretMessageVideo(account: context.account, userLocation: .peer(message.id.peerId), videoReference: .message(message: MessageReference(message), media: file))
                                 }
                             } else {
                                 if let _ = media as? TelegramMediaImage {
-
+                                    
                                 } else if let image = file.videoCover {
                                     updateImageSignal = { synchronousLoad, highQuality in
                                         return chatMessagePhoto(postbox: context.account.postbox, userLocation: .peer(message.id.peerId), photoReference: .message(message: MessageReference(message), media: image), synchronousLoad: synchronousLoad, highQuality: highQuality)
@@ -1692,7 +1693,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                 }
                             }
-
+                            
                             updatedFetchControls = FetchControls(fetch: { manual in
                                 if let strongSelf = self {
                                     let disposableSet = DisposableSet()
@@ -1722,7 +1723,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     } else {
                         print("reload media")
                     }
-
+                    
                     var isExtendedMedia = false
                     if statusUpdated {
                         var media = media
@@ -1744,7 +1745,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 media = mediaValue
                             }
                         }
-
+                        
                         if let image = media as? TelegramMediaImage {
                             if message.flags.isSending {
                                 updatedStatusSignal = combineLatest(chatMessagePhotoStatus(context: context, messageId: message.id, photoReference: .message(message: MessageReference(message), media: image)), context.account.pendingMessageManager.pendingMessageStatus(message.id) |> map { $0.0 })
@@ -1769,7 +1770,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                         } else if let file = media as? TelegramMediaFile {
                             if NativeVideoContent.isHLSVideo(file: file), let minimizedQuality = HLSVideoContent.minimizedHLSQuality(file: .standalone(media: file), codecConfiguration: HLSCodecConfiguration(context: context)) {
                                 let postbox = context.account.postbox
-
+                                
                                 let playlistStatusSignal = context.engine.resources.status(resource: EngineMediaResource(minimizedQuality.playlist.media.resource))
                                 |> map { status -> MediaResourceStatus in
                                     switch status {
@@ -1782,7 +1783,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                 }
                                 |> distinctUntilChanged
-
+                                
                                 updatedStatusSignal = playlistStatusSignal
                                 |> mapToSignal { playlistStatus -> Signal<(MediaResourceStatus, MediaResourceStatus?), NoError> in
                                     switch playlistStatus {
@@ -1793,13 +1794,13 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     case .Local:
                                         break
                                     }
-
+                                    
                                     return HLSVideoContent.minimizedHLSQualityPreloadData(postbox: postbox, file: .message(message: MessageReference(message), media: file), userLocation: .peer(message.id.peerId), prefixSeconds: 10, autofetchPlaylist: true, codecConfiguration: HLSCodecConfiguration(context: context))
                                     |> mapToSignal { preloadData -> Signal<(MediaResourceStatus, MediaResourceStatus?), NoError> in
                                         guard let preloadData else {
                                             return .single((.Local, nil))
                                         }
-
+                                        
                                         return context.engine.resources.status(resource: EngineMediaResource(preloadData.0.media.resource))
                                         |> map { status -> Bool in
                                             if case .Fetching = status {
@@ -1868,15 +1869,15 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                         videoCorners = ImageCorners(radius: boundingSize.width / 2.0)
                         imageCorners = ImageCorners(radius: 0.0)
                     }
-
+                    
                     let arguments = TransformImageArguments(corners: imageCorners, imageSize: drawingSize, boundingSize: boundingSize, intrinsicInsets: UIEdgeInsets(), resizeMode: isInlinePlayableVideo ? .fill(.black) : .blurBackground, emptyColor: emptyColor, custom: patternArguments)
-
+                    
                     let imageFrame = CGRect(origin: CGPoint(x: -arguments.insets.left, y: -arguments.insets.top), size: arguments.drawingSize).ensuredValid
                     let cleanImageFrame = CGRect(origin: imageFrame.origin, size: CGSize(width: imageFrame.width - arguments.corners.extendedEdges.right, height: imageFrame.height))
-
+                    
                     let imageApply = imageLayout(arguments)
-
-                    return (boundingSize, { transition, synchronousLoads in
+                    
+                    return (boundingSize, { [context] transition, synchronousLoads in
                         if let strongSelf = self {
                             strongSelf.context = context
                             strongSelf.message = message
@@ -1890,7 +1891,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                             strongSelf.automaticDownload = automaticDownload
                             strongSelf.preferredStoryHighQuality = associatedData.preferredStoryHighQuality
                             strongSelf.showSensitiveContent = associatedData.showSensitiveContent
-
+                            
                             #if DEBUG && false
                             if strongSelf.testDeferHLSMedia && maybeRestoreHLSMedia && strongSelf.deferHLSMediaTimer == nil {
                                 strongSelf.deferHLSMediaTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false, block: { [weak strongSelf] _ in
@@ -1902,7 +1903,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 })
                             }
                             #endif
-
+                                                        
                             if let previousArguments = strongSelf.currentImageArguments {
                                 if previousArguments.imageSize == arguments.imageSize {
                                     strongSelf.pinchContainerNode.frame = imageFrame
@@ -1912,7 +1913,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     transition.animator.updateFrame(layer: strongSelf.pinchContainerNode.layer, frame: imageFrame, completion: nil)
                                     transition.animator.updateFrame(layer: strongSelf.imageNode.layer, frame: CGRect(origin: CGPoint(), size: imageFrame.size), completion: nil)
                                     strongSelf.pinchContainerNode.update(size: imageFrame.size, transition: transition.transition)
-
+                                    
                                 }
                             } else {
                                 strongSelf.pinchContainerNode.frame = imageFrame
@@ -1936,7 +1937,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     transition.animator.updateFrame(layer: strongSelf.dateAndStatusNode.layer, frame: dateAndStatusFrame, completion: nil)
                                     statusApply(transition)
                                 }
-
+                                
                                 if messageEffect != nil {
                                     strongSelf.dateAndStatusNode.pressed = { [weak strongSelf] in
                                         guard let strongSelf, let message = strongSelf.message else {
@@ -1951,14 +1952,14 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 strongSelf.dateAndStatusNode.removeFromSupernode()
                                 strongSelf.dateAndStatusNode.pressed = nil
                             }
-
+                            
                             if let statusNode = strongSelf.statusNode {
                                 var statusFrame = statusNode.frame
                                 statusFrame.origin.x = floor(imageFrame.width / 2.0 - statusFrame.width / 2.0)
                                 statusFrame.origin.y = floor(imageFrame.height / 2.0 - statusFrame.height / 2.0)
                                 statusNode.frame = statusFrame
                             }
-
+                            
                             var videoTimestamp: Int32?
                             var storedVideoTimestamp: Int32?
                             for attribute in message.attributes {
@@ -1973,7 +1974,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                             if let storedVideoTimestamp {
                                 videoTimestamp = storedVideoTimestamp
                             }
-
+                                                        
                             var updatedVideoNodeReadySignal: Signal<Void, NoError>?
                             var updatedPlayerStatusSignal: Signal<MediaPlayerStatus?, NoError>?
                             if let currentReplaceVideoNode = replaceVideoNode {
@@ -1983,15 +1984,15 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     videoNode.removeFromSupernode()
                                     strongSelf.videoNode = nil
                                 }
-
+                                
                                 if currentReplaceVideoNode, let updatedVideoFile = updateVideoFile {
                                     let decoration = ChatBubbleVideoDecoration(corners: videoCorners, nativeSize: nativeSize, contentMode: contentMode.bubbleVideoDecorationContentMode, backgroundColor: arguments.emptyColor ?? .black)
                                     strongSelf.videoNodeDecoration = decoration
                                     let mediaManager = context.sharedContext.mediaManager
-
+                                    
                                     let streamVideo = isMediaStreamable(message: EngineMessage(message), media: updatedVideoFile)
                                     let loopVideo = updatedVideoFile.isAnimated
-
+                                    
                                     let videoContent: UniversalVideoContent
                                     if useInlineHLS && NativeVideoContent.isHLSVideo(file: updatedVideoFile) {
                                         videoContent = HLSVideoContent(
@@ -2036,7 +2037,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         // Debug memory leak
                                         let _ = videoNode.videoQualityState()
                                         #endif*/
-
+                                        
                                         if let strongSelf = self, let videoNode = strongSelf.videoNode {
                                             if firstTime {
                                                 firstTime = false
@@ -2060,7 +2061,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         guard let self else {
                                             return
                                         }
-
+                                        
                                         if let image = self.media as? TelegramMediaImage, let _ = image.video {
                                             self.videoNode?.alpha = 0.0
                                             self.videoNode?.layer.allowsGroupOpacity = true
@@ -2071,13 +2072,13 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                     strongSelf.videoContent = videoContent
                                     strongSelf.videoNode = videoNode
-
+                                    
                                     if presentationData.isPreview {
                                         videoNode.isHidden = true
                                         strongSelf.pinchContainerNode.contentNode.insertSubnode(videoNode, aboveSubnode: strongSelf.imageNode)
                                     }
                                     //videoNode.alpha = 0.5
-
+                                    
                                     updatedVideoNodeReadySignal = videoNode.ready
                                     updatedPlayerStatusSignal = videoNode.status
                                     |> mapToSignal { status -> Signal<MediaPlayerStatus?, NoError> in
@@ -2089,14 +2090,14 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                 }
                             }
-
+                            
                             if let currentReplaceAnimatedStickerNode = replaceAnimatedStickerNode {
                                 replaceAnimatedStickerNode = nil
                                 if currentReplaceAnimatedStickerNode, let animatedStickerNode = strongSelf.animatedStickerNode {
                                     animatedStickerNode.removeFromSupernode()
                                     strongSelf.animatedStickerNode = nil
                                 }
-
+                                
                                 if currentReplaceAnimatedStickerNode, let updatedAnimatedStickerFile = updateAnimatedStickerFile {
                                     var allowSticker = false
                                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
@@ -2108,7 +2109,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                                     break
                                                 }
                                             }
-
+                                            
                                             inner: for attribute in updatedAnimatedStickerFile.attributes {
                                                 if case let .Sticker(_, packReference, _) = attribute {
                                                     if case .name = packReference {
@@ -2123,8 +2124,8 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     } else {
                                         allowSticker = true
                                     }
-
-                                    let animatedStickerNode = DefaultAnimatedStickerNodeImpl()
+                                    
+                                    let animatedStickerNode = DefaultAnimatedStickerNodeImpl(lottieSettings: context.lottieRenderingSettings)
                                     animatedStickerNode.isUserInteractionEnabled = false
                                     animatedStickerNode.started = {
                                         guard let strongSelf = self else {
@@ -2142,23 +2143,23 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     animatedStickerNode.visibility = strongSelf.visibility
                                 }
                             }
-
+                            
                             if message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute }), strongSelf.extendedMediaOverlayNode == nil {
                                 strongSelf.internallyVisible = false
                             }
-
+                                                        
                             if let videoNode = strongSelf.videoNode {
                                 if !(replaceVideoNode ?? false), let decoration = videoNode.decoration as? ChatBubbleVideoDecoration, decoration.corners != videoCorners {
                                     decoration.updateCorners(videoCorners)
                                 }
-
+                                
                                 if !videoCorners.isEmpty && imageCorners.isEmpty {
                                     strongSelf.imageNode.clipsToBounds = true
                                     strongSelf.imageNode.cornerRadius = videoCorners.topLeft.radius
                                 } else {
                                     strongSelf.imageNode.cornerRadius = 0.0
                                 }
-
+                                
                                 if videoNode.bounds.isEmpty {
                                     videoNode.updateLayout(size: arguments.drawingSize, transition: .immediate)
                                     videoNode.frame = CGRect(origin: CGPoint(), size: imageFrame.size)
@@ -2166,7 +2167,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     videoNode.updateLayout(size: arguments.drawingSize, transition: transition.transition)
                                     transition.animator.updateFrame(layer: videoNode.layer, frame: CGRect(origin: CGPoint(), size: imageFrame.size), completion: nil)
                                 }
-
+                                
                                 if strongSelf.visibility && strongSelf.internallyVisible && !presentationData.isPreview {
                                     if !videoNode.canAttachContent {
                                         videoNode.canAttachContent = true
@@ -2178,7 +2179,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     videoNode.canAttachContent = false
                                 }
                             }
-
+                            
                             if displayInlineScrubber, videoTimestamp != nil, let file = media as? TelegramMediaFile, let duration = file.duration, duration > 1.0 {
                                 let timestampContainerView: UIView
                                 if let current = strongSelf.timestampContainerView {
@@ -2189,7 +2190,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     strongSelf.timestampContainerView = timestampContainerView
                                     strongSelf.view.addSubview(timestampContainerView)
                                 }
-
+                                
                                 let timestampMaskView: UIImageView
                                 if let current = strongSelf.timestampMaskView {
                                     timestampMaskView = current
@@ -2197,10 +2198,10 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     timestampMaskView = UIImageView()
                                     strongSelf.timestampMaskView = timestampMaskView
                                     timestampContainerView.mask = timestampMaskView
-
+                                    
                                     timestampMaskView.image = strongSelf.generateTimestampMaskImage(corners: arguments.corners)
                                 }
-
+                                
                                 let videoTimestampBackgroundLayer: SimpleLayer
                                 if let current = strongSelf.videoTimestampBackgroundLayer {
                                     videoTimestampBackgroundLayer = current
@@ -2209,7 +2210,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     strongSelf.videoTimestampBackgroundLayer = videoTimestampBackgroundLayer
                                     timestampContainerView.layer.addSublayer(videoTimestampBackgroundLayer)
                                 }
-
+                                
                                 let videoTimestampForegroundLayer: SimpleLayer
                                 if let current = strongSelf.videoTimestampForegroundLayer {
                                     videoTimestampForegroundLayer = current
@@ -2218,16 +2219,16 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     strongSelf.videoTimestampForegroundLayer = videoTimestampForegroundLayer
                                     timestampContainerView.layer.addSublayer(videoTimestampForegroundLayer)
                                 }
-
+                                
                                 videoTimestampBackgroundLayer.backgroundColor = UIColor(white: 1.0, alpha: 0.5).cgColor
                                 videoTimestampForegroundLayer.backgroundColor = UIColor(rgb: 0x0A84FF).cgColor
-
+                                
                                 timestampContainerView.frame = imageFrame.offsetBy(dx: arguments.corners.extendedEdges.left, dy: 0.0)
                                 timestampMaskView.frame = imageFrame
-
+                                
                                 let videoTimestampBackgroundFrame = CGRect(origin: CGPoint(x: 0.0, y: imageFrame.height - 3.0), size: CGSize(width: imageFrame.width, height: 3.0))
                                 videoTimestampBackgroundLayer.frame = videoTimestampBackgroundFrame
-
+                                
                                 strongSelf.updatePlaybackPosition()
                             } else {
                                 if let timestampContainerView = strongSelf.timestampContainerView {
@@ -2247,12 +2248,12 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     videoTimestampForegroundLayer.removeFromSuperlayer()
                                 }
                             }
-
+                            
                             if let animatedStickerNode = strongSelf.animatedStickerNode {
                                 animatedStickerNode.frame = imageFrame
                                 animatedStickerNode.updateLayout(size: imageFrame.size)
                             }
-
+                            
                             if let giftPreview = media as? UniqueGiftPreviewMedia, let gift = giftPreview.content {
                                 let giftView: ComponentView<Empty>
                                 if let current = strongSelf.giftView {
@@ -2261,7 +2262,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     giftView = ComponentView()
                                     strongSelf.giftView = giftView
                                 }
-
+                                
                                 let _ = giftView.update(
                                     transition: .immediate,
                                     component: AnyComponent(
@@ -2276,7 +2277,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     environment: {},
                                     containerSize: imageFrame.size
                                 )
-
+                                
                                 if let giftView = giftView.view {
                                     if giftView.superview == nil {
                                         strongSelf.pinchContainerNode.contentNode.view.addSubview(giftView)
@@ -2291,7 +2292,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     giftView = ComponentView()
                                     strongSelf.giftView = giftView
                                 }
-
+                                                                
                                 let _ = giftView.update(
                                     transition: .immediate,
                                     component: AnyComponent(
@@ -2308,7 +2309,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     environment: {},
                                     containerSize: imageFrame.size
                                 )
-
+                                
                                 if let giftView = giftView.view {
                                     if giftView.superview == nil {
                                         strongSelf.pinchContainerNode.contentNode.view.addSubview(giftView)
@@ -2319,7 +2320,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 strongSelf.giftView = nil
                                 giftView.view?.removeFromSuperview()
                             }
-
+                            
                             if let updateImageSignal = updateImageSignal {
                                 strongSelf.imageNode.captureProtected = isExtendedMedia || (!(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (associatedData.isCopyProtectionEnabled || message.isCopyProtected()))
                                 strongSelf.imageNode.setSignal(updateImageSignal(synchronousLoads, false), attemptSynchronously: synchronousLoads)
@@ -2337,22 +2338,22 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
 
                                 if let imageDimensions = imageDimensions {
                                     strongSelf.currentHighQualityImageSignal = (updateImageSignal(false, true), imageDimensions)
-
+                                    
                                     if let updateBlurredImageSignal = updateBlurredImageSignal {
                                         strongSelf.currentBlurredImageSignal = (updateBlurredImageSignal(false, true), drawingSize, boundingSize, Int32.random(in: 0..<Int32.max))
                                     }
                                 }
                             }
-
+                                                        
                             if let _ = secretBeginTimeAndTimeout {
                                 if updatedStatusSignal == nil, let fetchStatus = strongSelf.fetchStatus, case .Local = fetchStatus {
-                                    if let statusNode = strongSelf.statusNode, case .secretTimeout = statusNode.state {
+                                    if let statusNode = strongSelf.statusNode, case .secretTimeout = statusNode.state {   
                                     } else {
                                         updatedStatusSignal = .single((fetchStatus, nil))
                                     }
                                 }
                             }
-
+                            
                             if let updatedStatusSignal = updatedStatusSignal {
                                 strongSelf.statusDisposable.set((updatedStatusSignal
                                 |> deliverOnMainQueue).startStrict(next: { [weak strongSelf] status, actualFetchStatus in
@@ -2365,7 +2366,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                 }))
                             }
-
+                            
                             if let updatedVideoNodeReadySignal = updatedVideoNodeReadySignal {
                                 strongSelf.videoNodeReadyDisposable.set((updatedVideoNodeReadySignal
                                 |> deliverOnMainQueue).startStrict(next: { [weak strongSelf] status in
@@ -2376,7 +2377,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                 }))
                             }
-
+                            
                             if let updatedPlayerStatusSignal = updatedPlayerStatusSignal {
                                 strongSelf.playerStatusDisposable.set((updatedPlayerStatusSignal
                                 |> deliverOnMainQueue).startStrict(next: { [weak strongSelf] status in
@@ -2387,7 +2388,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     }
                                 }))
                             }
-
+                            
                             if let image = strongSelf.media as? TelegramMediaImage, let _ = image.video {
                                 let livePhotoIconNode: ASImageNode
                                 if let current = strongSelf.livePhotoIconNode {
@@ -2398,7 +2399,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     strongSelf.pinchContainerNode.contentNode.addSubnode(livePhotoIconNode)
                                     strongSelf.livePhotoIconNode = livePhotoIconNode
                                 }
-
+                                
                                 if let icon = livePhotoIconNode.image {
                                     livePhotoIconNode.frame = CGRect(origin: CGPoint(x: 8.0, y: 8.0), size: icon.size)
                                 }
@@ -2406,10 +2407,10 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 strongSelf.livePhotoIconNode = nil
                                 livePhotoIconNode.removeFromSupernode()
                             }
-
+                            
                             if let updatedFetchControls = updatedFetchControls {
                                 let _ = strongSelf.fetchControls.swap(updatedFetchControls)
-
+                                
                                 var media = media
                                 var extendedMedia: TelegramExtendedMedia?
                                 if let invoice = media as? TelegramMediaInvoice, let selectedMedia = invoice.extendedMedia {
@@ -2428,7 +2429,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         media = mediaValue
                                     }
                                 }
-
+                                
                                 if automaticDownload != .none, let file = media as? TelegramMediaFile, NativeVideoContent.isHLSVideo(file: file) {
                                     let postbox = context.account.postbox
                                     let fetchSignal: Signal<Never, NoError>
@@ -2443,7 +2444,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                             return .complete()
                                         }
                                     }
-
+                                    
                                     let visibilityAwareFetchSignal = strongSelf.visibilityPromise.get()
                                     |> mapToSignal { visibility -> Signal<Void, NoError> in
                                         if visibility {
@@ -2491,20 +2492,20 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         strongSelf.fetchDisposable.set(visibilityAwareFetchSignal.startStrict())
                                     }
                                 }
-
+                                
                                 if let file = media as? TelegramMediaFile, let image = file.videoCover, let representation = largestRepresentationForPhoto(image) {
                                     strongSelf.coverFetchDisposable.set(messageMediaImageInteractiveFetched(context: context, message: message, image: image, resource: representation.resource, range: representationFetchRangeForDisplayAtSize(representation: representation, dimension: nil), userInitiated: false, storeToDownloadsPeerId: nil).startStrict())
                                 }
                             } else if currentAutomaticDownload != automaticDownload, case .full = automaticDownload {
                                 strongSelf.fetchControls.with({ $0 })?.fetch(false)
                             }
-
+                            
                             strongSelf.updateStatus(animated: synchronousLoads)
 
                             strongSelf.pinchContainerNode.isPinchGestureEnabled = !isSecretMedia && !isExtendedMediaPreview && !hasSpoiler
-
+                            
                             strongSelf.appliedHlsInlinePlaybackRange = hlsInlinePlaybackRange
-
+                            
                             if let loadHLSRangeVideoFile, NativeVideoContent.isHLSVideo(file: loadHLSRangeVideoFile) {
                                 if strongSelf.hlsInlinePlaybackRangeDisposable == nil {
                                     strongSelf.hlsInlinePlaybackRangeDisposable = (HLSVideoContent.minimizedHLSQualityPreloadData(
@@ -2538,7 +2539,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             })
         }
     }
-
+    
     private func ensureHasTimer() {
         if self.playerUpdateTimer == nil {
             let timer = SwiftSignalKit.Timer(timeout: 0.5, repeat: true, completion: { [weak self] in
@@ -2548,24 +2549,24 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             timer.start()
         }
     }
-
+    
     private func stopTimer() {
         self.playerUpdateTimer?.invalidate()
         self.playerUpdateTimer = nil
     }
-
+    
     private func updateStatus(animated: Bool) {
         guard let (theme, strings, decimalSeparator, isPreview) = self.themeAndStrings, let sizeCalculation = self.sizeCalculation, let message = self.message, let attributes = self.attributes, var automaticPlayback = self.automaticPlayback, let wideLayout = self.wideLayout else {
             return
         }
-
+        
         /*let automaticDownload: Bool
         if let autoDownload = self.automaticDownload, case .full = autoDownload {
             automaticDownload = true
         } else {
             automaticDownload = false
         }*/
-
+        
         var secretBeginTimeAndTimeout: (Double?, Double)?
         let isSecretMedia = message.containsSecretMedia
         if isSecretMedia {
@@ -2579,9 +2580,9 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
             }
         }
-
+        
         var isStory: Bool = false
-
+        
         var game: TelegramMediaGame?
         var webpage: TelegramMediaWebpage?
         var invoice: TelegramMediaInvoice?
@@ -2600,7 +2601,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 automaticPlayback = false
             }
         }
-
+        
         var progressRequired = false
         if let updatingMedia = attributes.updatingMedia, case .update = updatingMedia.media {
             progressRequired = true
@@ -2639,7 +2640,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         if isPreview {
             progressRequired = true
         }
-
+        
         var radialStatusSize: CGFloat
         if isSecretMedia {
             radialStatusSize = 48.0
@@ -2663,18 +2664,18 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 self.statusNode = nil
             }
         }
-
+        
         let messageTheme = theme.chat.message
-
+        
         var state: RadialStatusNodeState = .none
         var backgroundColor = messageTheme.mediaOverlayControlColors.fillColor
         var badgeContent: ChatMessageInteractiveMediaBadgeContent?
         var mediaDownloadState: ChatMessageInteractiveMediaDownloadState?
-
+        
         if isSecretMedia {
             backgroundColor = messageTheme.mediaDateAndStatusFillColor
         }
-
+        
         if let invoice = invoice, invoice.currency != "XTR" {
             if let extendedMedia = invoice.extendedMedia {
                 if case let .preview(_, _, maybeVideoDuration) = extendedMedia, let videoDuration = maybeVideoDuration {
@@ -2690,7 +2691,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     string.append(NSAttributedString(string: title))
                 } else {
                     string.append(NSAttributedString(string: "\(formatCurrencyAmount(invoice.totalAmount, currency: invoice.currency)) ", attributes: [ChatTextInputAttributes.bold: true as NSNumber]))
-
+                    
                     var title = strings.Message_InvoiceLabel
                     if invoice.flags.contains(.isTest) {
                         title += " (Test)"
@@ -2700,9 +2701,9 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 badgeContent = .text(inset: 0.0, backgroundColor: messageTheme.mediaDateAndStatusFillColor, foregroundColor: messageTheme.mediaDateAndStatusTextColor, text: string, iconName: nil)
             }
         }
-
+        
         let gifTitle = game != nil ? strings.Message_Game.uppercased() : strings.Message_Animation.uppercased()
-
+        
         var animated = animated
         if let updatingMedia = attributes.updatingMedia, case .update = updatingMedia.media {
             state = .progress(color: messageTheme.mediaOverlayControlColors.foregroundColor, lineWidth: nil, value: CGFloat(updatingMedia.progress), cancelEnabled: true, animateRotation: true)
@@ -2727,23 +2728,23 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             } else if case .Fetching = fetchStatus, !message.flags.contains(.Unsent) {
                 active = true
             }
-
+            
             if let file = self.media as? TelegramMediaFile, file.isAnimated {
                 muted = false
-
+                
                 if case .Fetching = fetchStatus, message.flags.isSending, file.resource is CloudDocumentMediaResource {
                     fetchStatus = .Local
                 }
             }
-
+            
             if message.flags.contains(.Unsent) {
                 automaticPlayback = false
             }
-
+            
             if isPreview {
                 muted = false
             }
-
+            
             if let actualFetchStatus = self.actualFetchStatus {
                 if automaticPlayback || message.forwardInfo != nil {
                     fetchStatus = actualFetchStatus
@@ -2756,13 +2757,13 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     }
                 }
             }
-
+            
             /*if let file = self.media as? TelegramMediaFile, NativeVideoContent.isHLSVideo(file: file) {
                 fetchStatus = .Local
             }*/
-
+                        
             let formatting = DataSizeStringFormatting(strings: strings, decimalSeparator: decimalSeparator)
-
+            
             var media = self.media
             var extendedMedia: TelegramExtendedMedia?
             if let invoice = media as? TelegramMediaInvoice, let selectedMedia = invoice.extendedMedia {
@@ -2781,7 +2782,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     media = mediaValue
                 }
             }
-
+            
             switch fetchStatus {
                 case let .Fetching(_, progress):
                     let adjustedProgress = max(progress, 0.027)
@@ -2794,7 +2795,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     } else {
                         state = .progress(color: messageTheme.mediaOverlayControlColors.foregroundColor, lineWidth: nil, value: CGFloat(adjustedProgress), cancelEnabled: true, animateRotation: true)
                     }
-
+                                    
                     if let file = media as? TelegramMediaFile {
                         if file.isVideoSticker {
                             state = .none
@@ -2841,7 +2842,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                         } else {
                             if isMediaStreamable(message: EngineMessage(message), media: file), let fileSize = file.size, fileSize > 0 && fileSize != .max {
                                 let sizeString = "\(dataSizeString(Int64(Float(fileSize) * progress), forceDecimal: true, formatting: formatting)) / \(dataSizeString(fileSize, forceDecimal: true, formatting: formatting))"
-
+                                
                                 if message.flags.contains(.Unsent), let duration = file.duration {
                                     let durationString = stringForDuration(playerDuration > 0 ? playerDuration : Int32(duration), position: playerPosition)
                                     badgeContent = .mediaDownload(backgroundColor: messageTheme.mediaDateAndStatusFillColor, foregroundColor: messageTheme.mediaDateAndStatusTextColor, duration: durationString, size: nil, muted: false, active: false)
@@ -2849,7 +2850,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                 else if automaticPlayback && !message.flags.contains(.Unsent), let duration = file.duration {
                                     let durationString = stringForDuration(playerDuration > 0 ? playerDuration : Int32(duration), position: playerPosition)
                                     badgeContent = .mediaDownload(backgroundColor: messageTheme.mediaDateAndStatusFillColor, foregroundColor: messageTheme.mediaDateAndStatusTextColor, duration: durationString, size: active ? sizeString : nil, muted: muted, active: active)
-
+                                    
                                     mediaDownloadState = .fetching(progress: automaticPlayback ? nil : adjustedProgress)
                                     if self.playerStatus?.status == .playing {
                                         mediaDownloadState = nil
@@ -2859,14 +2860,14 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     badgeContent = .text(inset: message.flags.contains(.Unsent) ? 0.0 : 12.0, backgroundColor: messageTheme.mediaDateAndStatusFillColor, foregroundColor: messageTheme.mediaDateAndStatusTextColor, text: NSAttributedString(string: progressString), iconName: nil)
                                     mediaDownloadState = automaticPlayback ? .none : .compactFetching(progress: 0.0)
                                 }
-
+                                
                                 if !message.flags.contains(.Unsent) {
                                     state = automaticPlayback ? .none : .play(messageTheme.mediaOverlayControlColors.foregroundColor)
                                 }
                             } else {
                                 if let duration = file.duration, !file.isAnimated {
                                     let durationString = stringForDuration(playerDuration > 0 ? playerDuration : Int32(duration), position: playerPosition)
-
+                                    
                                     if automaticPlayback, let fileSize = file.size, fileSize > 0 && fileSize != .max {
                                         let sizeString = "\(dataSizeString(Int64(Float(fileSize) * progress), forceDecimal: true, formatting: formatting)) / \(dataSizeString(fileSize, forceDecimal: true, formatting: formatting))"
                                         mediaDownloadState = .fetching(progress: progress)
@@ -2875,7 +2876,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                         badgeContent = .mediaDownload(backgroundColor: messageTheme.mediaDateAndStatusFillColor, foregroundColor: messageTheme.mediaDateAndStatusTextColor, duration: durationString, size: nil, muted: false, active: false)
                                     }
                                 }
-
+                                
                                 state = automaticPlayback ? .none : state
                             }
                         }
@@ -2947,7 +2948,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             }
             state = .play(messageTheme.mediaOverlayControlColors.foregroundColor)
         }
-
+        
 
         if isSecretMedia {
             let remainingTime: Int32?
@@ -2967,7 +2968,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     remainingTime = nil
                 }
             }
-
+                        
             if let remainingTime {
                 let jerkgramOutgoingTimedMediaViewed = (
                     ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
@@ -2992,36 +2993,36 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
             }
         }
-
+        
         if let image = media as? TelegramMediaImage, let _ = image.video {
             badgeContent = nil
-            if case .progress = state {
+            if case .progress = state {   
             } else {
                 state = .none
             }
         }
-
+        
         if let statusNode = self.statusNode {
             var removeStatusNode = false
             if statusNode.state != .none && state == .none {
                 self.statusNode = nil
                 removeStatusNode = true
             }
-
+            
             var animated = animated
             if case .download = statusNode.state, case .progress = state {
                 animated = true
             } else if case .progress = statusNode.state, case .download = state {
                 animated = true
             }
-
+            
             if isPreview {
                 if case .play = state {
                 } else {
                     state = .none
                 }
             }
-
+            
             statusNode.transitionToState(state, animated: animated, completion: { [weak statusNode] in
                 if removeStatusNode {
                     statusNode?.removeFromSupernode()
@@ -3036,12 +3037,12 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 if isPreview {
                     badgeNode.durationNode.displaysAsynchronously = false
                 }
-
+                
                 var inset: CGFloat = 6.0
                 if let corners = self.currentImageArguments?.corners, case .Tail = corners.bottomLeft {
                     inset = 10.0
                 }
-
+                
                 badgeNode.frame = CGRect(origin: CGPoint(x: inset, y: 6.0), size: CGSize(width: radialStatusSize, height: radialStatusSize))
                 badgeNode.pressed = { [weak self] in
                     guard let strongSelf = self, let fetchStatus = strongSelf.fetchStatus else {
@@ -3056,7 +3057,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
                 self.badgeNode = badgeNode
                 self.pinchContainerNode.contentNode.addSubnode(badgeNode)
-
+                
                 animated = false
             }
             if isPreview {
@@ -3070,10 +3071,10 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             self.badgeNode = nil
             badgeNode.removeFromSupernode()
         }
-
+        
         var icon: ExtendedMediaOverlayNode.Icon?
         var displaySpoiler = false
-
+        
         var extendedMedia: TelegramExtendedMedia?
         if let invoice, let selectedMedia = invoice.extendedMedia {
             extendedMedia = selectedMedia
@@ -3083,7 +3084,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 extendedMedia = paidContent.extendedMedia[selectedMediaIndex]
             }
         }
-
+        
         if let extendedMedia, case .preview = extendedMedia {
             if let invoice, invoice.currency != "XTR" {
                 icon = .lock
@@ -3104,7 +3105,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 icon = .eye
             }
         }
-
+        
         if displaySpoiler, let context = self.context {
             let extendedMediaOverlayNode: ExtendedMediaOverlayNode
             if let current = self.extendedMediaOverlayNode {
@@ -3128,7 +3129,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 self.pinchContainerNode.contentNode.insertSubnode(extendedMediaOverlayNode, aboveSubnode: self.imageNode)
             }
             extendedMediaOverlayNode.frame = self.imageNode.frame
-
+            
             var tappable = false
             if !isSecretMedia {
                 switch state {
@@ -3139,7 +3140,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
             }
             extendedMediaOverlayNode.isUserInteractionEnabled = tappable
-
+            
             var viewText: String = ""
             if case .eye = icon {
                 viewText = wideLayout ? strings.Chat_SensitiveContent : strings.Chat_SensitiveContentShort
@@ -3167,7 +3168,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 extendedMediaOverlayNode?.removeFromSupernode()
             })
         }
-
+             
         if isSecretMedia, secretBeginTimeAndTimeout?.0 != nil {
             if self.secretTimer == nil {
                 self.secretTimer = SwiftSignalKit.Timer(timeout: 0.3, repeat: true, completion: { [weak self] in
@@ -3181,10 +3182,10 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 secretTimer.invalidate()
             }
         }
-
+        
         self.updatePlaybackPosition()
     }
-
+    
     private func updatePlaybackPosition() {
         guard let message = self.message else {
             return
@@ -3195,7 +3196,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         guard let file = self.media as? TelegramMediaFile, let duration = file.duration else {
             return
         }
-
+        
         var videoTimestamp: Double?
         var storedVideoTimestamp: Double?
         for attribute in message.attributes {
@@ -3210,36 +3211,36 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         if let storedVideoTimestamp {
             videoTimestamp = storedVideoTimestamp
         }
-
+        
         if let playerStatus = self.playerStatus {
             videoTimestamp = playerStatus.timestamp
         }
-
+        
         guard let videoTimestamp else {
             return
         }
-
+        
         let videoTimestampBackgroundFrame = videoTimestampBackgroundLayer.frame
-
+        
         var fraction = videoTimestamp / duration
         fraction = max(0.0, min(1.0, fraction))
-
+        
         let foregroundWidth = floorToScreenPixels(fraction * videoTimestampBackgroundFrame.width)
         let videoTimestampForegroundFrame = CGRect(origin: CGPoint(x: videoTimestampBackgroundFrame.minX, y: videoTimestampBackgroundFrame.minY), size: CGSize(width: foregroundWidth, height: videoTimestampBackgroundFrame.height))
         videoTimestampForegroundLayer.frame = videoTimestampForegroundFrame
     }
-
+    
     public func reveal() {
         self.extendedMediaOverlayNode?.reveal(animated: true)
     }
-
+    
     public static func asyncLayout(_ node: ChatMessageInteractiveMediaNode?) -> (_ context: AccountContext, _ presentationData: ChatPresentationData, _ dateTimeFormat: PresentationDateTimeFormat, _ message: Message, _ associatedData: ChatMessageItemAssociatedData, _ attributes: ChatMessageEntryAttributes, _ media: Media, _ mediaIndex: Int?, _ dateAndStatus: ChatMessageDateAndStatus?, _ automaticDownload: InteractiveMediaNodeAutodownloadMode, _ peerType: MediaAutoDownloadPeerType, _ peerId: EnginePeer.Id?, _ sizeCalculation: InteractiveMediaNodeSizeCalculation, _ layoutConstants: ChatMessageItemLayoutConstants, _ contentMode: InteractiveMediaNodeContentMode, _ presentationContext: ChatPresentationContext) -> (CGSize, CGFloat, (CGSize, Bool, Bool, ImageCorners) -> (CGFloat, (CGFloat) -> (CGSize, (ListViewItemUpdateAnimation, Bool) -> ChatMessageInteractiveMediaNode))) {
         let currentAsyncLayout = node?.asyncLayout()
-
+        
         return { context, presentationData, dateTimeFormat, message, associatedData, attributes, media, mediaIndex, dateAndStatus, automaticDownload, peerType, peerId, sizeCalculation, layoutConstants, contentMode, presentationContext in
             var imageNode: ChatMessageInteractiveMediaNode
             var imageLayout: (_ context: AccountContext, _ presentationData: ChatPresentationData, _ dateTimeFormat: PresentationDateTimeFormat, _ message: Message, _ associatedData: ChatMessageItemAssociatedData, _ attributes: ChatMessageEntryAttributes, _ media: Media, _ mediaIndex: Int?, _ dateAndStatus: ChatMessageDateAndStatus?, _ automaticDownload: InteractiveMediaNodeAutodownloadMode, _ peerType: MediaAutoDownloadPeerType, _ peerId: EnginePeer.Id?, _ sizeCalculation: InteractiveMediaNodeSizeCalculation, _ layoutConstants: ChatMessageItemLayoutConstants, _ contentMode: InteractiveMediaNodeContentMode, _ presentationContext: ChatPresentationContext) -> (CGSize, CGFloat, (CGSize, Bool, Bool, ImageCorners) -> (CGFloat, (CGFloat) -> (CGSize, (ListViewItemUpdateAnimation, Bool) -> Void)))
-
+            
             if let node = node, let currentAsyncLayout = currentAsyncLayout {
                 imageNode = node
                 imageLayout = currentAsyncLayout
@@ -3247,15 +3248,15 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 imageNode = ChatMessageInteractiveMediaNode()
                 imageLayout = imageNode.asyncLayout()
             }
-
+            
             let (unboundSize, initialWidth, continueLayout) = imageLayout(context, presentationData, dateTimeFormat, message, associatedData, attributes, media, mediaIndex, dateAndStatus, automaticDownload, peerType, peerId, sizeCalculation, layoutConstants, contentMode, presentationContext)
-
+            
             return (unboundSize, initialWidth, { constrainedSize, automaticPlayback, wideLayout, corners in
                 let (finalWidth, finalLayout) = continueLayout(constrainedSize, automaticPlayback, wideLayout, corners)
-
+                
                 return (finalWidth, { boundingWidth in
                     let (finalSize, apply) = finalLayout(boundingWidth)
-
+                    
                     return (finalSize, { transition, synchronousLoads in
                         apply(transition, synchronousLoads)
                         return imageNode
@@ -3264,11 +3265,11 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             })
         }
     }
-
+    
     public func setOverlayColor(_ color: UIColor?, animated: Bool) {
         self.imageNode.setOverlayColor(color, animated: animated)
     }
-
+    
     public func isReadyForInteractivePreview() -> Bool {
         if let fetchStatus = self.fetchStatus, case .Local = fetchStatus {
             return true
@@ -3276,14 +3277,14 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             return false
         }
     }
-
+    
     public func updateIsHidden(_ isHidden: Bool) {
         if isHidden && !self.internallyVisible {
             self.internallyVisible = true
             self.updateVisibility()
             self.extendedMediaOverlayNode?.reveal()
         }
-
+        
         if let badgeNode = self.badgeNode, badgeNode.isHidden != isHidden {
             if isHidden {
                 badgeNode.isHidden = true
@@ -3292,7 +3293,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 badgeNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
             }
         }
-
+    
         if let statusNode = self.statusNode, statusNode.isHidden != isHidden {
             if isHidden {
                 statusNode.isHidden = true
@@ -3320,7 +3321,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             }
         }
     }
-
+    
     public func transitionNode(adjustRect: Bool) -> (ASDisplayNode, CGRect, () -> (UIView?, UIView?))? {
         var bounds: CGRect
         if let currentImageArguments = self.currentImageArguments {
@@ -3348,7 +3349,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 dateAndStatusNodeHidden = dateAndStatusNode.isHidden
                 dateAndStatusNode.isHidden = true
             }
-
+            
             var view: UIView?
             if let strongSelf = self, strongSelf.imageNode.captureProtected {
                 let imageView = UIImageView()
@@ -3360,7 +3361,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
                 setLayerDisableScreenshots(imageView.layer, true)
                 strongSelf.imageNode.view.superview?.insertSubview(imageView, aboveSubview: strongSelf.imageNode.view)
-
+                
                 view = self?.view.snapshotContentTree(unhide: true)
                 if let view {
                     setLayerDisableScreenshots(view.layer, true)
@@ -3369,7 +3370,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             } else {
                 view = self?.view.snapshotContentTree(unhide: true)
             }
-
+                        
             if let badgeNode = self?.badgeNode, let badgeNodeHidden = badgeNodeHidden {
                 badgeNode.isHidden = badgeNodeHidden
             }
@@ -3382,90 +3383,90 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             return (view, nil)
         })
     }
-
+    
     public func scrubberTransition() -> GalleryItemScrubberTransition? {
         if "".isEmpty {
             return nil
         }
-
+        
         final class TimestampContainerTransitionView: UIView {
             let containerView: UIView
             let containerMaskView: UIImageView
             let backgroundLayer: SimpleLayer
             let foregroundLayer: SimpleLayer
             let fraction: CGFloat
-
+            
             init(timestampContainerView: UIView?, timestampMaskView: UIImageView?, videoTimestampBackgroundLayer: SimpleLayer?, videoTimestampForegroundLayer: SimpleLayer?) {
                 self.containerView = UIView()
                 self.containerMaskView = UIImageView()
                 self.backgroundLayer = SimpleLayer()
                 self.foregroundLayer = SimpleLayer()
-
+                
                 if let videoTimestampBackgroundLayer, let videoTimestampForegroundLayer {
                     self.fraction = videoTimestampForegroundLayer.bounds.width / videoTimestampBackgroundLayer.bounds.width
                 } else {
                     self.fraction = 0.0
                 }
-
+                
                 super.init(frame: CGRect())
-
+                
                 self.addSubview(self.containerView)
-
+                
                 self.containerView.mask = self.containerMaskView
                 self.containerMaskView.image = timestampMaskView?.image
-
+                
                 self.containerView.layer.addSublayer(self.backgroundLayer)
                 self.containerView.layer.addSublayer(self.foregroundLayer)
-
+                
                 self.backgroundLayer.backgroundColor = videoTimestampBackgroundLayer?.backgroundColor
                 self.foregroundLayer.backgroundColor = videoTimestampForegroundLayer?.backgroundColor
             }
-
+            
             required init?(coder: NSCoder) {
                 fatalError("init(coder:) has not been implemented")
             }
-
+            
             func update(state: GalleryItemScrubberTransition.Scrubber.TransitionState, transition: ContainedViewLayoutTransition) {
                 let containerFrame = CGRect(origin: CGPoint(), size: state.sourceSize.interpolate(to: state.destinationSize, amount: state.progress))
                 transition.updateFrame(view: self.containerView, frame: containerFrame)
                 transition.updateFrame(view: self.containerMaskView, frame: CGRect(origin: CGPoint(), size: containerFrame.size))
-
+                
                 transition.updateFrame(layer: self.backgroundLayer, frame: CGRect(origin: CGPoint(x: 0.0, y: containerFrame.height - 3.0), size: CGSize(width: containerFrame.width, height: 3.0)))
                 transition.updateFrame(layer: self.foregroundLayer, frame: CGRect(origin: CGPoint(x: 0.0, y: containerFrame.height - 3.0), size: CGSize(width: containerFrame.width * self.fraction, height: 3.0)))
             }
         }
-
+        
         final class MediaContentTransitionView: UIView {
             let backgroundLayer: SimpleLayer
             let backgroundMaskLayer: SimpleShapeLayer
             let sourceCorners: ImageCorners
-
+            
             init(imageNode: TransformImageNode) {
                 self.backgroundLayer = SimpleLayer()
                 self.backgroundLayer.backgroundColor = UIColor.black.cgColor
-
+                
                 self.backgroundMaskLayer = SimpleShapeLayer()
                 self.backgroundMaskLayer.fillColor = UIColor.white.cgColor
                 self.backgroundLayer.mask = self.backgroundMaskLayer
-
+                
                 self.sourceCorners = imageNode.currentArguments?.corners ?? ImageCorners()
-
+                
                 super.init(frame: CGRect())
-
+                
                 self.layer.addSublayer(self.backgroundLayer)
             }
-
+            
             required init?(coder: NSCoder) {
                 fatalError("init(coder:) has not been implemented")
             }
-
+            
             func update(state: GalleryItemScrubberTransition.Content.TransitionState, transition: ContainedViewLayoutTransition) {
                 let sourceCorners: (topLeft: CGFloat, topRight: CGFloat, bottomLeft: CGFloat, bottomRight: CGFloat) = (max(0.1, self.sourceCorners.topLeft.radius), max(0.1, self.sourceCorners.topRight.radius), max(0.1, self.sourceCorners.bottomLeft.radius), max(0.1, self.sourceCorners.bottomRight.radius))
                 let destinationCorners: (topLeft: CGFloat, topRight: CGFloat, bottomLeft: CGFloat, bottomRight: CGFloat) = (max(0.1, state.destinationCornerRadius), max(0.1, state.destinationCornerRadius), max(0.1, state.destinationCornerRadius), max(0.1, state.destinationCornerRadius))
-
+                
                 let currentCornersData = CGRect(x: sourceCorners.topLeft, y: sourceCorners.topRight, width: sourceCorners.bottomLeft, height: sourceCorners.bottomRight).interpolate(to: CGRect(x: destinationCorners.topLeft, y: destinationCorners.topRight, width: destinationCorners.bottomLeft, height: destinationCorners.bottomRight), amount: state.progress)
                 let currentCorners: (topLeft: CGFloat, topRight: CGFloat, bottomLeft: CGFloat, bottomRight: CGFloat) = (currentCornersData.minX, currentCornersData.minY, currentCornersData.width, currentCornersData.height)
-
+                
                 func makeRoundedRectPath(
                     in rect: CGRect,
                     topLeft: CGFloat,
@@ -3533,27 +3534,27 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                     path.closeSubpath()
                     return path
                 }
-
+                
                 let backgroundFrame = CGRect(origin: CGPoint(), size: state.sourceSize.interpolate(to: state.destinationSize, amount: state.progress))
-
+                
                 transition.updatePath(layer: self.backgroundMaskLayer, path: makeRoundedRectPath(in: CGRect(origin: CGPoint(), size: backgroundFrame.size), topLeft: currentCorners.topLeft, topRight: currentCorners.topRight, bottomRight: currentCorners.bottomLeft, bottomLeft: currentCorners.bottomRight))
-
+                
                 transition.updateFrame(layer: self.backgroundLayer, frame: backgroundFrame)
-
+                
                 transition.updateFrame(layer: self.backgroundMaskLayer, frame: CGRect(origin: CGPoint(), size: backgroundFrame.size))
             }
         }
-
+        
         guard let currentImageArguments = self.currentImageArguments else {
             return nil
         }
-
+        
         var sourceContentRect = self.imageNode.bounds
         sourceContentRect.origin.x += currentImageArguments.insets.left
         sourceContentRect.origin.y += currentImageArguments.insets.top
         sourceContentRect.size.width -= currentImageArguments.insets.left + currentImageArguments.insets.right
         sourceContentRect.size.height -= currentImageArguments.insets.top + currentImageArguments.insets.bottom
-
+    
         var scrubber: GalleryItemScrubberTransition.Scrubber?
         if let timestampContainerView = self.timestampContainerView, let timestampMaskView = self.timestampMaskView, let videoTimestampBackgroundLayer = self.videoTimestampBackgroundLayer, let videoTimestampForegroundLayer = self.videoTimestampForegroundLayer {
             scrubber = GalleryItemScrubberTransition.Scrubber(
@@ -3568,7 +3569,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 }
             )
         }
-
+        
         var content: GalleryItemScrubberTransition.Content?
         content = GalleryItemScrubberTransition.Content(
             sourceView: self.imageNode.view,
@@ -3577,7 +3578,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 guard let self else {
                     return UIView()
                 }
-
+                
                 return MediaContentTransitionView(imageNode: self.imageNode)
             },
             updateView: { view, state, transition in
@@ -3587,13 +3588,13 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                 view.update(state: state, transition: transition)
             }
         )
-
+            
         return GalleryItemScrubberTransition(
             scrubber: scrubber,
             content: content
         )
     }
-
+    
     public func playMediaWithSound() -> (action: (Double?) -> Void, soundEnabled: Bool, isVideoMessage: Bool, isUnread: Bool, badgeNode: ASDisplayNode?)? {
         var isAnimated = false
         if let file = self.media as? TelegramMediaFile {
@@ -3611,7 +3612,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
         } else {
             actionAtEnd = .repeatIfNeeded
         }
-
+        
         if let videoNode = self.videoNode, let context = self.context, (self.automaticPlayback ?? false) && !isAnimated {
             return ({ timecode in
                 if let timecode = timecode {
@@ -3642,7 +3643,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
             return nil
         }
     }
-
+    
     public func ignoreTapActionAtPoint(_ point: CGPoint) -> Bool {
         if let extendedMediaOverlayNode = self.extendedMediaOverlayNode {
             let convertedPoint = self.view.convert(point, to: extendedMediaOverlayNode.view)

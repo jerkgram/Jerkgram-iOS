@@ -17,15 +17,15 @@ import TelegramCallsUI
 
 final class StoryItemContentComponent: Component {
     typealias EnvironmentType = StoryContentItem.Environment
-
+    
     final class Hint {
         let synchronousLoad: Bool
-
+        
         init(synchronousLoad: Bool) {
             self.synchronousLoad = synchronousLoad
         }
     }
-
+    
 	let context: AccountContext
     let strings: PresentationStrings
     let peer: EnginePeer
@@ -42,7 +42,7 @@ final class StoryItemContentComponent: Component {
     let canManageLiveChatMessagesFromPeers: Set<EnginePeer.Id>
     let activateReaction: (UIView, MessageReaction.Reaction) -> Void
     let controller: () -> ViewController?
-
+    
     init(context: AccountContext, strings: PresentationStrings, peer: EnginePeer, item: EngineStoryItem, availableReactions: StoryAvailableReactions?, entityFiles: [EngineMedia.Id: TelegramMediaFile], audioMode: StoryContentItem.AudioMode, baseRate: Double, isVideoBuffering: Bool, isCurrent: Bool, isUIHidden: Bool, preferHighQuality: Bool, isEmbeddedInCamera: Bool, canManageLiveChatMessagesFromPeers: Set<EnginePeer.Id>, activateReaction: @escaping (UIView, MessageReaction.Reaction) -> Void, controller: @escaping () -> ViewController?) {
 		self.context = context
         self.strings = strings
@@ -104,13 +104,13 @@ final class StoryItemContentComponent: Component {
         }
 		return true
 	}
-
+    
     struct StarStats {
         var myStars: Int64
         var pendingMyStars: Int64
         var totalStars: Int64
         var topItems: [GroupCallMessagesContext.TopStarsItem]
-
+        
         init(myStars: Int64, pendingMyStars: Int64, totalStars: Int64, topItems: [GroupCallMessagesContext.TopStarsItem]) {
             self.myStars = myStars
             self.pendingMyStars = pendingMyStars
@@ -118,7 +118,7 @@ final class StoryItemContentComponent: Component {
             self.topItems = topItems
         }
     }
-
+    
     struct LiveChatState {
         var isExpanded: Bool
         var isEmpty: Bool
@@ -129,7 +129,7 @@ final class StoryItemContentComponent: Component {
         var isAdmin: Bool
         var defaultSendAs: EnginePeer.Id?
         var isUnifiedStream: Bool
-
+        
         init(isExpanded: Bool, isEmpty: Bool, hasUnseenMessages: Bool, areMessagesEnabled: Bool, minMessagePrice: Int64?, starStats: StarStats?, isAdmin: Bool, defaultSendAs: EnginePeer.Id?, isUnifiedStream: Bool) {
             self.isExpanded = isExpanded
             self.isEmpty = isEmpty
@@ -142,14 +142,14 @@ final class StoryItemContentComponent: Component {
             self.isUnifiedStream = isUnifiedStream
         }
     }
-
+    
     private struct MediaStreamCallState: Equatable {
         var areMessagesEnabled: Bool
         var minMessagePrice: Int64?
         var isAdmin: Bool
         var defaultSendAs: EnginePeer.Id?
         var isUnifiedStream: Bool
-
+        
         init(areMessagesEnabled: Bool, minMessagePrice: Int64?, isAdmin: Bool, defaultSendAs: EnginePeer.Id?, isUnifiedStream: Bool) {
             self.areMessagesEnabled = areMessagesEnabled
             self.minMessagePrice = minMessagePrice
@@ -158,10 +158,10 @@ final class StoryItemContentComponent: Component {
             self.isUnifiedStream = isUnifiedStream
         }
     }
-
+    
     private struct MediaStreamCallVideoState: Equatable {
         var videoEndpointId: String?
-
+        
         init(videoEndpointId: String?) {
             self.videoEndpointId = videoEndpointId
         }
@@ -183,55 +183,55 @@ final class StoryItemContentComponent: Component {
         private var dismissWhileInPictureInPicture: (() -> Void)?
         private var loadingEffectView: StoryItemLoadingEffectView?
         private var loadingEffectAppearanceTimer: SwiftSignalKit.Timer?
-
+        
         private let liveChatExternal = StoryContentLiveChatComponent.External()
         private var liveChat: ComponentView<Empty>?
-
+        
         private var mediaAreasEffectView: StoryItemLoadingEffectView?
-
+        
         private var currentMessageMedia: EngineMedia?
         private var currentMessageMetadataMedia: EngineMedia?
         private var fetchDisposable: Disposable?
         private var priorityDisposable: Disposable?
-
+        
         private var component: StoryItemContentComponent?
         private weak var state: EmptyComponentState?
         private var environment: StoryContentItem.Environment?
         private var isUpdating: Bool = false
-
+        
         private var unsupportedText: ComponentView<Empty>?
         private var unsupportedButton: ComponentView<Empty>?
-
+        
         private var progressMode: (mode: StoryContentItem.ProgressMode, isCentral: Bool) = (.pause, false)
         private var currentProgressTimer: SwiftSignalKit.Timer?
         private var currentProgressTimerValue: Double = 0.0
         private var videoProgressDisposable: Disposable?
-
+        
         private var ignoreBufferingTimestamp: Double = 0.0
-
+        
         private var markedAsSeen: Bool = false
         private var contentLoaded: Bool = false
-
+        
         private var videoPlaybackStatus: MediaPlayerStatus?
         override var videoPlaybackPosition: Double? {
             return self.videoPlaybackStatus?.timestamp
         }
-
+        
         var customSubtitle: String?
 
         private let hierarchyTrackingLayer: HierarchyTrackingLayer
-
+        
         private var fetchPriorityResourceId: String?
         private var currentFetchPriority: (isMain: Bool, disposable: Disposable)?
-
+        
         public var liveChatState: LiveChatState? {
             guard let liveChatView = self.liveChat?.view as? StoryContentLiveChatComponent.View else {
                 return nil
             }
-
+            
             let currentInfo = liveChatView.currentInfo
             let mediaStreamCallState = self.mediaStreamCallState
-
+            
             let starStats = currentInfo.starStats.flatMap { starStats in
                 return StarStats(
                     myStars: starStats.myStars,
@@ -240,7 +240,7 @@ final class StoryItemContentComponent: Component {
                     topItems: starStats.topItems
                 )
             }
-
+            
             return LiveChatState(
                 isExpanded: currentInfo.isChatExpanded,
                 isEmpty: self.liveChatExternal.isEmpty,
@@ -253,33 +253,33 @@ final class StoryItemContentComponent: Component {
                 isUnifiedStream: mediaStreamCallState?.isUnifiedStream ?? false
             )
         }
-
+        
         public func toggleLiveChatExpanded() {
             guard let liveChatView = self.liveChat?.view as? StoryContentLiveChatComponent.View else {
                 return
             }
             return liveChatView.toggleLiveChatExpanded()
         }
-
+        
 		override init(frame: CGRect) {
             self.hierarchyTrackingLayer = HierarchyTrackingLayer()
             self.imageView = StoryItemImageView()
             self.overlaysView = StoryItemOverlaysView()
-
+            
 			super.init(frame: frame)
-
+            
             self.layer.addSublayer(self.hierarchyTrackingLayer)
-
+            
             self.addSubview(self.imageView)
             self.addSubview(self.overlaysView)
-
+            
             self.hierarchyTrackingLayer.isInHierarchyUpdated = { [weak self] value in
                 guard let self else {
                     return
                 }
                 self.updateProgressMode(update: true)
             }
-
+            
             self.overlaysView.activate = { [weak self] view, reaction in
                 guard let self, let component = self.component else {
                     return
@@ -293,11 +293,11 @@ final class StoryItemContentComponent: Component {
                 self.state?.updated(transition: .immediate, isLocal: true)
             }
 		}
-
+        
         required init?(coder: NSCoder) {
             fatalError("init(coder:) has not been implemented")
         }
-
+        
         deinit {
             self.fetchDisposable?.dispose()
             self.priorityDisposable?.dispose()
@@ -307,7 +307,7 @@ final class StoryItemContentComponent: Component {
             self.liveCallStateDisposable?.dispose()
             self.liveCallStatsDisposable?.dispose()
         }
-
+        
         func allowsInstantPauseOnTouch(point: CGPoint) -> Bool {
             if let _ = self.overlaysView.hitTest(self.convert(self.convert(point, to: self.overlaysView), to: self.overlaysView), with: nil) {
                 return false
@@ -317,11 +317,11 @@ final class StoryItemContentComponent: Component {
             }
             return true
         }
-
+        
         private func performActionAfterImageContentLoaded(update: Bool) {
             self.initializeVideoIfReady(update: update)
         }
-
+        
         private func initializeVideoIfReady(update: Bool) {
             if self.videoNode != nil {
                 return
@@ -329,11 +329,11 @@ final class StoryItemContentComponent: Component {
             if case .pause = self.progressMode.mode {
                 return
             }
-
+            
             guard let component = self.component, let currentMessageMedia = self.currentMessageMedia else {
                 return
             }
-
+            
             if case let .file(file) = currentMessageMedia, let peerReference = PeerReference(component.peer) {
                 if self.videoNode == nil {
                     let videoNode = UniversalVideoNode(
@@ -371,25 +371,25 @@ final class StoryItemContentComponent: Component {
                     )
                     videoNode.isHidden = true
                     videoNode.setBaseRate(component.baseRate)
-
+                    
                     self.videoNode = videoNode
                     self.insertSubview(videoNode.view, aboveSubview: self.imageView)
-
+                    
                     videoNode.playbackCompleted = { [weak self] in
                         guard let self else {
                             return
                         }
-
+                        
                         var shouldLoop = false
                         if self.progressMode.mode == .blurred {
                             shouldLoop = true
                         } else if let component = self.component, component.item.isPending {
                             shouldLoop = true
                         }
-
+                        
                         if shouldLoop {
                             self.rewind()
-
+                            
                             if let videoNode = self.videoNode {
                                 if self.contentLoaded {
                                     videoNode.play()
@@ -418,7 +418,7 @@ final class StoryItemContentComponent: Component {
                     }
                 }
             }
-
+            
             if let videoNode = self.videoNode {
                 if self.videoProgressDisposable == nil {
                     self.videoProgressDisposable = (videoNode.status
@@ -426,7 +426,7 @@ final class StoryItemContentComponent: Component {
                         guard let self, let status else {
                             return
                         }
-
+                        
                         self.videoPlaybackStatus = status
                         if !self.isSeeking {
                             self.updateVideoPlaybackProgress()
@@ -434,7 +434,7 @@ final class StoryItemContentComponent: Component {
                     })
                 }
             }
-
+            
             if case let .liveStream(liveStream) = currentMessageMedia {
                 let mediaStreamCall: PresentationGroupCallImpl
                 if let current = self.mediaStreamCall {
@@ -457,10 +457,10 @@ final class StoryItemContentComponent: Component {
                             (
                                 presentationData: presentationData,
                                 present: { c, a in
-
+                                    
                                 },
                                 openSettings: {
-
+                                    
                                 }
                             )
                         },
@@ -480,25 +480,25 @@ final class StoryItemContentComponent: Component {
                         unmuteByDefault: false
                     )
                     self.mediaStreamCall = mediaStreamCall
-
+                    
                     if update && !self.isUpdating {
                         self.state?.updated(transition: .immediate, isLocal: true)
                     }
                 }
             }
         }
-
+        
         override func setProgressMode(mode: StoryContentItem.ProgressMode, isCentral: Bool) {
             if self.progressMode.mode != mode || self.progressMode.isCentral != isCentral {
                 self.progressMode = (mode, isCentral)
                 self.updateProgressMode(update: true)
-
+                
                 if let component = self.component, !self.overlaysView.bounds.isEmpty {
                     self.updateOverlays(component: component, size: self.overlaysView.bounds.size, synchronousLoad: false, transition: .immediate)
                 }
             }
         }
-
+        
         override func rewind() {
             self.currentProgressTimerValue = 0.0
             if let videoNode = self.videoNode {
@@ -507,7 +507,7 @@ final class StoryItemContentComponent: Component {
                 }
             }
         }
-
+        
         override func leaveAmbientMode() {
             if let videoNode = self.videoNode {
                 self.ignoreBufferingTimestamp = CFAbsoluteTimeGetCurrent()
@@ -515,7 +515,7 @@ final class StoryItemContentComponent: Component {
                 videoNode.continueWithOverridingAmbientMode(isAmbient: false)
             }
         }
-
+        
         override func enterAmbientMode(ambient: Bool) {
             if let videoNode = self.videoNode {
                 self.ignoreBufferingTimestamp = CFAbsoluteTimeGetCurrent()
@@ -526,13 +526,13 @@ final class StoryItemContentComponent: Component {
                 }
             }
         }
-
+        
         override func setBaseRate(_ baseRate: Double) {
             if let videoNode = self.videoNode {
                 videoNode.setBaseRate(baseRate)
             }
         }
-
+        
         private func updateProgressMode(update: Bool) {
             if let videoNode = self.videoNode {
                 var canPlay = self.contentLoaded && self.hierarchyTrackingLayer.isInHierarchy
@@ -545,7 +545,7 @@ final class StoryItemContentComponent: Component {
                     videoNode.pause()
                 }
             }
-
+            
             var shouldUpdate = false
             if let mediaStreamCall = self.mediaStreamCall {
                 //print("call progressMode: \(self.progressMode)")
@@ -556,20 +556,20 @@ final class StoryItemContentComponent: Component {
                 if !canPlay {
                     self.mediaStreamCall = nil
                     shouldUpdate = true
-
+                    
                     let _ = mediaStreamCall.leave(terminateIfPossible: false).startStandalone()
                 }
             }
-
+            
             self.initializeVideoIfReady(update: update)
             self.updateVideoPlaybackProgress()
             self.updateProgressTimer()
-
+            
             if shouldUpdate {
                 self.state?.updated(transition: .immediate, isLocal: true)
             }
         }
-
+        
         private func updateProgressTimer() {
             var needsTimer = self.progressMode.mode != .pause && self.contentLoaded && self.hierarchyTrackingLayer.isInHierarchy
             if let component = self.component {
@@ -580,7 +580,7 @@ final class StoryItemContentComponent: Component {
                     }
                 }
             }
-
+            
             if needsTimer {
                 if self.currentProgressTimer == nil {
                     self.currentProgressTimer = SwiftSignalKit.Timer(
@@ -590,7 +590,7 @@ final class StoryItemContentComponent: Component {
                             guard let self, self.progressMode.mode != .pause, self.contentLoaded, self.hierarchyTrackingLayer.isInHierarchy else {
                                 return
                             }
-
+                            
                             if case .file = self.currentMessageMedia {
                                 if !self.isSeeking {
                                     self.updateVideoPlaybackProgress()
@@ -606,21 +606,21 @@ final class StoryItemContentComponent: Component {
                                         self.environment?.markAsSeen(EngineStoryId(peerId: component.peer.id, id: component.item.id))
                                     }
                                 }
-
+                                
                                 if self.progressMode.mode != .play {
                                     return
                                 }
-
+                                
                                 #if DEBUG && true
                                 let currentProgressTimerLimit: Double = 10.0
                                 #else
                                 let currentProgressTimerLimit: Double = 5.0
                                 #endif
-
+                                
                                 var currentProgressTimerValue = self.currentProgressTimerValue + 1.0 / 60.0
                                 currentProgressTimerValue = max(0.0, min(currentProgressTimerLimit, currentProgressTimerValue))
                                 self.currentProgressTimerValue = currentProgressTimerValue
-
+                                
                                 self.environment?.presentationProgressUpdated(currentProgressTimerValue / currentProgressTimerLimit, false, true)
                             }
                         }, queue: .mainQueue()
@@ -634,14 +634,14 @@ final class StoryItemContentComponent: Component {
                 }
             }
         }
-
+        
         var effectiveTimestamp: Double {
             guard let videoPlaybackStatus = self.videoPlaybackStatus else {
                 return 0.0
             }
             return videoPlaybackStatus.timestamp
         }
-
+        
         var effectiveDuration: Double {
             let effectiveDuration: Double
             if let videoPlaybackStatus, videoPlaybackStatus.duration > 0.0 {
@@ -655,7 +655,7 @@ final class StoryItemContentComponent: Component {
             }
             return effectiveDuration
         }
-
+        
         private func updateVideoPlaybackProgress(_ scrubbingTimestamp: Double? = nil) {
             guard let videoPlaybackStatus = self.videoPlaybackStatus else {
                 return
@@ -668,7 +668,7 @@ final class StoryItemContentComponent: Component {
             default:
                 break
             }
-
+            
             let effectiveDuration: Double
             if videoPlaybackStatus.duration > 0.0 {
                 effectiveDuration = videoPlaybackStatus.duration
@@ -679,12 +679,12 @@ final class StoryItemContentComponent: Component {
             } else {
                 effectiveDuration = 1.0
             }
-
+            
             var isBuffering = false
             if case .buffering(false, true, _, _) = videoPlaybackStatus.status {
                 isBuffering = true
             }
-
+            
             if isBuffering {
                 if CFAbsoluteTimeGetCurrent() - self.ignoreBufferingTimestamp < 0.3 {
                     isBuffering = false
@@ -694,15 +694,15 @@ final class StoryItemContentComponent: Component {
             } else {
                 self.ignoreBufferingTimestamp = 0.0
             }
-
+            
             if case .buffering(true, _, _, _) = videoPlaybackStatus.status {
                 timestampAndDuration = (nil, effectiveDuration)
             } else if effectiveDuration > 0.0 {
                 timestampAndDuration = (videoPlaybackStatus.timestamp, effectiveDuration)
             }
-
+            
             var currentProgress: Double = 0.0
-
+            
             if let (maybeTimestamp, duration) = timestampAndDuration, let timestamp = maybeTimestamp, duration > 0.01, let videoPlaybackStatus = self.videoPlaybackStatus {
                 var actualTimestamp: Double
                 if videoPlaybackStatus.generationTimestamp.isZero || !isPlaying {
@@ -711,19 +711,19 @@ final class StoryItemContentComponent: Component {
                     let currentTimestamp = CACurrentMediaTime()
                     actualTimestamp = timestamp + (currentTimestamp - videoPlaybackStatus.generationTimestamp) * videoPlaybackStatus.baseRate
                 }
-
+                
                 var progress = CGFloat(actualTimestamp / duration)
                 if progress.isNaN || !progress.isFinite {
                     progress = 0.0
                 }
                 progress = min(1.0, progress)
-
+                
                 if actualTimestamp < 0.3 {
                     isBuffering = false
                 }
-
+                
                 currentProgress = progress
-
+                
                 if isPlaying {
                     if !self.markedAsSeen {
                         self.markedAsSeen = true
@@ -731,25 +731,25 @@ final class StoryItemContentComponent: Component {
                             self.environment?.markAsSeen(EngineStoryId(peerId: component.peer.id, id: component.item.id))
                         }
                     }
-
+                    
                     if !self.contentLoaded {
                         self.contentLoaded = true
                         self.state?.updated(transition: .immediate, isLocal: true)
                     }
                 }
             }
-
+            
             if let scrubbingTimestamp {
                 currentProgress = CGFloat(scrubbingTimestamp / effectiveDuration)
                 if currentProgress.isNaN || !currentProgress.isFinite {
                     currentProgress = 0.0
                 }
             }
-
+            
             let clippedProgress = max(0.0, min(1.0, currentProgress))
             self.environment?.presentationProgressUpdated(clippedProgress, isBuffering, false)
         }
-
+        
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             if let liveChatView = self.liveChat?.view {
                 if let result = liveChatView.hitTest(self.convert(point, to: liveChatView), with: event) {
@@ -766,7 +766,7 @@ final class StoryItemContentComponent: Component {
             }
             return nil
         }
-
+        
         private func updateOverlays(component: StoryItemContentComponent, size: CGSize, synchronousLoad: Bool, transition: ComponentTransition) {
             self.overlaysView.update(
                 context: component.context,
@@ -782,7 +782,7 @@ final class StoryItemContentComponent: Component {
                 transition: transition
             )
         }
-
+        
         private var isSeeking = false
         func seekTo(_ timestamp: Double, apply: Bool) {
             guard let videoNode = self.videoNode else {
@@ -794,11 +794,11 @@ final class StoryItemContentComponent: Component {
             self.isSeeking = true
             self.updateVideoPlaybackProgress(timestamp)
         }
-
+        
         func seekEnded() {
             self.isSeeking = false
         }
-
+        
         func beginPictureInPicture(dismissController: @escaping () -> (restore: (@escaping () -> Void) -> Void, dismissWhilePictureInPicture: () -> Void)) {
             self.activatePictureInPictureAction.invoke(Action { [weak self] in
                 guard let self else {
@@ -814,7 +814,7 @@ final class StoryItemContentComponent: Component {
                 restorePictureInPictureImpl = dismissController()
             })
         }
-
+        
         func scheduleScrollLiveChatToBottom() {
             guard let liveChatView = self.liveChat?.view as? StoryContentLiveChatComponent.View else {
                 return
@@ -827,35 +827,35 @@ final class StoryItemContentComponent: Component {
             defer {
                 self.isUpdating = false
             }
-
+            
             let previousItem = self.component?.item
-
+            
             self.component = component
             self.state = state
             let environment = environment[StoryContentItem.Environment.self].value
             self.environment = environment
-
+            
             var synchronousLoad = false
             if let hint = transition.userData(Hint.self) {
                 synchronousLoad = hint.synchronousLoad
             }
-
+            
             let startTime = CFAbsoluteTimeGetCurrent()
-
+            
             let peerReference = PeerReference(component.peer)
-
+            
             let selectedMedia: EngineMedia
             var messageMedia: EngineMedia?
             if case .liveStream = component.item.media {
                 selectedMedia = component.item.media
                 messageMedia = selectedMedia
-
+                
                 if self.customSubtitle == nil {
                     self.customSubtitle = component.strings.LiveStream_LoadingStatus
                 }
             } else if !component.preferHighQuality, !component.item.isMy, let alternativeMediaValue = component.item.alternativeMediaList.first {
                 selectedMedia = alternativeMediaValue
-
+                
                 switch alternativeMediaValue {
                 case let .image(image):
                     messageMedia = .image(image)
@@ -868,7 +868,7 @@ final class StoryItemContentComponent: Component {
                 }
             } else {
                 selectedMedia = component.item.media
-
+                
                 switch component.item.media {
                 case let .image(image):
                     messageMedia = .image(image)
@@ -880,22 +880,22 @@ final class StoryItemContentComponent: Component {
                     break
                 }
             }
-
+            
             var reloadMedia = false
             if self.currentMessageMedia?.id != messageMedia?.id || (self.currentMessageMedia == nil) != (messageMedia == nil) {
                 self.currentMessageMedia = messageMedia
                 reloadMedia = true
-
+                
                 if let videoNode = self.videoNode {
                     self.videoProgressDisposable?.dispose()
                     self.videoProgressDisposable = nil
-
+                    
                     self.videoNode = nil
                     videoNode.view.removeFromSuperview()
                 }
             }
             self.currentMessageMetadataMedia = component.item.media
-
+            
             var fetchPriorityResourceId: String?
             switch messageMedia {
             case let .image(image):
@@ -907,20 +907,20 @@ final class StoryItemContentComponent: Component {
             default:
                 break
             }
-
+            
             if self.fetchPriorityResourceId != fetchPriorityResourceId || self.currentFetchPriority?.0 != component.isCurrent {
                 self.fetchPriorityResourceId = fetchPriorityResourceId
                 self.currentFetchPriority?.disposable.dispose()
-
+                
                 if let fetchPriorityResourceId {
                     self.currentFetchPriority = (component.isCurrent, component.context.engine.resources.pushPriorityDownload(resourceId: fetchPriorityResourceId, priority: component.isCurrent ? 2 : 1))
                 }
             }
-
+            
             if reloadMedia, let messageMedia, let peerReference {
                 self.priorityDisposable?.dispose()
                 self.priorityDisposable = nil
-
+                
                 var fetchSignal: Signal<Never, NoError>?
                 switch messageMedia {
                 case let .image(image):
@@ -929,7 +929,7 @@ final class StoryItemContentComponent: Component {
                     }
                 case let .file(file):
                     self.priorityDisposable = component.context.engine.resources.pushPriorityDownload(resourceId: file.resource.id.stringRepresentation)
-
+                    
                     fetchSignal = fetchedMediaResource(
                         mediaBox: component.context.account.postbox.mediaBox,
                         userLocation: .other,
@@ -943,9 +943,9 @@ final class StoryItemContentComponent: Component {
                 default:
                     break
                 }
-
+                
                 self.performActionAfterImageContentLoaded(update: false)
-
+                
                 self.fetchDisposable?.dispose()
                 self.fetchDisposable = nil
                 if let fetchSignal {
@@ -960,7 +960,7 @@ final class StoryItemContentComponent: Component {
                     })
                 }
             }
-
+            
             if let messageMedia, case .liveStream = messageMedia {
                 if component.isEmbeddedInCamera {
                     self.imageView.isHidden = true
@@ -983,7 +983,7 @@ final class StoryItemContentComponent: Component {
                     }
                 }
             }
-
+            
             if case let .liveStream(liveStream) = messageMedia, let mediaStreamCall = self.mediaStreamCall {
                 var mediaStreamTransition = transition
                 let mediaStream: ComponentView<Empty>
@@ -994,7 +994,7 @@ final class StoryItemContentComponent: Component {
                     mediaStream = ComponentView()
                     self.mediaStream = mediaStream
                 }
-
+                
                 let liveChat: ComponentView<Empty>
                 if let current = self.liveChat {
                     liveChat = current
@@ -1002,12 +1002,12 @@ final class StoryItemContentComponent: Component {
                     liveChat = ComponentView()
                     self.liveChat = liveChat
                 }
-
+                
                 var minPaidStars: Int?
                 if let mediaStreamCallState = self.mediaStreamCallState {
                     minPaidStars = mediaStreamCallState.minMessagePrice.flatMap(Int.init)
                 }
-
+                
                 let _ = liveChat.update(
                     transition: mediaStreamTransition,
                     component: AnyComponent(StoryContentLiveChatComponent(
@@ -1041,7 +1041,7 @@ final class StoryItemContentComponent: Component {
                     mediaStreamTransition.setFrame(view: liveChatView, frame: liveChatFrame)
                     mediaStreamTransition.setAlpha(view: liveChatView, alpha: component.isUIHidden ? 0.0 : 1.0)
                 }
-
+                
                 if case .rtc = liveStream.kind, component.isEmbeddedInCamera {
                 } else if let mediaStreamCallState = self.mediaStreamCallState {
                     var videoEndpointId: String?
@@ -1050,7 +1050,7 @@ final class StoryItemContentComponent: Component {
                     } else if let mediaStreamCallVideoState = self.mediaStreamCallVideoState {
                         videoEndpointId = mediaStreamCallVideoState.videoEndpointId
                     }
-
+                    
                     if let videoEndpointId {
                         let _ = mediaStream.update(
                             transition: mediaStreamTransition,
@@ -1127,12 +1127,12 @@ final class StoryItemContentComponent: Component {
                     self.mediaStream = nil
                     mediaStream.view?.removeFromSuperview()
                 }
-
+                
                 if let liveChat = self.liveChat {
                     self.liveChat = nil
                     liveChat.view?.removeFromSuperview()
                 }
-
+                
                 if let messageMedia {
                     var applyState = false
                     self.imageView.didLoadContents = { [weak self] in
@@ -1162,7 +1162,7 @@ final class StoryItemContentComponent: Component {
                     }
                     transition.setFrame(view: self.imageView, frame: CGRect(origin: CGPoint(), size: availableSize))
                     transition.setFrame(view: self.overlaysView, frame: CGRect(origin: CGPoint(), size: availableSize))
-
+                    
                     var dimensions: CGSize?
                     switch messageMedia {
                     case let .image(image):
@@ -1182,7 +1182,7 @@ final class StoryItemContentComponent: Component {
                             break
                         }
                     }
-
+                    
                     if let dimensions {
                         var imageSize = dimensions.aspectFilled(availableSize)
                         if imageSize.width < availableSize.width && imageSize.width >= availableSize.width - 5.0 {
@@ -1192,7 +1192,7 @@ final class StoryItemContentComponent: Component {
                             imageSize.height = availableSize.height
                         }
                         let _ = imageSize
-
+                        
                         if let videoNode = self.videoNode {
                             let videoSize = dimensions.aspectFilled(availableSize)
                             videoNode.frame = CGRect(origin: CGPoint(x: floor((availableSize.width - videoSize.width) * 0.5), y: floor((availableSize.height - videoSize.height) * 0.5)), size: videoSize)
@@ -1201,7 +1201,7 @@ final class StoryItemContentComponent: Component {
                     }
                 }
             }
-
+            
             if let mediaStreamCall = self.mediaStreamCall {
                 if self.liveCallStateDisposable == nil {
                     self.liveCallStateDisposable = (mediaStreamCall.state
@@ -1209,7 +1209,7 @@ final class StoryItemContentComponent: Component {
                         guard let self else {
                             return
                         }
-
+                        
                         let mappedState = MediaStreamCallState(
                             areMessagesEnabled: state.messagesAreEnabled,
                             minMessagePrice: state.sendPaidMessageStars,
@@ -1225,7 +1225,7 @@ final class StoryItemContentComponent: Component {
                         }
                     })
                 }
-
+                
                 if self.liveCallStatsDisposable == nil {
                     self.liveCallStatsDisposable = (mediaStreamCall.members
                     |> deliverOnMainQueue).startStandalone(next: { [weak self] members in
@@ -1252,7 +1252,7 @@ final class StoryItemContentComponent: Component {
                                 environment.customItemSubtitleUpdated()
                             }
                         }
-
+                        
                         var video: PresentationGroupCallRequestedVideo?
                         if let members {
                             if let participant = members.participants.first(where: { $0.videoEndpointId != nil }), let videoValue = participant.requestedVideoChannel(minQuality: .full, maxQuality: .full) {
@@ -1262,7 +1262,7 @@ final class StoryItemContentComponent: Component {
                         let mediaStreamCallVideoState = MediaStreamCallVideoState(videoEndpointId: video?.endpointId)
                         if self.mediaStreamCallVideoState != mediaStreamCallVideoState {
                             self.mediaStreamCallVideoState = mediaStreamCallVideoState
-
+                            
                             if let mediaStreamCall = self.mediaStreamCall {
                                 if let video {
                                     mediaStreamCall.setRequestedVideoList(items: [video])
@@ -1270,7 +1270,7 @@ final class StoryItemContentComponent: Component {
                                     mediaStreamCall.setRequestedVideoList(items: [])
                                 }
                             }
-
+                            
                             if !self.isUpdating {
                                 self.state?.updated(transition: .immediate)
                             }
@@ -1287,7 +1287,7 @@ final class StoryItemContentComponent: Component {
                     liveCallStatsDisposable.dispose()
                 }
             }
-
+            
             switch selectedMedia {
             case .image, .file, .liveStream:
                 if let unsupportedText = self.unsupportedText {
@@ -1304,7 +1304,7 @@ final class StoryItemContentComponent: Component {
                 }
             default:
                 var unsuportedTransition = transition
-
+                
                 let unsupportedText: ComponentView<Empty>
                 if let current = self.unsupportedText {
                     unsupportedText = current
@@ -1313,7 +1313,7 @@ final class StoryItemContentComponent: Component {
                     unsupportedText = ComponentView()
                     self.unsupportedText = unsupportedText
                 }
-
+                
                 let unsupportedButton: ComponentView<Empty>
                 if let current = self.unsupportedButton {
                     unsupportedButton = current
@@ -1322,7 +1322,7 @@ final class StoryItemContentComponent: Component {
                     unsupportedButton = ComponentView()
                     self.unsupportedButton = unsupportedButton
                 }
-
+                
                 let unsupportedTextSize = unsupportedText.update(
                     transition: .immediate,
                     component: AnyComponent(MultilineTextComponent(
@@ -1355,16 +1355,16 @@ final class StoryItemContentComponent: Component {
                     environment: {},
                     containerSize: CGSize(width: 240.0, height: 50.0)
                 )
-
+                
                 let spacing: CGFloat = 24.0
                 let contentHeight = unsupportedTextSize.height + unsupportedButtonSize.height + spacing
                 var contentY = floor((availableSize.height - contentHeight) * 0.5)
-
+                
                 let unsupportedTextFrame = CGRect(origin: CGPoint(x: floor((availableSize.width - unsupportedTextSize.width) * 0.5), y: contentY), size: unsupportedTextSize)
                 contentY += unsupportedTextSize.height + spacing
-
+                
                 let unsupportedButtonFrame = CGRect(origin: CGPoint(x: floor((availableSize.width - unsupportedButtonSize.width) * 0.5), y: contentY), size: unsupportedButtonSize)
-
+                
                 if let unsupportedTextView = unsupportedText.view {
                     if unsupportedTextView.superview == nil {
                         self.addSubview(unsupportedTextView)
@@ -1378,19 +1378,19 @@ final class StoryItemContentComponent: Component {
                     }
                     unsuportedTransition.setFrame(view: unsupportedButtonView, frame: unsupportedButtonFrame)
                 }
-
+                
                 self.backgroundColor = UIColor(rgb: 0x181818)
             }
-
+            
             self.updateProgressMode(update: false)
-
+            
             if reloadMedia && synchronousLoad {
                 let _ = startTime
                 #if DEBUG
                 print("\(CFAbsoluteTimeGetCurrent()) Synchronous: \((CFAbsoluteTimeGetCurrent() - startTime) * 1000.0) ms")
                 #endif
             }
-
+            
             if component.isEmbeddedInCamera, case let .liveStream(liveStream) = messageMedia, case .rtc = liveStream.kind {
             } else if !self.contentLoaded || component.isVideoBuffering {
                 let loadingEffectView: StoryItemLoadingEffectView
@@ -1401,7 +1401,7 @@ final class StoryItemContentComponent: Component {
                     loadingEffectView.alpha = 0.0
                     self.loadingEffectView = loadingEffectView
                     self.addSubview(loadingEffectView)
-
+                    
                     if self.loadingEffectAppearanceTimer == nil {
                         let timer = SwiftSignalKit.Timer(timeout: 0.2, repeat: false, completion: { [weak self] in
                             guard let self else {
@@ -1426,7 +1426,7 @@ final class StoryItemContentComponent: Component {
                     loadingEffectView?.removeFromSuperview()
                 })
             }
-
+            
             if self.contentLoaded {
                 if let previousItem, previousItem.mediaAreas != component.item.mediaAreas {
                     if let mediaAreasEffectView = self.mediaAreasEffectView {
@@ -1434,7 +1434,7 @@ final class StoryItemContentComponent: Component {
                         mediaAreasEffectView.removeFromSuperview()
                     }
                 }
-
+                
                 var shimmeringMediaAreas: [MediaArea] = component.item.mediaAreas.filter { mediaArea in
                     if case .link = mediaArea {
                         return true
@@ -1444,11 +1444,11 @@ final class StoryItemContentComponent: Component {
                         return false
                     }
                 }
-
+                
                 if component.peer.id.isTelegramNotifications {
                     shimmeringMediaAreas = []
                 }
-
+                
                 if !shimmeringMediaAreas.isEmpty {
                     let mediaAreasEffectView: StoryItemLoadingEffectView
                     if let current = self.mediaAreasEffectView {
@@ -1459,7 +1459,7 @@ final class StoryItemContentComponent: Component {
                         self.addSubview(mediaAreasEffectView)
                     }
                     mediaAreasEffectView.update(size: availableSize, transition: transition)
-
+                    
                     let maskLayer: MediaAreaMaskLayer
                     if let current = mediaAreasEffectView.layer.mask as? MediaAreaMaskLayer {
                         maskLayer = current
@@ -1473,7 +1473,7 @@ final class StoryItemContentComponent: Component {
                     mediaAreasEffectView.removeFromSuperview()
                 }
             }
-
+            
             return availableSize
         }
 	}

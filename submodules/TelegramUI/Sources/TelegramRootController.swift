@@ -89,7 +89,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
     
     private var applicationInFocusDisposable: Disposable?
     private var storyUploadEventsDisposable: Disposable?
-
+    
     private var ghostBaseRamLabel: UILabel?
     private var ghostBaseRamTimer: Foundation.Timer?
     private var ghostBaseRamDefaultsObserver: NSObjectProtocol?
@@ -287,7 +287,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
             height: height
         )
     }
-
+    
     public func getContactsController() -> ViewController? {
         return self.contactsController
     }
@@ -302,10 +302,6 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
     
     public func getPrivacySettings() -> Promise<AccountPrivacySettings?>? {
         return self.accountSettingsController?.privacySettings
-    }
-    
-    public func getTwoStepAuthData() -> Promise<TwoStepAuthData?>? {
-        return self.accountSettingsController?.twoStepAuthData
     }
     
     public func getNotificationExceptions() -> Promise<NotificationExceptionsList?>? {
@@ -492,6 +488,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
         
         var presentImpl: ((ViewController) -> Void)?
         var returnToCameraImpl: (() -> Void)?
+        var resetCollageImpl: (() -> Void)?
         var dismissCameraImpl: (() -> Void)?
         var showDraftTooltipImpl: (() -> Void)?
         let cameraController = CameraScreenImpl(
@@ -524,7 +521,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
                     return nil
                 }
             },
-            completion: { result, resultTransition, storyRemainingCount, dismissed in
+            completion: { [weak self] result, resultTransition, storyRemainingCount, dismissed in
                 let subject: Signal<MediaEditorScreenImpl.Subject?, NoError> = result
                 |> map { value -> MediaEditorScreenImpl.Subject? in
                     func editorPIPPosition(_ position: CameraScreenImpl.PIPPosition) -> MediaEditorScreenImpl.PIPPosition {
@@ -565,6 +562,8 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
                             )
                         }
                         return .videoCollage(items: collage.items.map { editorCollageItem($0) })
+                    case let .collage(collage):
+                        return .collage(collage)
                     case let .asset(asset):
                         return .asset(asset)
                     case let .draft(draft):
@@ -660,6 +659,9 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
                         }
                     } as ([MediaEditorScreenImpl.Result], @escaping (@escaping () -> Void) -> Void) -> Void
                 )
+                controller.collageDraftSaved = {
+                    resetCollageImpl?()
+                }
                 controller.cancelled = { showDraftTooltip in
                     if showDraftTooltip {
                         showDraftTooltipImpl?()
@@ -688,6 +690,9 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
             if let cameraController {
                 cameraController.returnFromEditor()
             }
+        }
+        resetCollageImpl = { [weak cameraController] in
+            cameraController?.resetCollage()
         }
         showDraftTooltipImpl = { [weak cameraController] in
             if let cameraController {

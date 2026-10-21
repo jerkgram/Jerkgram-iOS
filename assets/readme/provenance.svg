@@ -11,7 +11,7 @@
   <g transform="translate(80 195)">
     <rect width="380" height="220" rx="34" fill="url(#card)" stroke="#fff" stroke-opacity=".11"/>
     <text x="190" y="92" text-anchor="middle" fill="#f2efe8" font-size="48" font-weight="730">UPSTREAM</text>
-    <text x="190" y="148" text-anchor="middle" fill="#f2efe8" opacity=".52" font-size="31">Telegram iOS 12.9.2</text>
+    <text x="190" y="148" text-anchor="middle" fill="#f2efe8" opacity=".52" font-size="31">Telegram iOS 13.0</text>
   </g>
   <path d="M485 305 H610" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round"/><path d="M592 287 L614 305 L592 323" fill="none" stroke="#f2efe8" stroke-opacity=".45" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
   <g transform="translate(635 170)">

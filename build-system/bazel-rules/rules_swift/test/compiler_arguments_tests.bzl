@@ -30,6 +30,25 @@ full_lto_test = make_action_command_line_test_rule(
     },
 )
 
+swiftcopt_swift_version_test = make_action_command_line_test_rule(
+    config_settings = {
+        str(Label("//swift:copt")): [
+            "-swift-version",
+            "4.2",
+        ],
+    },
+)
+
+swiftcopt_single_threaded_wmo_test = make_action_command_line_test_rule(
+    config_settings = {
+        str(Label("//swift:copt")): [
+            "-whole-module-optimization",
+            "-num-threads",
+            "0",
+        ],
+    },
+)
+
 def compiler_arguments_test_suite(name, tags = []):
     """Test suite for various command line flags passed to Swift compiles.
 
@@ -101,6 +120,56 @@ def compiler_arguments_test_suite(name, tags = []):
         mnemonic = "SwiftCompile",
         tags = all_tags,
         target_under_test = "//test/fixtures/compiler_arguments:bin",
+    )
+
+    action_command_line_test(
+        name = "{}_default_swift_version".format(name),
+        expected_argv = ["-swift-version 5"],
+        mnemonic = "SwiftCompile",
+        tags = all_tags,
+        target_under_test = "//test/fixtures/compiler_arguments:no_package_name",
+    )
+
+    split_test(
+        name = "{}_default_swift_version_in_derive_files".format(name),
+        expected_argv = ["-swift-version 5"],
+        mnemonic = "SwiftDeriveFiles",
+        tags = all_tags,
+        target_under_test = "//test/fixtures/compiler_arguments:no_package_name",
+    )
+
+    action_command_line_test(
+        name = "{}_copts_overrides_default_swift_version".format(name),
+        expected_argv = [
+            "-swift-version 5",
+            "-swift-version 4.2",
+        ],
+        mnemonic = "SwiftCompile",
+        tags = all_tags,
+        target_under_test = "//test/fixtures/compiler_arguments:lib_with_swift_version_copt",
+    )
+
+    swiftcopt_swift_version_test(
+        name = "{}_swiftcopt_overrides_default_swift_version".format(name),
+        expected_argv = [
+            "-swift-version 5",
+            "-swift-version 4.2",
+        ],
+        mnemonic = "SwiftCompile",
+        tags = all_tags,
+        target_under_test = "//test/fixtures/compiler_arguments:no_package_name",
+    )
+
+    swiftcopt_single_threaded_wmo_test(
+        name = "{}_swiftcopt_single_threaded_wmo".format(name),
+        expected_argv = [
+            "-whole-module-optimization",
+            "-num-threads 0",
+        ],
+        mnemonic = "SwiftCompile",
+        not_expected_argv = ["-num-threads 12"],
+        tags = all_tags,
+        target_under_test = "//test/fixtures/compiler_arguments:no_package_name",
     )
 
     native.test_suite(

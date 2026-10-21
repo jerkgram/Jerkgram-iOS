@@ -19,14 +19,10 @@ toolchain package. If you are looking for rules to build Swift code using this
 toolchain, see `doc/rules.md`.
 """
 
-load("@bazel_features//:features.bzl", "bazel_features")
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load(
-    "@bazel_tools//tools/cpp:toolchain_utils.bzl",
-    "use_cpp_toolchain",
-)
+load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load(
@@ -52,6 +48,7 @@ load("//swift/internal:attrs.bzl", "swift_toolchain_driver_attrs")
 load("//swift/internal:developer_dirs.bzl", "swift_developer_lib_dir")
 load(
     "//swift/internal:feature_names.bzl",
+    "SWIFT_FEATURE_ADD_DEFAULT_PRECOMPILED_MODULES",
     "SWIFT_FEATURE_COVERAGE",
     "SWIFT_FEATURE_COVERAGE_PREFIX_MAP",
     "SWIFT_FEATURE_DEBUG_PREFIX_MAP",
@@ -60,8 +57,10 @@ load(
     "SWIFT_FEATURE_MODULE_HOME_IS_CWD",
     "SWIFT_FEATURE_MODULE_MAP_HOME_IS_CWD",
     "SWIFT_FEATURE_REMAP_XCODE_PATH",
-    "SWIFT_FEATURE__SUPPORTS_UPCOMING_FEATURES",
-    "SWIFT_FEATURE__SUPPORTS_V6",
+    "SWIFT_FEATURE_STATIC_STDLIB",
+    "SWIFT_FEATURE_USE_C_MODULES",
+    "SWIFT_FEATURE__SUPPORTS_DEVELOPER_DIR",
+    "SWIFT_FEATURE__SUPPORTS_HERMETIC_SWIFTMODULE",
 )
 load(
     "//swift/internal:features.bzl",
@@ -71,16 +70,19 @@ load(
 load(
     "//swift/internal:providers.bzl",
     "SwiftCrossImportOverlayInfo",
+    "SwiftCrossImportOverlaysInfo",
     "SwiftModuleAliasesInfo",
 )
 load("//swift/internal:target_triples.bzl", "target_triples")
 load(
     "//swift/internal:utils.bzl",
+    "collect_cross_import_overlays",
     "collect_implicit_deps_providers",
     "compact",
     "get_swift_executable_for_toolchain",
+    "is_exec_config",
 )
-load("//swift/internal:wmo.bzl", "wmo_features_from_swiftcopts")
+load("//swift/internal:wmo.bzl", "features_from_swiftcopts")
 load(
     "//swift/toolchains/config:action_config.bzl",
     "ActionConfigInfo",
@@ -109,8 +111,6 @@ load(
 )
 load("//swift/toolchains/config:tool_config.bzl", "ToolConfigInfo")
 
-_CPP_TOOLCHAIN_TYPE = Label("@bazel_tools//tools/cpp:toolchain_type")
-
 visibility("public")
 
 # These are symlink locations known to be used by xcode-select in various Xcode
@@ -120,13 +120,19 @@ _DEVELOPER_DIR_SYMLINKS = [
     "/var/db/xcode_select_link",
 ]
 
+def _developer_dir_symlinks_for_target(target_triple):
+    """Returns the developer directory symlinks that are valid for a target."""
+    if target_triples.unversioned_os(target_triple) == "macos":
+        return _DEVELOPER_DIR_SYMLINKS
+    return []
+
 def _platform_developer_framework_dir(
-        apple_toolchain,
+        developer_dir,
         target_triple):
     """Returns the Developer framework directory for the platform.
 
     Args:
-        apple_toolchain: The `apple_common.apple_toolchain()` object.
+        developer_dir: The path to Xcode's "Developer" directory.
         target_triple: The triple of the platform being targeted.
 
     Returns:
@@ -134,7 +140,7 @@ def _platform_developer_framework_dir(
         exists, otherwise `None`.
     """
     return paths.join(
-        apple_toolchain.developer_dir(),
+        developer_dir,
         "Platforms",
         "{}.platform".format(
             target_triples.bazel_apple_platform(target_triple).name_in_plist,
@@ -220,7 +226,7 @@ def _swift_linkopts_cc_info(
         depend on Swift targets.
     """
     platform_developer_framework_dir = _platform_developer_framework_dir(
-        apple_toolchain,
+        apple_toolchain.developer_dir(),
         target_triple,
     )
     sdk_developer_framework_dir = _sdk_developer_framework_dir(
@@ -252,12 +258,6 @@ def _swift_linkopts_cc_info(
     ] + [
         "-L{}".format(swift_lib_dir),
         "-L/usr/lib/swift",
-        # TODO(b/112000244): This should get added by the C++ Starlark API,
-        # but we're using the "c++-link-executable" action right now instead
-        # of "objc-executable" because the latter requires additional
-        # variables not provided by cc_common. Figure out how to handle this
-        # correctly.
-        "-Wl,-objc_abi_version,2",
     ])
 
     # Compute the necessary rpaths for back-deployed compatibility libraries.
@@ -274,12 +274,9 @@ def _swift_linkopts_cc_info(
         target_triple = target_triple,
         xcode_config = xcode_config,
     )
-    developer_dir_rpath_roots = _DEVELOPER_DIR_SYMLINKS + [
-        "__BAZEL_XCODE_DEVELOPER_DIR__",
-    ]
     rpaths = ["/usr/lib/swift"] + [
         paths.join(developer_dir_symlink, compatibility_dir)
-        for developer_dir_symlink in developer_dir_rpath_roots
+        for developer_dir_symlink in _developer_dir_symlinks_for_target(target_triple)
         for compatibility_dir in swift_compatibility_lib_dirs
     ]
     linkopts += [
@@ -306,54 +303,40 @@ def _swift_linkopts_cc_info(
             linker_inputs = depset([
                 cc_common.create_linker_input(
                     owner = toolchain_label,
-                    user_link_flags = depset(linkopts),
+                    user_link_flags = linkopts,
                 ),
             ]),
         ),
     )
 
-def _test_linking_context(
-        target_triple,
-        toolchain_label,
-        xcode_config):
+def _test_linking_context(target_triple, toolchain_label):
     """Returns a `CcLinkingContext` containing linker flags for test binaries.
 
     Args:
         target_triple: The target triple `struct`.
         toolchain_label: The label of the Swift toolchain that will act as the
             owner of the linker input propagating the flags.
-        xcode_config: The Xcode configuration.
 
     Returns:
         A `CcLinkingContext` that will provide linker flags to `swift_test`
         binaries.
     """
 
-    # Weakly link to XCTest. It's possible that machine that links the test
-    # binary will have Xcode installed at a different path than the machine that
-    # runs the binary. To handle this, the binary `dlopen`s XCTest at startup
-    # using the path Bazel passes in the test action's environment.
-    linkopts = [
-        "-Wl,-weak_framework,XCTest",
-        "-Wl,-weak-lXCTestSwiftSupport",
-    ]
-    if _is_xcode_at_least_version(xcode_config, "16.0"):
-        linkopts.append("-Wl,-weak_framework,Testing")
-
     # We use these as the rpaths for linking tests so that the required
     # libraries are found if Xcode is installed in a different location on the
     # machine that runs the tests than the machine used to link them.
-    developer_dir_rpath_roots = _DEVELOPER_DIR_SYMLINKS + [
-        "__BAZEL_XCODE_DEVELOPER_DIR__",
-    ]
-    for developer_dir in developer_dir_rpath_roots:
-        platform_developer_framework_dir_symlink = paths.join(
+    linkopts = []
+    for developer_dir in _developer_dir_symlinks_for_target(target_triple):
+        platform_developer_framework_dir = _platform_developer_framework_dir(
             developer_dir,
-            "Platforms",
-            "{}.platform".format(
-                target_triples.bazel_apple_platform(target_triple).name_in_plist,
-            ),
-            "Developer/Library/Frameworks",
+            target_triple,
+        )
+
+        # NOTE: We shouldn't do this but it's required since we don't rely on
+        # the xctest command line tool to launch our binaries
+        platform_developer_private_framework_dir = paths.join(
+            paths.dirname(platform_developer_framework_dir),
+            "PrivateFrameworks",
         )
         linkopts.extend([
             "-Wl,-rpath,{}".format(path)
@@ -361,10 +344,11 @@ def _test_linking_context(
                 swift_developer_lib_dir([
                     struct(
                         developer_path_label = "platform",
-                        path = platform_developer_framework_dir_symlink,
+                        path = platform_developer_framework_dir,
                     ),
                 ]),
-                platform_developer_framework_dir_symlink,
+                platform_developer_framework_dir,
+                platform_developer_private_framework_dir,
             ])
         ])
 
@@ -372,38 +356,29 @@ def _test_linking_context(
         linker_inputs = depset([
             cc_common.create_linker_input(
                 owner = toolchain_label,
-                user_link_flags = depset(linkopts),
+                user_link_flags = linkopts,
             ),
         ]),
     )
 
-def _make_resource_directory_configurator(developer_dir):
-    """Configures compiler flags about the toolchain's resource directory.
+def _resource_dir_path(apple_toolchain):
+    """Returns the path to the resource directory for the Swift toolchain.
 
-    We must pass a resource directory explicitly if the build rules are invoked
-    using a custom driver executable or a partial toolchain root, so that the
-    compiler doesn't try to find its resources relative to that binary.
+    The developer directory used by this function is actually a placeholder
+    string, which will be replaced at execution time by the actual developer
+    directory for the currently selected Xcode.
 
     Args:
-        developer_dir: The path to Xcode's Developer directory.
+        apple_toolchain: The `apple_common.apple_toolchain()` object.
 
     Returns:
-        A function that is used to configure the toolchain's resource directory.
+        The path to the resource directory for the Swift toolchain.
     """
-
-    def _resource_directory_configurator(_prerequisites, args):
-        args.add(
-            "-resource-dir",
-            (
-                "{developer_dir}/Toolchains/{toolchain}.xctoolchain/" +
-                "usr/lib/swift"
-            ).format(
-                developer_dir = developer_dir,
-                toolchain = "XcodeDefault",
-            ),
-        )
-
-    return _resource_directory_configurator
+    return (
+        "{developer_dir}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift"
+    ).format(
+        developer_dir = apple_toolchain.developer_dir(),
+    )
 
 def _all_action_configs(
         additional_objc_copts,
@@ -433,17 +408,27 @@ def _all_action_configs(
     Returns:
         The action configurations for the Swift toolchain.
     """
+    sdk_version = str(xcode_config.sdk_version_for_platform(
+        target_triples.bazel_apple_platform(target_triple),
+    ))
+    sdk_version_triple = target_triples.str(
+        target_triples.normalize_for_swift(
+            target_triples.make(
+                cpu = target_triple.cpu,
+                vendor = target_triple.vendor,
+                os = target_triples.unversioned_os(target_triple) + sdk_version,
+                environment = target_triple.environment,
+            ),
+        ),
+    )
 
     # Basic compilation flags (target triple and toolchain search paths).
     action_configs = [
         ActionConfigInfo(
-            actions = [
-                SWIFT_ACTION_COMPILE,
+            actions = all_compile_action_names() + [
                 SWIFT_ACTION_COMPILE_MODULE_INTERFACE,
-                SWIFT_ACTION_DERIVE_FILES,
                 SWIFT_ACTION_DUMP_AST,
                 SWIFT_ACTION_MODULEWRAP,
-                SWIFT_ACTION_PRECOMPILE_C_MODULE,
                 SWIFT_ACTION_SYMBOL_GRAPH_EXTRACT,
                 SWIFT_ACTION_SYNTHESIZE_INTERFACE,
             ],
@@ -453,6 +438,52 @@ def _all_action_configs(
             ],
         ),
     ]
+
+    # https://github.com/swiftlang/llvm-project/issues/12826
+    action_configs.extend([
+        ActionConfigInfo(
+            actions = [SWIFT_ACTION_PRECOMPILE_C_MODULE],
+            configurators = [
+                # NOTE: This seems wrong but is also what Xcode does
+                add_arg("-target", sdk_version_triple),
+                add_arg("-sdk", apple_toolchain.sdk_dir()),
+            ],
+        ),
+        ActionConfigInfo(
+            actions = all_compile_action_names() + [
+                SWIFT_ACTION_DUMP_AST,
+                SWIFT_ACTION_PRECOMPILE_C_MODULE,
+                SWIFT_ACTION_SYNTHESIZE_INTERFACE,
+            ],
+            configurators = [
+                add_arg("-Xfrontend", "-clang-target"),
+                add_arg("-Xfrontend", sdk_version_triple),
+            ],
+            features = [SWIFT_FEATURE_USE_C_MODULES],
+        ),
+        ActionConfigInfo(
+            # Actions that run directly with -frontend so -Xfrontend is invalid
+            actions = [
+                SWIFT_ACTION_COMPILE_MODULE_INTERFACE,
+                SWIFT_ACTION_SYMBOL_GRAPH_EXTRACT,
+            ],
+            configurators = [
+                add_arg("-clang-target", sdk_version_triple),
+            ],
+            features = [SWIFT_FEATURE_USE_C_MODULES],
+        ),
+        ActionConfigInfo(
+            actions = [SWIFT_ACTION_SYMBOL_GRAPH_EXTRACT],
+            configurators = [
+                # https://github.com/swiftlang/swift/pull/91039
+                # `swift-symbolgraph-extract` accepts `-clang-target` but does
+                # not apply it to ClangImporter, so pass the shared SDK target
+                # directly to Clang as well.
+                add_arg("-Xcc", "--target={}".format(sdk_version_triple)),
+            ],
+            features = [SWIFT_FEATURE_USE_C_MODULES],
+        ),
+    ])
 
     action_configs.extend([
         # Xcode path remapping
@@ -468,14 +499,13 @@ def _all_action_configs(
                 ),
             ],
             features = [
-                [SWIFT_FEATURE_REMAP_XCODE_PATH, SWIFT_FEATURE_DEBUG_PREFIX_MAP],
+                [SWIFT_FEATURE_REMAP_XCODE_PATH, SWIFT_FEATURE_DEBUG_PREFIX_MAP, SWIFT_FEATURE__SUPPORTS_DEVELOPER_DIR],
             ],
         ),
         ActionConfigInfo(
             actions = all_compile_action_names() + [
                 SWIFT_ACTION_PRECOMPILE_C_MODULE,
                 SWIFT_ACTION_COMPILE_MODULE_INTERFACE,
-                SWIFT_ACTION_DERIVE_FILES,
             ],
             configurators = [
                 add_arg(
@@ -488,6 +518,7 @@ def _all_action_configs(
                     SWIFT_FEATURE_REMAP_XCODE_PATH,
                     SWIFT_FEATURE_COVERAGE_PREFIX_MAP,
                     SWIFT_FEATURE_COVERAGE,
+                    SWIFT_FEATURE__SUPPORTS_DEVELOPER_DIR,
                 ],
             ],
         ),
@@ -505,6 +536,7 @@ def _all_action_configs(
             features = [
                 SWIFT_FEATURE_FILE_PREFIX_MAP,
                 SWIFT_FEATURE_REMAP_XCODE_PATH,
+                SWIFT_FEATURE__SUPPORTS_DEVELOPER_DIR,
             ],
         ),
     ])
@@ -515,17 +547,16 @@ def _all_action_configs(
         # directory so that modules are found correctly.
         action_configs.append(
             ActionConfigInfo(
-                actions = [
-                    SWIFT_ACTION_COMPILE,
-                    SWIFT_ACTION_DERIVE_FILES,
+                actions = all_compile_action_names() + [
                     SWIFT_ACTION_DUMP_AST,
                     SWIFT_ACTION_PRECOMPILE_C_MODULE,
                     SWIFT_ACTION_SYMBOL_GRAPH_EXTRACT,
                     SWIFT_ACTION_SYNTHESIZE_INTERFACE,
                 ],
                 configurators = [
-                    _make_resource_directory_configurator(
-                        apple_toolchain.developer_dir(),
+                    add_arg(
+                        "-resource-dir",
+                        _resource_dir_path(apple_toolchain),
                     ),
                 ],
             ),
@@ -540,14 +571,36 @@ def _all_action_configs(
         ActionConfigInfo(
             actions = [SWIFT_ACTION_COMPILE_MODULE_INTERFACE],
             configurators = [
-                _make_resource_directory_configurator(
-                    apple_toolchain.developer_dir(),
+                add_arg(
+                    "-resource-dir",
+                    _resource_dir_path(apple_toolchain),
                 ),
                 add_arg(
                     "-target-sdk-version",
-                    str(xcode_config.sdk_version_for_platform(
-                        target_triples.bazel_apple_platform(target_triple),
-                    )),
+                    sdk_version,
+                ),
+            ],
+        ),
+    )
+
+    # Starting with Xcode 26.0 beta 5, the implementation of Swift Testing's
+    # macros is in a separate subdirectory that the build system manually passes
+    # to the compiler *only* when building test code. We don't want to plumb
+    # `testonly` information all the way through to our compile actions, so we
+    # simply pass the plugin path to all compiles. This is harmless for code
+    # that doesn't use the plugin.
+    action_configs.append(
+        ActionConfigInfo(
+            actions = all_compile_action_names() + [
+                SWIFT_ACTION_COMPILE_MODULE_INTERFACE,
+                SWIFT_ACTION_SYMBOL_GRAPH_EXTRACT,
+            ],
+            configurators = [
+                add_arg(
+                    "-plugin-path",
+                    "{resource_dir}/host/plugins/testing".format(
+                        resource_dir = _resource_dir_path(apple_toolchain),
+                    ),
                 ),
             ],
         ),
@@ -738,7 +791,7 @@ def _dsym_provider(*, ctx):
 def _xcode_swift_toolchain_impl(ctx):
     cpp_fragment = ctx.fragments.cpp
     apple_toolchain = apple_common.apple_toolchain()
-    cc_toolchain = ctx.exec_groups["default"].toolchains[_CPP_TOOLCHAIN_TYPE].cc
+    cc_toolchain = find_cc_toolchain(ctx)
 
     target_triple = target_triples.normalize_for_swift(
         target_triples.parse(ctx.var.get("CC_TARGET_TRIPLE") or cc_toolchain.target_gnu_system_name),
@@ -746,13 +799,9 @@ def _xcode_swift_toolchain_impl(ctx):
 
     xcode_config = ctx.attr._xcode_config[apple_common.XcodeVersionConfig]
 
-    # TODO: Remove once we drop bazel 7.x support
-    if not bazel_features.cc.swift_fragment_removed:
-        swiftcopts = list(ctx.fragments.swift.copts())
-    else:
-        swiftcopts = []
+    swiftcopts = []
 
-    if "-exec-" in ctx.bin_dir.path:
+    if is_exec_config(ctx):
         swiftcopts.extend(ctx.attr._exec_copts[BuildSettingInfo].value)
     else:
         swiftcopts.extend(ctx.attr._copts[BuildSettingInfo].value)
@@ -760,7 +809,6 @@ def _xcode_swift_toolchain_impl(ctx):
     test_linking_context = _test_linking_context(
         target_triple = target_triple,
         toolchain_label = ctx.label,
-        xcode_config = xcode_config,
     )
 
     # `--define=SWIFT_USE_TOOLCHAIN_ROOT=<path>` is a rapid development feature
@@ -799,7 +847,7 @@ def _xcode_swift_toolchain_impl(ctx):
     requested_features = features_for_build_modes(
         ctx,
         cpp_fragment = cpp_fragment,
-    ) + wmo_features_from_swiftcopts(swiftcopts = ctx.attr.copts + swiftcopts)
+    ) + features_from_swiftcopts(swiftcopts = ctx.attr.copts + swiftcopts)
     requested_features.extend(ctx.features)
     requested_features.extend(ctx.attr.default_enabled_features)
     requested_features.extend(default_features_for_toolchain(
@@ -807,32 +855,23 @@ def _xcode_swift_toolchain_impl(ctx):
     ))
 
     requested_features.extend([
-        # Allow users to start using access levels on `import`s by default. Note
-        # that this does *not* change the default access level for `import`s to
-        # `internal`; that is controlled by the upcoming feature flag
-        # `InternalImportsByDefault`.
-        "swift.experimental.AccessLevelOnImport",
+        SWIFT_FEATURE_DISABLE_SWIFT_SANDBOX,
+
+        # Ensure hermetic PCM files (no absolute workspace paths).
+        SWIFT_FEATURE_MODULE_HOME_IS_CWD,
     ])
 
-    if _is_xcode_at_least_version(xcode_config, "14.3"):
-        requested_features.append(SWIFT_FEATURE__SUPPORTS_UPCOMING_FEATURES)
+    if _is_xcode_at_least_version(xcode_config, "26.4"):
+        requested_features.append(SWIFT_FEATURE__SUPPORTS_HERMETIC_SWIFTMODULE)
 
-    if _is_xcode_at_least_version(xcode_config, "15.3"):
-        requested_features.append(SWIFT_FEATURE_DISABLE_SWIFT_SANDBOX)
+    # Xcode toolchains always support DEVELOPER_DIR
+    requested_features.append(SWIFT_FEATURE__SUPPORTS_DEVELOPER_DIR)
 
-    if _is_xcode_at_least_version(xcode_config, "16.0"):
-        requested_features.extend([
-            SWIFT_FEATURE__SUPPORTS_V6,
-            # Ensure hermetic PCM files (no absolute workspace paths). This flag
-            # is actually supported on Xcode 15.x as well, but it's bugged; a
-            # `MODULE_DIRECTORY` field remains in the PCM file that has the
-            # absolute workspace path, so it's not hermetic, and worse, it
-            # causes other compilation errors in the unfortunately common case
-            # where two modules contain the same header.
-            SWIFT_FEATURE_MODULE_HOME_IS_CWD,
-        ])
+    # If explicit modules are enabled, implicitly add all precompiled modules as deps by default
+    requested_features.append(SWIFT_FEATURE_ADD_DEFAULT_PRECOMPILED_MODULES)
 
     unsupported_features = ctx.disabled_features + [
+        SWIFT_FEATURE_STATIC_STDLIB,
         SWIFT_FEATURE_MODULE_MAP_HOME_IS_CWD,
     ]
     unsupported_features.extend(ctx.attr.default_unsupported_features)
@@ -872,7 +911,7 @@ def _xcode_swift_toolchain_impl(ctx):
     )
     swift_toolchain_developer_paths = []
     platform_developer_framework_dir = _platform_developer_framework_dir(
-        apple_toolchain,
+        apple_toolchain.developer_dir(),
         target_triple,
     )
     if platform_developer_framework_dir:
@@ -901,10 +940,7 @@ def _xcode_swift_toolchain_impl(ctx):
         clang_implicit_deps_providers = collect_implicit_deps_providers(
             ctx.attr.clang_implicit_deps,
         ),
-        cross_import_overlays = [
-            target[SwiftCrossImportOverlayInfo]
-            for target in ctx.attr.cross_import_overlays
-        ],
+        cross_import_overlays = collect_cross_import_overlays(ctx.attr.cross_import_overlays),
         developer_dirs = swift_toolchain_developer_paths,
         entry_point_linkopts_provider = _entry_point_linkopts_provider,
         feature_allowlists = [
@@ -933,6 +969,14 @@ def _xcode_swift_toolchain_impl(ctx):
             for target in ctx.attr.package_configurations
         ],
         requested_features = requested_features,
+        dynamic_runtime_cc_info = None,
+        static_runtime_cc_info = None,
+        system_modules = collect_implicit_deps_providers(
+            [ctx.attr.system_modules] if ctx.attr.system_modules else [],
+        ),
+        implicit_system_modules = collect_implicit_deps_providers(
+            [ctx.attr.implicit_system_modules] if ctx.attr.implicit_system_modules else [],
+        ),
         swift_worker = ctx.attr._worker[DefaultInfo].files_to_run,
         const_protocols_to_gather = ctx.file.const_protocols_to_gather,
         test_configuration = struct(
@@ -979,12 +1023,16 @@ implicit dependencies.
             "cross_import_overlays": attr.label_list(
                 allow_empty = True,
                 doc = """\
-A list of `swift_cross_import_overlay` targets that will be automatically
-injected into the dependencies of Swift compilations if their declaring module
-and bystanding module are both already declared as dependencies.
+A list of `swift_cross_import_overlay` or `swift_cross_import_overlay_group`
+targets that will be automatically injected into the dependencies of Swift
+compilations if their declaring module and bystanding module are both already
+declared as dependencies.
 """,
                 mandatory = False,
-                providers = [[SwiftCrossImportOverlayInfo]],
+                providers = [
+                    [SwiftCrossImportOverlayInfo],
+                    [SwiftCrossImportOverlaysInfo],
+                ],
             ),
             "default_enabled_features": attr.string_list(
                 doc = """\
@@ -1064,12 +1112,21 @@ A list of additional Objective-C compiler flags that should be passed (preceded 
 to Swift compile actions *and* Swift explicit module precompile actions.
 """,
             ),
-            "_cc_toolchain": attr.label(
-                default = Label("@bazel_tools//tools/cpp:current_cc_toolchain"),
+            "implicit_system_modules": attr.label(
                 doc = """\
-The C++ toolchain from which linking flags and other tools needed by the Swift
-toolchain (such as `clang`) will be retrieved.
+The target of the system modules that every Swift compilation implicitly
+requires.
 """,
+                mandatory = False,
+                providers = [[CcInfo, SwiftInfo]],
+            ),
+            "system_modules": attr.label(
+                doc = """\
+The target of all the implicit system module dependencies to add if explicit
+modules are enabled.
+""",
+                mandatory = False,
+                providers = [[CcInfo, SwiftInfo]],
             ),
             "_copts": attr.label(
                 default = Label("//swift:copt"),
@@ -1108,17 +1165,10 @@ for incremental compilation using a persistent mode.
         },
     ),
     doc = "Represents a Swift compiler toolchain provided by Xcode.",
-    exec_groups = {
-        # An execution group that has no specific platform requirements. This
-        # ensures that the execution platform of this Swift toolchain does not
-        # unnecessarily constrain the execution platform of the C++ toolchain.
-        "default": exec_group(
-            toolchains = use_cpp_toolchain(),
-        ),
-    },
+    toolchains = use_cc_toolchain(),
     fragments = [
         "cpp",
         "objc",
-    ] + ([] if bazel_features.cc.swift_fragment_removed else ["swift"]),
+    ],
     implementation = _xcode_swift_toolchain_impl,
 )

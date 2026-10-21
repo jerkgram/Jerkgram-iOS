@@ -15,6 +15,20 @@
 """Tests for interoperability with `cc_library`-specific features."""
 
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load(
+    "//test/rules:action_command_line_test.bzl",
+    "make_action_command_line_test_rule",
+)
+
+explicit_module_map_pcm_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:features": [
+            "swift.use_c_modules",
+            "swift.emit_c_module",
+            "swift.use_explicit_swift_module_map",
+        ],
+    },
+)
 
 def cc_library_test_suite(name, tags = []):
     """Test suite for interoperability with `cc_library`-specific features.
@@ -47,6 +61,32 @@ def cc_library_test_suite(name, tags = []):
             "//test/fixtures/cc_library:import_prefix_and_strip_prefix_with_exclusion",
         ],
         tags = all_tags,
+    )
+
+    # Verify that Swift can import a `cc_library` that ignores warnings in headers coming
+    # from external dependencies.
+    build_test(
+        name = "{}_swift_imports_cc_library_with_external_dependencies".format(name),
+        targets = [
+            "//test/fixtures/cc_library:import_external_cpp_dependency",
+        ],
+        tags = all_tags,
+    )
+
+    explicit_module_map_pcm_test(
+        name = "{}_explicit_module_map_omits_cc_library_pcm_argument".format(name),
+        expected_argv = [
+            "-Xfrontend -explicit-swift-module-map-file -Xfrontend $(BIN_DIR)/test/fixtures/cc_library/import_prefix_only.swift-explicit-module-map.json",
+        ],
+        mnemonic = "SwiftCompile",
+        not_expected_argv = [
+            "-fmodule-file",
+            "-fmodule-file=test_fixtures_cc_library_prefix_only",
+            "-fmodule-map-file",
+            "prefix_only.swift.pcm",
+        ],
+        tags = all_tags,
+        target_under_test = "//test/fixtures/cc_library:import_prefix_only",
     )
 
     native.test_suite(

@@ -1,3 +1,4 @@
+import LottieSettings
 import AsyncDisplayKit
 import UIKit
 import Display
@@ -401,7 +402,7 @@ final class GiftsListView: UIView {
     func loadMore() {
         self.profileGifts.loadMore()
     }
-
+    
     @discardableResult
     private func updateScrolling(interactive: Bool = false, transition: ComponentTransition) -> CGFloat {
         guard let topInset = self.topInset, let visibleBounds = self.visibleBounds else {
@@ -424,7 +425,7 @@ final class GiftsListView: UIView {
         guard let starsProducts = self.starsProducts, let params = self.currentParams else {
             return 0.0
         }
-
+        
         let ghostBaseGlassEnabled =
             GhostBaseProfileBlurSettings
                 .loadEnabled() != nil
@@ -502,7 +503,11 @@ final class GiftsListView: UIView {
                     }
                 case let .unique(gift):
                     subject = .uniqueGift(gift: gift, price: nil)
-                    peer = nil
+                    if !(product.text ?? "").isEmpty && !product.nameHidden {
+                        peer = product.fromPeer.flatMap { .peer($0) }
+                    } else {
+                        peer = nil
+                    }
                     resellAmount = gift.resellAmounts?.first(where: { $0.currency == .stars })
                     
                     if !(gift.resellAmounts ?? []).isEmpty {
@@ -639,11 +644,11 @@ final class GiftsListView: UIView {
                                             }
                                             return self.profileGifts.upgradeStarGift(formId: formId, reference: reference, keepOriginalInfo: keepOriginalInfo)
                                         },
-                                        buyGift: { [weak self] slug, peerId, price in
+                                        buyGift: { [weak self] slug, peerId, price, hideName, text, entities in
                                             guard let self else {
                                                 return .never()
                                             }
-                                            return self.profileGifts.buyStarGift(slug: slug, peerId: peerId, price: price)
+                                            return self.profileGifts.buyStarGift(slug: slug, peerId: peerId, price: price, hideName: hideName, text: text, entities: entities)
                                         },
                                         updateResellStars: { [weak self] reference, price in
                                             guard let self else {
@@ -936,7 +941,8 @@ final class GiftsListView: UIView {
             let emptyResultsAnimationSize = self.emptyResultsAnimation.update(
                 transition: .immediate,
                 component: AnyComponent(LottieComponent(
-                    content: LottieComponent.AppBundleContent(name: "ChatListNoResults")
+                    content: LottieComponent.AppBundleContent(name: "ChatListNoResults"),
+                    lottieSettings: self.context.lottieRenderingSettings
                 )),
                 environment: {},
                 containerSize: CGSize(width: emptyAnimationHeight, height: emptyAnimationHeight)

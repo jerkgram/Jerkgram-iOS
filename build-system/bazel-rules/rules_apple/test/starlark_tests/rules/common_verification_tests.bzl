@@ -23,7 +23,7 @@ def _dict_to_space_separated_string_array(dict_to_transform, separator = " "):
     """Returns an array of formatted strings suitable for apple_verification_test env variables.
 
     Args:
-        dict_to_transform: String dictionary; keys must not contain spaces.
+        dict_to_transform: Dictionary; keys must be strings and must not contain spaces.
         separator: Character to use as separator for the formatted string. This character must be
             used as Bash's $IFS value to split the string back to a key, value pair on the
             apple_verification_test's verifier_script.
@@ -39,7 +39,7 @@ def _dict_to_space_separated_string_array(dict_to_transform, separator = " "):
                 "Key: %s\n" % key,
                 "Value: %s" % value,
             )
-        char_separated_string_array.append(separator.join([key, value]))
+        char_separated_string_array.append(separator.join([key, str(value)]))
     return char_separated_string_array
 
 def archive_contents_test(
@@ -67,6 +67,7 @@ def archive_contents_test(
         codesign_info_not_contains = [],
         macho_load_commands_contain = [],
         macho_load_commands_not_contain = [],
+        assert_directory_file_count = {},
         assert_file_permissions = {},
         **kwargs):
     """Macro for calling the apple_verification_test with archive_contents_test.sh.
@@ -124,6 +125,9 @@ def archive_contents_test(
             the binary file specified in `binary_test_file`.
         macho_load_commands_not_contain: Optional, A list of Mach-O load commands that should not
             appear in the binary file specified in `binary_test_file`.
+        assert_directory_file_count: Optional; key/value pairs to test directory file counts.
+            Keys are paths within the bundle, values are the expected number of regular files
+            recursively contained under that directory.
         assert_file_permissions: Optional; key/value pairs to test file permissions.
             Keys are paths within the bundle, values are the expected numerical file permissions.
             See `assert_permissions_equal` to see supported file permissions types.
@@ -183,11 +187,16 @@ def archive_contents_test(
         asset_catalog_test_file,
         text_test_file,
         binary_test_file,
+        assert_directory_file_count,
         assert_file_permissions,
     ]):
         fail("There are no tests for the archive")
 
     plist_test_values_list = _dict_to_space_separated_string_array(plist_test_values)
+    assert_directory_file_count_list = _dict_to_space_separated_string_array(
+        assert_directory_file_count,
+        separator = ":",
+    )
     assert_file_permissions_list = _dict_to_space_separated_string_array(
         assert_file_permissions,
         separator = ":",
@@ -197,6 +206,7 @@ def archive_contents_test(
         name = name,
         build_type = build_type,
         env = {
+            "ASSERT_DIRECTORY_FILE_COUNT": assert_directory_file_count_list,
             "ASSERT_FILE_PERMISSIONS": assert_file_permissions_list,
             "ASSET_CATALOG_CONTAINS": asset_catalog_test_contains,
             "ASSET_CATALOG_FILE": [asset_catalog_test_file],
@@ -248,7 +258,7 @@ def binary_contents_test(
         target_under_test: The Apple binary target whose contents are to be verified.
         binary_test_file: The binary file to test.
         binary_test_architecture: Optional, The architecture to use from `binary_test_file` for
-            symbol tests.
+            symbol, load command, and embedded plist tests.
         binary_contains_symbols: Optional, A list of symbols that should appear in the binary file
             specified in `binary_test_file`.
         binary_not_contains_architectures: Optional. A list of architectures to verify do not exist
@@ -263,8 +273,8 @@ def binary_contents_test(
             appear in the binary file specified in `binary_test_file`.
         embedded_plist_test_values: Optional, The key/value pairs to test. The test will fail
             if the key does not exist or if its value doesn't match the specified value. * can
-            be used as a wildcard value. An embedded plist will be extracted from the
-            `binary_test_file` based on the `plist_slice` for this test.
+            be used as a wildcard value. If `binary_test_architecture` is provided, the embedded
+            plist is extracted from that architecture's slice of `binary_test_file`.
         plist_section_name: Optional, The name of the plist section to test. Will be the
             identifier for the section in the `__TEXT` segment, for instance `__launchd_plist`.
             Defaults to `__info_plist`.
@@ -279,10 +289,11 @@ def binary_contents_test(
         binary_not_contains_symbols,
         macho_load_commands_contain,
         macho_load_commands_not_contain,
+        embedded_plist_test_values,
     ]):
         fail("Need at least one of (binary_contains_symbols, binary_not_contains_symbols, " +
-             "macho_load_commands_contain, macho_load_commands_not_contain) when specifying " +
-             "binary_test_architecture")
+             "macho_load_commands_contain, macho_load_commands_not_contain, " +
+             "embedded_plist_test_values) when specifying binary_test_architecture")
     elif binary_test_file and not any([
         binary_contains_symbols,
         binary_not_contains_architectures,

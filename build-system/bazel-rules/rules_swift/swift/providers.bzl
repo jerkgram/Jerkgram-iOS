@@ -438,13 +438,42 @@ These features determine various compilation and debugging behaviors of the
 Swift build rules, and they are also passed to the C++ APIs used when linking
 (so features defined in CROSSTOOL may be used here).
 """,
+        "dynamic_runtime_cc_info": """\
+The `CcInfo` that selects the toolchain's ordinary dynamic Swift runtime, or
+`None` if the toolchain supplies its runtime through implicit dependencies.
+Final links select this provider unless `swift.static_stdlib` is enabled; it is
+not propagated by libraries.
+""",
         "root_dir": """\
 `String`. The workspace-relative root directory of the toolchain.
+""",
+        "static_runtime_cc_info": """\
+A `CcInfo` that selects the static Swift runtime, or `None` if the toolchain
+does not support static Swift runtime linking. Final links select this provider
+when `swift.static_stdlib` is enabled; it is not propagated by libraries.
 """,
         "swift_worker": """\
 `File`. The executable representing the worker executable used to invoke the
 compiler and other Swift tools (for both incremental and non-incremental
 compiles).
+""",
+        "system_modules": """\
+A `struct` with the following fields, which represent providers from targets
+that should be added as implicit dependencies of any compilation or
+linking target:
+
+*   `cc_infos`: A list of `CcInfo` providers from targets specified as the
+    toolchain's implicit dependencies.
+
+*   `swift_infos`: A list of `SwiftInfo` providers from targets specified as the
+    toolchain's implicit dependencies.
+
+For ease of use, this field is never `None`; it will always be a valid `struct`
+containing the fields described above, even if those lists are empty.
+""",
+        "implicit_system_modules": """\
+A `struct` with in the same shape as `system_modules` for the system modules
+that every Swift compilation implicitly requires.
 """,
         "test_configuration": """\
 `Struct` containing the following fields:
@@ -485,6 +514,36 @@ Swift build rules, and they are also passed to the C++ APIs used when linking
     },
 )
 
+SwiftToolsInfo = provider(
+    doc = """\
+Propagates information about Swift toolchain tools that can be specified as
+labels to pull them into the input root.
+
+This provider allows users to specify Swift toolchain executables as explicit
+dependencies, ensuring they are available in the execution environment.
+""",
+    fields = {
+        "swift_driver": """\
+`File`. The Swift driver executable that orchestrates compilation and linking
+operations. This is the main entry point for invoking the Swift compiler
+toolchain.
+""",
+        "swift_autolink_extract": """\
+`File`. The executable that extracts autolink information from object files.
+This tool is used to determine which libraries need to be linked based on
+import statements in Swift code.
+""",
+        "swift_symbolgraph_extract": """\
+`File`. The executable that extracts symbol graph information from Swift
+modules. This tool generates structured data about APIs, which can be used
+for documentation generation and other tooling purposes.
+""",
+        "additional_inputs": """\
+`List` of `File`s. Additional files to add to the action input root when calling these tools.
+""",
+    },
+)
+
 SwiftClangModuleAspectInfo = provider(
     doc = """\
 A "marker provider" (i.e., it has no fields) that is always returned when
@@ -507,6 +566,7 @@ def create_swift_module_context(
         compilation_context = None,
         is_framework = False,
         is_system = False,
+        label = None,
         swift = None):
     """Creates a value containing Clang/Swift module artifacts of a dependency.
 
@@ -555,6 +615,9 @@ def create_swift_module_context(
             Therefore, it is assumed that any module with `is_system == True`
             must be able to be found using import search paths in order for
             implicit module builds to succeed.
+        label: The Bazel label of the target that owns the module. This is used
+            to produce actionable diagnostics for Swift layering violations.
+            May be `None` for modules that are not owned by a Bazel target.
         swift: A value returned by `create_swift_module_inputs` that
             contains artifacts related to Swift modules, such as the
             `.swiftmodule`, `.swiftdoc`, and/or `.swiftinterface` files emitted
@@ -570,6 +633,7 @@ def create_swift_module_context(
         compilation_context = compilation_context,
         is_framework = is_framework,
         is_system = is_system,
+        label = label,
         name = name,
         swift = swift,
     )
@@ -654,7 +718,8 @@ def create_swift_module_inputs(
         swiftinterface: The `.swiftinterface` file emitted by the compiler for
             this module. May be `None` if no module interface file was emitted.
         swiftmodule: The `.swiftmodule` file emitted by the compiler for this
-            module.
+            module, or a string path to a system-provided prebuilt
+            `.swiftmodule` file.
         swiftsourceinfo: The `.swiftsourceinfo` file emitted by the compiler for
             this module. May be `None` if no source info file was emitted.
 

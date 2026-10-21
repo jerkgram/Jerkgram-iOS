@@ -15,6 +15,10 @@
 """ACTool related actions."""
 
 load(
+    "@apple_support//lib:apple_support.bzl",
+    "apple_support",
+)
+load(
     "@bazel_skylib//lib:collections.bzl",
     "collections",
 )
@@ -25,10 +29,6 @@ load(
 load(
     "@bazel_skylib//lib:paths.bzl",
     "paths",
-)
-load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
-    "apple_support",
 )
 load(
     "//apple:utils.bzl",
@@ -45,6 +45,10 @@ load(
 load(
     "//apple/internal:intermediates.bzl",
     "intermediates",
+)
+load(
+    "//apple/internal:shared_environment.bzl",
+    "shared_environment",
 )
 load(
     "//apple/internal/utils:xctoolrunner.bzl",
@@ -508,6 +512,7 @@ def compile_asset_catalog(
         alternate_icons,
         alticonstool,
         asset_files,
+        build_settings,
         bundle_id,
         output_dir,
         output_plist,
@@ -532,6 +537,7 @@ def compile_asset_catalog(
           dependencies (i.e., assets not just from the application target, but
           from any other library targets it depends on) as well as resources like
           app icons and launch images.
+      build_settings: The build settings configuration for this target.
       bundle_id: The bundle ID to configure for this target.
       output_dir: The directory where the compiled outputs should be placed.
       output_plist: The file reference for the output plist that should be merged
@@ -607,6 +613,11 @@ def compile_asset_catalog(
             xctoolrunner_support.prefixed_path(actool_output_plist.path),
         ])
 
+    if build_settings.thin_for_device_model:
+        args.add("--filter-for-device-model", build_settings.thin_for_device_model)
+    if build_settings.thin_for_os_version:
+        args.add("--filter-for-device-os-version", build_settings.thin_for_os_version)
+
     xcassets = group_files_by_directory(
         asset_files,
         ["icon", "xcassets", "xcstickers"],
@@ -619,6 +630,7 @@ def compile_asset_catalog(
         actions = actions,
         arguments = [args],
         apple_fragment = platform_prerequisites.apple_fragment,
+        env = shared_environment.default_env,
         executable = xctoolrunner,
         execution_requirements = {"no-sandbox": "1"},
         inputs = asset_files,

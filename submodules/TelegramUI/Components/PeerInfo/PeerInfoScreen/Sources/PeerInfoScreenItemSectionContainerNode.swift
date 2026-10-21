@@ -101,6 +101,9 @@ final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
             }
             
             let itemHeight: CGFloat
+            if let infoItem = item as? PeerInfoScreenInfoItem {
+                infoItem.ghostBaseContainerBackgroundEnabled = self.ghostBaseGlassEnabled
+            }
             if self.ghostBaseGlassEnabled {
                 itemHeight = PresentationResourcesItemList.withGhostBaseGlassCornerFillerSuppressed {
                     itemNode.update(context: context, width: width, safeInsets: safeInsets, presentationData: presentationData, item: item, topItem: topItem, bottomItem: bottomItem, hasCorners: hasCorners, transition: itemTransition)

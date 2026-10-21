@@ -20,12 +20,12 @@ need to change what they do based on attributes of the active Xcode.
 To use these in your Starlark code, simply load the module; for example:
 
 ```build
-load("@build_bazel_apple_support//lib:xcode_support.bzl", "xcode_support")
+load("@apple_support//lib:xcode_support.bzl", "xcode_support")
 ```
 """
 
 load(
-    "@build_bazel_apple_support//xcode:providers.bzl",
+    "//xcode:providers.bzl",
     "XcodeSdkVariantInfo",
 )
 
@@ -44,7 +44,7 @@ def _get_current_sdk(ctx):
     Returns:
         The `XcodeSdkVariantInfo` provider for the current configuration.
     """
-    xcode_config = getattr(ctx.attr, "_xcode_config")
+    xcode_config = ctx.attr._xcode_config
     if not xcode_config or XcodeSdkVariantInfo not in xcode_config:
         fail("Failed to read the Xcode configuration from the current " +
              "context. Does the calling rule or aspect correctly define the " +
@@ -64,7 +64,7 @@ def _get_current_xcode(ctx):
     Returns:
         The `XcodeVersionConfig` provider for the current configuration.
     """
-    xcode_config = getattr(ctx.attr, "_xcode_config")
+    xcode_config = ctx.attr._xcode_config
     if not xcode_config or apple_common.XcodeVersionConfig not in xcode_config:
         fail("Failed to read the Xcode configuration from the current " +
              "context. Does the calling rule or aspect correctly define the " +

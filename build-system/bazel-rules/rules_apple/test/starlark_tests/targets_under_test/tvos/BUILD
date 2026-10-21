@@ -1,9 +1,9 @@
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load(
-    "@build_bazel_rules_swift//swift:swift.bzl",
+    "@rules_swift//swift:swift.bzl",
     "swift_library",
 )
-load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load(
     "//apple:apple.bzl",
     "apple_dynamic_framework_import",
@@ -65,6 +65,45 @@ tvos_application(
 )
 
 tvos_application(
+    name = "app_minimal_no_infoplist",
+    bundle_id = "com.google.example",
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_uikit_appdelegate",
+    ],
+)
+
+tvos_application(
+    name = "app_missing_version",
+    bundle_id = "com.google.example",
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-version.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_tvos.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_application(
+    name = "app_missing_short_version",
+    bundle_id = "com.google.example",
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-short-version.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_tvos.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_application(
     name = "app_multiple_infoplists",
     bundle_id = "com.google.example",
     infoplists = [
@@ -72,6 +111,20 @@ tvos_application(
         "//test/starlark_tests/resources:Info.plist",
     ],
     minimum_os_version = common.min_os_tvos.baseline,
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_application(
+    name = "app_with_bogus_provisioning_profile",
+    bundle_id = "com.google.example",
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/starlark_tests/resources:bogus.mobileprovision",
     tags = common.fixture_tags,
     deps = [
         "//test/starlark_tests/resources:objc_main_lib",
@@ -104,6 +157,76 @@ tvos_extension(
     ],
     minimum_os_version = common.min_os_tvos.baseline,
     provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_extension(
+    name = "ext_missing_version",
+    bundle_id = "com.google.example.ext",
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-version.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_tvos.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_extension(
+    name = "ext_missing_short_version",
+    bundle_id = "com.google.example.ext",
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-short-version.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_tvos.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_extension(
+    name = "ext_mismatched_bundle_id",
+    bundle_id = "com.google.other",
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_tvos.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_extension(
+    name = "ext_mismatched_short_version",
+    bundle_id = "com.google.example.ext",
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-short-version-1.1.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_tvos.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_extension(
+    name = "ext_mismatched_version",
+    bundle_id = "com.google.example.ext",
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-version-1.1.plist",
+    ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_tvos.mobileprovision",
     tags = common.fixture_tags,
     deps = [
         "//test/starlark_tests/resources:objc_main_lib",
@@ -322,6 +445,21 @@ tvos_application(
     infoplists = [
         "//test/starlark_tests/resources:Info.plist",
     ],
+    minimum_os_version = common.min_os_tvos.baseline,
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+tvos_application(
+    name = "app_with_fmwk_post_processor_removes_signature",
+    bundle_id = "com.google.example",
+    frameworks = [":fmwk"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    ipa_post_processor = "//test/starlark_tests/targets_under_test/apple:ipa_post_processor_remove_signature",
     minimum_os_version = common.min_os_tvos.baseline,
     tags = common.fixture_tags,
     deps = [
@@ -1490,24 +1628,6 @@ tvos_application(
     name = "app_with_app_intents",
     app_intents = [
         "//test/starlark_tests/resources:app_intent",
-    ],
-    bundle_id = "com.google.example",
-    infoplists = [
-        "//test/starlark_tests/resources:Info.plist",
-    ],
-    minimum_os_version = common.min_os_tvos.app_intents_support,
-    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
-    tags = common.fixture_tags,
-    deps = [
-        "//test/starlark_tests/resources:swift_uikit_appdelegate",
-    ],
-)
-
-tvos_application(
-    name = "app_with_app_intent_and_extra_app_intent",
-    app_intents = [
-        "//test/starlark_tests/resources:app_intent",
-        "//test/starlark_tests/resources:extra_app_intent",
     ],
     bundle_id = "com.google.example",
     infoplists = [

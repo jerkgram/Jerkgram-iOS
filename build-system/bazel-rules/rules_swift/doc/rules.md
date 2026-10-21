@@ -9,14 +9,14 @@ directly.
 For example:
 
 ```build
-load("@build_bazel_rules_swift//swift:swift_library.bzl", "swift_library")
-load("@build_bazel_rules_swift//proto:swift_proto_library.bzl", "swift_proto_library")
+load("@rules_swift//swift:swift_library.bzl", "swift_library")
+load("@rules_swift//proto:swift_proto_library.bzl", "swift_proto_library")
 ```
+
 On this page:
 
   * [swift_binary](#swift_binary)
   * [swift_compiler_plugin](#swift_compiler_plugin)
-  * [universal_swift_compiler_plugin](#universal_swift_compiler_plugin)
   * [swift_compiler_plugin_import](#swift_compiler_plugin_import)
   * [swift_cross_import_overlay](#swift_cross_import_overlay)
   * [swift_feature_allowlist](#swift_feature_allowlist)
@@ -24,17 +24,16 @@ On this page:
   * [swift_interop_hint](#swift_interop_hint)
   * [swift_library](#swift_library)
   * [swift_library_group](#swift_library_group)
-  * [mixed_language_library](#mixed_language_library)
   * [swift_module_mapping](#swift_module_mapping)
   * [swift_module_mapping_test](#swift_module_mapping_test)
   * [swift_overlay](#swift_overlay)
   * [swift_package_configuration](#swift_package_configuration)
-  * [swift_test](#swift_test)
+  * [swift_proto_compiler](#swift_proto_compiler)
   * [swift_proto_library](#swift_proto_library)
   * [swift_proto_library_group](#swift_proto_library_group)
-  * [swift_proto_compiler](#swift_proto_compiler)
-  * [deprecated_swift_grpc_library](#deprecated_swift_grpc_library)
-  * [deprecated_swift_proto_library](#deprecated_swift_proto_library)
+  * [swift_test](#swift_test)
+  * [universal_swift_compiler_plugin](#universal_swift_compiler_plugin)
+  * [mixed_language_library](#mixed_language_library)
 
 <a id="swift_binary"></a>
 
@@ -42,7 +41,7 @@ On this page:
 
 <pre>
 swift_binary(<a href="#swift_binary-name">name</a>, <a href="#swift_binary-deps">deps</a>, <a href="#swift_binary-srcs">srcs</a>, <a href="#swift_binary-data">data</a>, <a href="#swift_binary-additional_linker_inputs">additional_linker_inputs</a>, <a href="#swift_binary-copts">copts</a>, <a href="#swift_binary-defines">defines</a>, <a href="#swift_binary-env">env</a>, <a href="#swift_binary-linkopts">linkopts</a>,
-             <a href="#swift_binary-malloc">malloc</a>, <a href="#swift_binary-module_name">module_name</a>, <a href="#swift_binary-package_name">package_name</a>, <a href="#swift_binary-plugins">plugins</a>, <a href="#swift_binary-stamp">stamp</a>, <a href="#swift_binary-swiftc_inputs">swiftc_inputs</a>)
+             <a href="#swift_binary-linkshared">linkshared</a>, <a href="#swift_binary-malloc">malloc</a>, <a href="#swift_binary-module_name">module_name</a>, <a href="#swift_binary-package_name">package_name</a>, <a href="#swift_binary-plugins">plugins</a>, <a href="#swift_binary-stamp">stamp</a>, <a href="#swift_binary-swiftc_inputs">swiftc_inputs</a>)
 </pre>
 
 Compiles and links Swift code into an executable binary.
@@ -51,13 +50,16 @@ On Linux, this rule produces an executable binary for the desired target
 architecture.
 
 On Apple platforms, this rule produces a _single-architecture_ binary; it does
-not produce fat binaries. As such, this rule is mainly useful for creating Swift
-tools intended to run on the local build machine.
+not produce universal binaries. As such, this rule is mainly useful for
+creating Swift tools intended to run on the local build machine.
 
 If you want to create a multi-architecture binary or a bundled application,
 please use one of the platform-specific application rules in
 [rules_apple](https://github.com/bazelbuild/rules_apple) instead of
 `swift_binary`.
+
+Setting `linkshared = True` links a shared library or (on WebAssembly) a
+reactor module instead of an executable; see the `linkshared` attribute.
 
 **ATTRIBUTES**
 
@@ -73,10 +75,11 @@ please use one of the platform-specific application rules in
 | <a id="swift_binary-defines"></a>defines |  A list of defines to add to the compilation command line.<br><br>Note that unlike C-family languages, Swift defines do not have values; they are simply identifiers that are either defined or undefined. So strings in this list should be simple identifiers, **not** `name=value` pairs.<br><br>Each string is prepended with `-D` and added to the command line. Unlike `copts`, these flags are added for the target and every target that depends on it, so use this attribute with caution. It is preferred that you add defines directly to `copts`, only using this feature in the rare case that a library needs to propagate a symbol up to those that depend on it.   | List of strings | optional |  `[]`  |
 | <a id="swift_binary-env"></a>env |  Specifies additional environment variables to set when the test is executed by `bazel run` or `bazel test`.<br><br>The values of these environment variables are subject to `$(location)` and "Make variable" substitution.<br><br>NOTE: The environment variables are not set when you run the target outside of Bazel (for example, by manually executing the binary in `bazel-bin/`).   | <a href="https://bazel.build/rules/lib/dict">Dictionary: String -> String</a> | optional |  `{}`  |
 | <a id="swift_binary-linkopts"></a>linkopts |  Additional linker options that should be passed to `clang`. These strings are subject to `$(location ...)` expansion.   | List of strings | optional |  `[]`  |
+| <a id="swift_binary-linkshared"></a>linkshared |  If `True`, link the target as a shared library / loadable module instead of an executable, similar to `cc_binary`'s `linkshared`. The binary has no `main` entry point and the renamed-entry-point machinery is disabled.<br><br>On most platforms this produces a dynamic library named `lib<name>.so` (`.dylib` on Apple platforms) suitable for loading with `dlopen` / `System.loadLibrary` (e.g. an Android JNI library; export functions with `@_cdecl`).<br><br>When targeting WebAssembly it instead produces a "reactor" module (`<name>.wasm`, linked with `-mexec-model=reactor`): the module has no `_start`, runs its initializers via the exported `_initialize`, and exposes the functions a host instantiates and calls. Force-export those functions by passing `-Xlinker --export=<symbol>` (or `-Wl,--export=<symbol>`) flags in `linkopts`.   | Boolean | optional |  `False`  |
 | <a id="swift_binary-malloc"></a>malloc |  Override the default dependency on `malloc`.<br><br>By default, Swift binaries are linked against `@bazel_tools//tools/cpp:malloc"`, which is an empty library and the resulting binary will use libc's `malloc`. This label must refer to a `cc_library` rule.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `"@bazel_tools//tools/cpp:malloc"`  |
 | <a id="swift_binary-module_name"></a>module_name |  The name of the Swift module being built.<br><br>If left unspecified, the module name will be computed based on the target's build label, by stripping the leading `//` and replacing `/`, `:`, and other non-identifier characters with underscores.   | String | optional |  `""`  |
 | <a id="swift_binary-package_name"></a>package_name |  The semantic package of the Swift target being built. Targets with the same package_name can access APIs using the 'package' access control modifier in Swift 5.9+.   | String | optional |  `""`  |
-| <a id="swift_binary-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
+| <a id="swift_binary-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that depend on it. Enable the `swift.load_plugins_from_direct_dependencies` feature to load them only for this module and modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_binary-stamp"></a>stamp |  Enable or disable link stamping; that is, whether to encode build information into the binary. Possible values are:<br><br>* `stamp = 1`: Stamp the build information into the binary. Stamped binaries are   only rebuilt when their dependencies change. Use this if there are tests that   depend on the build information.<br><br>* `stamp = 0`: Always replace build information by constant values. This gives   good build result caching.<br><br>* `stamp = -1`: Embedding of build information is controlled by the   `--[no]stamp` flag.   | Integer | optional |  `-1`  |
 | <a id="swift_binary-swiftc_inputs"></a>swiftc_inputs |  Additional files that are referenced using `$(location ...)` in attributes that support location expansion.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 
@@ -117,9 +120,9 @@ swift_compiler_plugin(
     name = "Macros",
     srcs = glob(["Macros/*.swift"]),
     deps = [
-        "@SwiftSyntax",
-        "@SwiftSyntax//:SwiftCompilerPlugin",
-        "@SwiftSyntax//:SwiftSyntaxMacros",
+        "@swift-syntax//:SwiftSyntax",
+        "@swift-syntax//:SwiftCompilerPlugin",
+        "@swift-syntax//:SwiftSyntaxMacros",
     ],
 )
 
@@ -129,7 +132,7 @@ swift_test(
     srcs = glob(["MacrosTests/*.swift"]),
     deps = [
         ":Macros",
-        "@SwiftSyntax//:SwiftSyntaxMacrosTestSupport",
+        "@swift-syntax//:SwiftSyntaxMacrosTestSupport",
     ],
 )
 
@@ -165,7 +168,7 @@ swift_library(
 | <a id="swift_compiler_plugin-malloc"></a>malloc |  Override the default dependency on `malloc`.<br><br>By default, Swift binaries are linked against `@bazel_tools//tools/cpp:malloc"`, which is an empty library and the resulting binary will use libc's `malloc`. This label must refer to a `cc_library` rule.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `"@bazel_tools//tools/cpp:malloc"`  |
 | <a id="swift_compiler_plugin-module_name"></a>module_name |  The name of the Swift module being built.<br><br>If left unspecified, the module name will be computed based on the target's build label, by stripping the leading `//` and replacing `/`, `:`, and other non-identifier characters with underscores.   | String | optional |  `""`  |
 | <a id="swift_compiler_plugin-package_name"></a>package_name |  The semantic package of the Swift target being built. Targets with the same package_name can access APIs using the 'package' access control modifier in Swift 5.9+.   | String | optional |  `""`  |
-| <a id="swift_compiler_plugin-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
+| <a id="swift_compiler_plugin-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that depend on it. Enable the `swift.load_plugins_from_direct_dependencies` feature to load them only for this module and modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_compiler_plugin-stamp"></a>stamp |  Enable or disable link stamping; that is, whether to encode build information into the binary. Possible values are:<br><br>* `stamp = 1`: Stamp the build information into the binary. Stamped binaries are   only rebuilt when their dependencies change. Use this if there are tests that   depend on the build information.<br><br>* `stamp = 0`: Always replace build information by constant values. This gives   good build result caching.<br><br>* `stamp = -1`: Embedding of build information is controlled by the   `--[no]stamp` flag.   | Integer | optional |  `0`  |
 | <a id="swift_compiler_plugin-swiftc_inputs"></a>swiftc_inputs |  Additional files that are referenced using `$(location ...)` in attributes that support location expansion.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 
@@ -198,7 +201,7 @@ using `swift_compiler_plugin`.
 
 <pre>
 swift_cross_import_overlay(<a href="#swift_cross_import_overlay-name">name</a>, <a href="#swift_cross_import_overlay-deps">deps</a>, <a href="#swift_cross_import_overlay-bystanding_module">bystanding_module</a>, <a href="#swift_cross_import_overlay-bystanding_module_name">bystanding_module_name</a>, <a href="#swift_cross_import_overlay-declaring_module">declaring_module</a>,
-                           <a href="#swift_cross_import_overlay-declaring_module_name">declaring_module_name</a>)
+                           <a href="#swift_cross_import_overlay-declaring_module_name">declaring_module_name</a>, <a href="#swift_cross_import_overlay-swiftoverlay">swiftoverlay</a>)
 </pre>
 
 Declares a cross-import overlay that will be automatically added as a dependency
@@ -234,6 +237,7 @@ the future, this rule is not recommended for other widespread use.
 | <a id="swift_cross_import_overlay-bystanding_module_name"></a>bystanding_module_name |  The name of the bystanding module from the target specified by the `bystanding_module` attribute. This is inferred if `bystanding_module` only exports a single direct module; this name must be specified if `bystanding_module` exports more than one.   | String | optional |  `""`  |
 | <a id="swift_cross_import_overlay-declaring_module"></a>declaring_module |  A label for the target representing the first of the two modules (the other being `bystanding_module`) that must be imported for the cross-import overlay modules to be imported. This is the module that contains the `.swiftcrossimport` overlay definition that connects it to the bystander and to the overlay modules.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="swift_cross_import_overlay-declaring_module_name"></a>declaring_module_name |  The name of the declaring module from the target specified by the `declaring_module` attribute. This is inferred if `declaring_module` only exports a single direct module; this name must be specified if `declaring_module` exports more than one.   | String | optional |  `""`  |
+| <a id="swift_cross_import_overlay-swiftoverlay"></a>swiftoverlay |  The path to the SDK `.swiftoverlay` file that declares this cross-import.   | String | required |  |
 
 
 <a id="swift_feature_allowlist"></a>
@@ -303,7 +307,7 @@ uses the API marked with `@_spi`.
 | <a id="swift_import-data"></a>data |  The list of files needed by this target at runtime.<br><br>Files and targets named in the `data` attribute will appear in the `*.runfiles` area of this target, if it has one. This may include data files needed by a binary or library, or other programs needed by it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_import-archives"></a>archives |  The list of `.a` or `.lo` files provided to Swift targets that depend on this target.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_import-module_name"></a>module_name |  The name of the module represented by this target.   | String | required |  |
-| <a id="swift_import-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling any modules that directly depend on this target.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
+| <a id="swift_import-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling any modules that depend on this target. Enable the `swift.load_plugins_from_direct_dependencies` feature to load them only for modules that directly depend on this target.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_import-swiftdoc"></a>swiftdoc |  The `.swiftdoc` file provided to Swift targets that depend on this target.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
 | <a id="swift_import-swiftinterface"></a>swiftinterface |  The `.swiftinterface` file that defines the module interface for this target. May not be specified if `swiftmodule` is specified.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
 | <a id="swift_import-swiftmodule"></a>swiftmodule |  The `.swiftmodule` file provided to Swift targets that depend on this target. May not be specified if `swiftinterface` is specified.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
@@ -320,11 +324,6 @@ swift_interop_hint(<a href="#swift_interop_hint-name">name</a>, <a href="#swift_
 Defines an aspect hint that associates non-Swift BUILD targets with additional
 information required for them to be imported by Swift.
 
-> [!NOTE]
-> Bazel 6 users must set the `--experimental_enable_aspect_hints` flag to utilize
-> this rule. In addition, downstream consumers of rules that utilize this rule
-> must also set the flag. The flag is enabled by default in Bazel 7.
-
 Some build rules, such as `objc_library`, support interoperability with Swift
 simply by depending on them; a module map is generated automatically. This is
 for convenience, because the common case is that most `objc_library` targets
@@ -340,7 +339,7 @@ If you want to import a non-Swift, non-Objective-C target into Swift using the
 module name that is automatically derived from the BUILD label, there is no need
 to declare an instance of `swift_interop_hint`. A canonical one that requests
 module name derivation has been provided in
-`@build_bazel_rules_swift//swift:auto_module`. Simply add it to the `aspect_hints` of
+`@rules_swift//swift:auto_module`. Simply add it to the `aspect_hints` of
 the target you wish to import:
 
 ```build
@@ -349,7 +348,7 @@ cc_library(
     name = "somelib",
     srcs = ["somelib.c"],
     hdrs = ["somelib.h"],
-    aspect_hints = ["@build_bazel_rules_swift//swift:auto_module"],
+    aspect_hints = ["@rules_swift//swift:auto_module"],
 )
 ```
 
@@ -422,7 +421,7 @@ that it can compile and which do not.
 
 In these cases, there is no need to declare an instance of `swift_interop_hint`.
 A canonical one that suppresses module generation has been provided in
-`@build_bazel_rules_swift//swift:no_module`. Simply add it to the `aspect_hints` of
+`@rules_swift//swift:no_module`. Simply add it to the `aspect_hints` of
 the target whose module you wish to suppress:
 
 ```build
@@ -431,7 +430,7 @@ objc_library(
     name = "somelib",
     srcs = ["somelib.mm"],
     hdrs = ["somelib.h"],
-    aspect_hints = ["@build_bazel_rules_swift//swift:no_module"],
+    aspect_hints = ["@rules_swift//swift:no_module"],
 )
 ```
 
@@ -483,7 +482,7 @@ Compiles and links Swift code into a static library and Swift module.
 | <a id="swift_library-linkstatic"></a>linkstatic |  If True, the Swift module will be built for static linking.  This will make all interfaces internal to the module that is being linked against and will inform the consuming module that the objects will be locally available (which may potentially avoid a PLT relocation).  Set to `False` to build a `.so` or `.dll`.   | Boolean | optional |  `True`  |
 | <a id="swift_library-module_name"></a>module_name |  The name of the Swift module being built.<br><br>If left unspecified, the module name will be computed based on the target's build label, by stripping the leading `//` and replacing `/`, `:`, and other non-identifier characters with underscores.   | String | optional |  `""`  |
 | <a id="swift_library-package_name"></a>package_name |  The semantic package of the Swift target being built. Targets with the same package_name can access APIs using the 'package' access control modifier in Swift 5.9+.   | String | optional |  `""`  |
-| <a id="swift_library-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
+| <a id="swift_library-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that depend on it. Enable the `swift.load_plugins_from_direct_dependencies` feature to load them only for this module and modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_library-private_deps"></a>private_deps |  A list of targets that are implementation-only dependencies of the target being built. Libraries/linker flags from these dependencies will be propagated to dependent for linking, but artifacts/flags required for compilation (such as .swiftmodule files, C headers, and search paths) will not be propagated.<br><br>Allowed kinds of dependencies are:<br><br>*   `swift_library` (or anything propagating `SwiftInfo`)<br><br>*   `cc_library` and `objc_library` (or anything propagating `CcInfo`)   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_library-swiftc_inputs"></a>swiftc_inputs |  Additional files that are referenced using `$(location ...)` in attributes that support location expansion.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 
@@ -557,11 +556,11 @@ swift_module_mapping(
 ```
 
 Then, pass the label of that target to Bazel using the
-`--@build_bazel_rules_swift//swift:module_mapping` build flag:
+`--@rules_swift//swift:module_mapping` build flag:
 
 ```shell
 bazel build //some/package:Framework \
-    --@build_bazel_rules_swift//swift:module_mapping=//some/package:mapping
+    --@rules_swift//swift:module_mapping=//some/package:mapping
 ```
 
 When `Utils` is compiled, it will be given the module name `GameUtils` instead.
@@ -707,7 +706,7 @@ almost always an anti-pattern.
 | <a id="swift_overlay-linkopts"></a>linkopts |  Additional linker options that should be passed to the linker for the binary that depends on this target. These strings are subject to `$(location ...)` and ["Make" variable](https://docs.bazel.build/versions/master/be/make-variables.html) expansion.   | List of strings | optional |  `[]`  |
 | <a id="swift_overlay-linkstatic"></a>linkstatic |  If True, the Swift module will be built for static linking.  This will make all interfaces internal to the module that is being linked against and will inform the consuming module that the objects will be locally available (which may potentially avoid a PLT relocation).  Set to `False` to build a `.so` or `.dll`.   | Boolean | optional |  `True`  |
 | <a id="swift_overlay-package_name"></a>package_name |  The semantic package of the Swift target being built. Targets with the same package_name can access APIs using the 'package' access control modifier in Swift 5.9+.   | String | optional |  `""`  |
-| <a id="swift_overlay-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
+| <a id="swift_overlay-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that depend on it. Enable the `swift.load_plugins_from_direct_dependencies` feature to load them only for this module and modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_overlay-private_deps"></a>private_deps |  A list of targets that are implementation-only dependencies of the target being built. Libraries/linker flags from these dependencies will be propagated to dependent for linking, but artifacts/flags required for compilation (such as .swiftmodule files, C headers, and search paths) will not be propagated.<br><br>Allowed kinds of dependencies are:<br><br>*   `swift_library` (or anything propagating `SwiftInfo`)<br><br>*   `cc_library` and `objc_library` (or anything propagating `CcInfo`)   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_overlay-swiftc_inputs"></a>swiftc_inputs |  Additional files that are referenced using `$(location ...)` in attributes that support location expansion.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 
@@ -835,7 +834,7 @@ swift_proto_library(
 | <a id="swift_proto_library-linkstatic"></a>linkstatic |  If True, the Swift module will be built for static linking.  This will make all interfaces internal to the module that is being linked against and will inform the consuming module that the objects will be locally available (which may potentially avoid a PLT relocation).  Set to `False` to build a `.so` or `.dll`.   | Boolean | optional |  `True`  |
 | <a id="swift_proto_library-module_name"></a>module_name |  The name of the Swift module being built.<br><br>If left unspecified, the module name will be computed based on the target's build label, by stripping the leading `//` and replacing `/`, `:`, and other non-identifier characters with underscores.   | String | optional |  `""`  |
 | <a id="swift_proto_library-package_name"></a>package_name |  The semantic package of the Swift target being built. Targets with the same package_name can access APIs using the 'package' access control modifier in Swift 5.9+.   | String | optional |  `""`  |
-| <a id="swift_proto_library-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
+| <a id="swift_proto_library-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that depend on it. Enable the `swift.load_plugins_from_direct_dependencies` feature to load them only for this module and modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_proto_library-protos"></a>protos |  A list of `proto_library` targets (or targets producing `ProtoInfo`), from which the Swift source files should be generated.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_proto_library-swiftc_inputs"></a>swiftc_inputs |  Additional files that are referenced using `$(location ...)` in attributes that support location expansion.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 
@@ -1008,7 +1007,7 @@ root of your workspace (i.e. `$(SRCROOT)`).
 | <a id="swift_test-malloc"></a>malloc |  Override the default dependency on `malloc`.<br><br>By default, Swift binaries are linked against `@bazel_tools//tools/cpp:malloc"`, which is an empty library and the resulting binary will use libc's `malloc`. This label must refer to a `cc_library` rule.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `"@bazel_tools//tools/cpp:malloc"`  |
 | <a id="swift_test-module_name"></a>module_name |  The name of the Swift module being built.<br><br>If left unspecified, the module name will be computed based on the target's build label, by stripping the leading `//` and replacing `/`, `:`, and other non-identifier characters with underscores.   | String | optional |  `""`  |
 | <a id="swift_test-package_name"></a>package_name |  The semantic package of the Swift target being built. Targets with the same package_name can access APIs using the 'package' access control modifier in Swift 5.9+.   | String | optional |  `""`  |
-| <a id="swift_test-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
+| <a id="swift_test-plugins"></a>plugins |  A list of `swift_compiler_plugin` targets that should be loaded by the compiler when compiling this module and any modules that depend on it. Enable the `swift.load_plugins_from_direct_dependencies` feature to load them only for this module and modules that directly depend on it.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="swift_test-stamp"></a>stamp |  Enable or disable link stamping; that is, whether to encode build information into the binary. Possible values are:<br><br>* `stamp = 1`: Stamp the build information into the binary. Stamped binaries are   only rebuilt when their dependencies change. Use this if there are tests that   depend on the build information.<br><br>* `stamp = 0`: Always replace build information by constant values. This gives   good build result caching.<br><br>* `stamp = -1`: Embedding of build information is controlled by the   `--[no]stamp` flag.   | Integer | optional |  `0`  |
 | <a id="swift_test-swiftc_inputs"></a>swiftc_inputs |  Additional files that are referenced using `$(location ...)` in attributes that support location expansion.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 
@@ -1034,9 +1033,9 @@ swift_compiler_plugin(
     name = "Macros",
     srcs = glob(["Macros/*.swift"]),
     deps = [
-        "@SwiftSyntax",
-        "@SwiftSyntax//:SwiftCompilerPlugin",
-        "@SwiftSyntax//:SwiftSyntaxMacros",
+        "@swift-syntax//:SwiftSyntax",
+        "@swift-syntax//:SwiftCompilerPlugin",
+        "@swift-syntax//:SwiftSyntaxMacros",
     ],
 )
 

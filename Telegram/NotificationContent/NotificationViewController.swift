@@ -1,4 +1,5 @@
 import UIKit
+import PasscodeCore
 import UserNotifications
 import UserNotificationsUI
 import TelegramUI
@@ -174,6 +175,7 @@ BuildConfig.jerkgramRecordExtensionDiagnostic(
     detail: "selected app-group identifier"
 )
             
+            try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
             let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
 BuildConfig.jerkgramRecordExtensionDiagnostic(
     process: "notificationContent",

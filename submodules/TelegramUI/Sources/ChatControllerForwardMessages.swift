@@ -15,243 +15,6 @@ import ReactionSelectionNode
 import TopMessageReactions
 import ChatMessagePaymentAlertController
 
-private func jerkgramRequiresPortableForward(_ message: Message) -> Bool {
-    if message.isCopyProtected() { return true }
-    if let chatPeer = message.peers[message.id.peerId], chatPeer.isCopyProtectionEnabled { return true }
-    if let sourcePeer = message.forwardInfo?.author ?? message.effectiveAuthor { return sourcePeer.isCopyProtectionEnabled }
-    return false
-}
-
-private func jerkgramPortableForwardBaseMessage(
-    _ message: Message,
-    hideAuthor: Bool,
-    threadId: Int64?,
-    mediaReference: AnyMediaReference?
-) -> EnqueueMessage {
-    var text = message.text
-    var entities = message.textEntitiesAttribute?.entities ?? []
-
-    // Telegram's own forwarding UI resolves attribution from forwardInfo first
-    // and then effectiveAuthor. For channel-authored posts the chat peer itself
-    // is not necessarily the author we need to reproduce.
-    if !hideAuthor, let author = message.forwardInfo?.author ?? message.effectiveAuthor ?? message.peers[message.id.peerId] {
-        let sourcePeer = EnginePeer(author)
-        let title = sourcePeer.compactDisplayTitle
-        if !title.isEmpty {
-            let prefix = text.isEmpty ? "" : "\n\n"
-            let start = (text as NSString).length + (prefix as NSString).length
-            text += prefix + "— " + title
-            let titleStart = start + 2
-            let titleEnd = titleStart + (title as NSString).length
-            if let username = sourcePeer.addressName, !username.isEmpty {
-                entities.append(MessageTextEntity(
-                    range: titleStart ..< titleEnd,
-                    type: .TextUrl(url: "https://t.me/\(username)")
-                ))
-            }
-            entities.append(MessageTextEntity(range: titleStart ..< titleEnd, type: .Bold))
-        }
-    }
-
-    var attributes: [MessageAttribute] = []
-    if !entities.isEmpty {
-        attributes.append(TextEntitiesMessageAttribute(entities: entities))
-    }
-    let embeddedFiles = (
-        message.attributes.first(where: { $0 is EmbeddedMediaStickersMessageAttribute })
-        as? EmbeddedMediaStickersMessageAttribute
-    )?.files ?? []
-    var inlineStickers: [MediaId: Media] = [:]
-    for file in embeddedFiles {
-        inlineStickers[file.fileId] = file
-    }
-
-    return .message(
-        text: text,
-        attributes: attributes,
-        inlineStickers: inlineStickers,
-        mediaReference: mediaReference,
-        threadId: threadId,
-        replyToMessageId: nil,
-        replyToStoryId: nil,
-        localGroupingKey: message.groupingKey,
-        correlationId: nil,
-        bubbleUpEmojiOrStickersets: []
-    )
-}
-
-private func jerkgramProtectedResourceData(
-    context: AccountContext,
-    message: Message,
-    mediaReference: AnyMediaReference,
-    resource: TelegramMediaResource,
-    userContentType: MediaResourceUserContentType,
-    pathExtension: String?
-) -> Signal<EngineMediaResource.ResourceData, NoError> {
-    // Use the same public EngineResources fetch/data pair as Official Telegram's
-    // SaveToCameraRoll path. The cloud reference stays alive only while fetching;
-    // the outgoing message is created after a completed local path exists.
-    // A viewed private/protected post is normally already in MediaBox. Reuse
-    // that completed local file before attempting a server fetch: the latter
-    // is rejected for no-forward channels and led to the red failure state.
-    return context.engine.resources.data(
-        resource: EngineMediaResource(resource),
-        pathExtension: pathExtension,
-        waitUntilFetchStatus: false
-    )
-    |> take(1)
-    |> mapToSignal { cachedData -> Signal<EngineMediaResource.ResourceData, NoError> in
-        if cachedData.isComplete {
-            return .single(cachedData)
-        }
-        return Signal { subscriber in
-            let fetchDisposable = context.engine.resources.fetch(
-                reference: mediaReference.resourceReference(resource),
-                userLocation: .peer(message.id.peerId),
-                userContentType: userContentType
-            ).start()
-            let dataDisposable = context.engine.resources.data(
-                resource: EngineMediaResource(resource),
-                pathExtension: pathExtension,
-                waitUntilFetchStatus: true
-            ).start(next: { data in
-                if data.isComplete {
-                    subscriber.putNext(data)
-                    subscriber.putCompletion()
-                }
-            }, completed: {
-                subscriber.putCompletion()
-            })
-            return ActionDisposable {
-                fetchDisposable.dispose()
-                dataDisposable.dispose()
-            }
-        }
-        |> take(1)
-    }
-}
-
-private func jerkgramPortableForwardMessage(
-    _ message: Message,
-    hideAuthor: Bool,
-    threadId: Int64?,
-    context: AccountContext
-) -> Signal<EnqueueMessage, NoError> {
-    guard jerkgramRequiresPortableForward(message), let media = message.media.first else {
-        let reference = message.media.first.map { AnyMediaReference.standalone(media: $0) }
-        return .single(jerkgramPortableForwardBaseMessage(
-            message,
-            hideAuthor: hideAuthor,
-            threadId: threadId,
-            mediaReference: reference
-        ))
-    }
-
-    if let file = media as? TelegramMediaFile {
-        let sourceReference = AnyMediaReference.message(
-            message: MessageReference(message),
-            media: file
-        )
-        let pathExtension: String?
-        if let fileName = file.fileName {
-            let ext = (fileName as NSString).pathExtension
-            pathExtension = ext.isEmpty ? nil : ext
-        } else {
-            pathExtension = nil
-        }
-        return jerkgramProtectedResourceData(
-            context: context,
-            message: message,
-            mediaReference: sourceReference,
-            resource: file.resource,
-            userContentType: MediaResourceUserContentType(file: file),
-            pathExtension: pathExtension
-        )
-        |> map { data -> EnqueueMessage in
-            let localId = Int64.random(in: Int64.min ... Int64.max)
-            let localResource = LocalFileReferenceMediaResource(
-                localFilePath: data.path,
-                randomId: localId
-            )
-            // Do not retain protected cloud thumbnail/alternative resources in
-            // the outgoing file. Dimensions/duration/voice/video semantics live
-            // in attributes and are preserved; Telegram regenerates upload media.
-            let localFile = TelegramMediaFile(
-                fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: localId),
-                partialReference: nil,
-                resource: localResource,
-                previewRepresentations: [],
-                videoThumbnails: [],
-                videoCover: nil,
-                immediateThumbnailData: file.immediateThumbnailData,
-                mimeType: file.mimeType,
-                size: file.size,
-                attributes: file.attributes,
-                alternativeRepresentations: []
-            )
-            return jerkgramPortableForwardBaseMessage(
-                message,
-                hideAuthor: hideAuthor,
-                threadId: threadId,
-                mediaReference: .standalone(media: localFile)
-            )
-        }
-    } else if let image = media as? TelegramMediaImage,
-              let representation = largestImageRepresentation(image.representations) {
-        let sourceReference = AnyMediaReference.message(
-            message: MessageReference(message),
-            media: image
-        )
-        return jerkgramProtectedResourceData(
-            context: context,
-            message: message,
-            mediaReference: sourceReference,
-            resource: representation.resource,
-            userContentType: .image,
-            pathExtension: "jpg"
-        )
-        |> map { data -> EnqueueMessage in
-            let localId = Int64.random(in: Int64.min ... Int64.max)
-            let localResource = LocalFileReferenceMediaResource(
-                localFilePath: data.path,
-                randomId: localId
-            )
-            let localRepresentation = TelegramMediaImageRepresentation(
-                dimensions: representation.dimensions,
-                resource: localResource,
-                progressiveSizes: [],
-                immediateThumbnailData: nil,
-                hasVideo: false,
-                isPersonal: false
-            )
-            let localImage = TelegramMediaImage(
-                imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: localId),
-                representations: [localRepresentation],
-                immediateThumbnailData: image.immediateThumbnailData,
-                reference: nil,
-                partialReference: nil,
-                flags: image.flags
-            )
-            return jerkgramPortableForwardBaseMessage(
-                message,
-                hideAuthor: hideAuthor,
-                threadId: threadId,
-                mediaReference: .standalone(media: localImage)
-            )
-        }
-    } else {
-        // The red-failure regression is the protected upload-media path. Keep
-        // existing portable semantics for non-upload message media.
-        return .single(jerkgramPortableForwardBaseMessage(
-            message,
-            hideAuthor: hideAuthor,
-            threadId: threadId,
-            mediaReference: .standalone(media: media)
-        ))
-    }
-}
-
-
 extension ChatControllerImpl {
     func forwardMessages(messageIds: [EngineMessage.Id], options: ChatInterfaceForwardOptionsState? = nil, resetCurrent: Bool = false) {
         let _ = (self.context.engine.data.get(EngineDataMap(
@@ -266,7 +29,11 @@ extension ChatControllerImpl {
     }
 
     func forwardMessages(messages: [EngineRawMessage], options: ChatInterfaceForwardOptionsState? = nil, resetCurrent: Bool) {
-        let _ = self.presentVoiceMessageDiscardAlert(action: {
+        let _ = self.presentVoiceMessageDiscardAlert(action: { [weak self] in
+            guard let self else {
+                return
+            }
+
             var filter: ChatListNodePeersFilter = [.onlyWriteable, .excludeDisabled, .doNotSearchMessages]
             var hasPublicPolls = false
             var hasPublicQuiz = false
@@ -376,7 +143,6 @@ extension ChatControllerImpl {
                         strongController.dismiss()
                         
                         var result: [EnqueueMessage] = []
-                        var jerkgramPortableMessagesSignal: Signal<[EnqueueMessage], NoError>?
                         if messageText.string.count > 0 {
                             let inputText = convertMarkdownToAttributes(messageText)
                             for text in breakChatInputText(trimChatInputText(inputText)) {
@@ -403,33 +169,9 @@ extension ChatControllerImpl {
                             )
                         )
                         
-                        let hideAuthor = forwardOptions?.hideNames == true || options?.hideNames == true
-                        let canUsePortableCopy = messages.allSatisfy { message in
-                            message.id.peerId.namespace != Namespaces.Peer.SecretChat
-                            && !message.media.contains(where: {
-                                $0 is TelegramMediaPaidContent
-                                || $0 is TelegramMediaAction
-                                || $0 is TelegramMediaExpiredContent
-                            })
-                        }
-                        if canUsePortableCopy && (hideAuthor || messages.contains(where: { jerkgramRequiresPortableForward($0) })) {
-                            let jerkgramPrefixMessages = result
-                            jerkgramPortableMessagesSignal = combineLatest(messages.map { message in
-                                jerkgramPortableForwardMessage(
-                                    message,
-                                    hideAuthor: hideAuthor,
-                                    threadId: strongSelf.chatLocation.threadId,
-                                    context: strongSelf.context
-                                )
-                            })
-                            |> map { portableMessages in
-                                jerkgramPrefixMessages + portableMessages
-                            }
-                        } else {
-                            result.append(contentsOf: messages.map { message -> EnqueueMessage in
-                                return .forward(source: message.id, threadId: nil, grouping: .auto, attributes: attributes, correlationId: nil)
-                            })
-                        }
+                        result.append(contentsOf: messages.map { message -> EnqueueMessage in
+                            return .forward(source: message.id, threadId: nil, grouping: .auto, attributes: attributes, correlationId: nil)
+                        })
                         
                         let commit: ([EnqueueMessage]) -> Void = { result in
                             guard let strongSelf = self else {
@@ -493,7 +235,7 @@ extension ChatControllerImpl {
                                         UserDefaults.standard.set(peerMessages.count, forKey: "jerkgram.SH1.LastShareMessageCount")
                                         UserDefaults.standard.set(Int(ghostBaseSH1ScheduleTime), forKey: "jerkgram.SH1.LastShareScheduleTime")
                                     }
-
+                                    
                                     if let maybeAmount = sendPaidMessageStars[peer.id], let amount = maybeAmount {
                                         peerMessages = peerMessages.map { message -> EnqueueMessage in
                                             return message.withUpdatedAttributes { attributes in
@@ -599,32 +341,22 @@ extension ChatControllerImpl {
                             })
                         }
                         
-                        let commitResolved: ([EnqueueMessage]) -> Void = { resolvedResult in
-                            switch mode {
-                            case .generic:
-                                commit(resolvedResult)
-                            case .silent:
-                                let transformedMessages = strongSelf.transformEnqueueMessages(resolvedResult, silentPosting: true)
-                                commit(transformedMessages)
-                            case .schedule:
-                                strongSelf.presentScheduleTimePicker(completion: { [weak self] timeResult in
-                                    if let strongSelf = self {
-                                        let transformedMessages = strongSelf.transformEnqueueMessages(resolvedResult, silentPosting: timeResult.silentPosting, scheduleTime: timeResult.time, repeatPeriod: timeResult.repeatPeriod)
-                                        commit(transformedMessages)
-                                    }
-                                })
-                            case .whenOnline:
-                                let transformedMessages = strongSelf.transformEnqueueMessages(resolvedResult, silentPosting: strongSelf.presentationInterfaceState.interfaceState.silentPosting, scheduleTime: scheduleWhenOnlineTimestamp)
-                                commit(transformedMessages)
-                            }
-                        }
-                        if let jerkgramPortableMessagesSignal {
-                            let _ = (jerkgramPortableMessagesSignal
-                            |> deliverOnMainQueue).startStandalone(next: { resolvedMessages in
-                                commitResolved(resolvedMessages)
+                        switch mode {
+                        case .generic:
+                            commit(result)
+                        case .silent:
+                            let transformedMessages = strongSelf.transformEnqueueMessages(result, silentPosting: true)
+                            commit(transformedMessages)
+                        case .schedule:
+                            strongSelf.presentScheduleTimePicker(completion: { [weak self] timeResult in
+                                if let strongSelf = self {
+                                    let transformedMessages = strongSelf.transformEnqueueMessages(result, silentPosting: timeResult.silentPosting, scheduleTime: timeResult.time, repeatPeriod: timeResult.repeatPeriod)
+                                    commit(transformedMessages)
+                                }
                             })
-                        } else {
-                            commitResolved(result)
+                        case .whenOnline:
+                            let transformedMessages = strongSelf.transformEnqueueMessages(result, silentPosting: strongSelf.presentationInterfaceState.interfaceState.silentPosting, scheduleTime: scheduleWhenOnlineTimestamp)
+                            commit(transformedMessages)
                         }
                     }
                     
@@ -674,7 +406,7 @@ extension ChatControllerImpl {
                 }
                 
                 if case .peer(peerId) = strongSelf.chatLocation, strongSelf.parentController == nil, !isPinnedMessages {
-                    strongSelf.updateChatPresentationInterfaceState(animated: false, interactive: true, { $0.updatedInterfaceState({ $0.withUpdatedForwardMessageIds(messages.map { $0.id }).withUpdatedForwardOptionsState(ChatInterfaceForwardOptionsState(hideNames: !hasNotOwnMessages || (options?.hideNames ?? false) , hideCaptions: false, unhideNamesOnCaptionChange: false)).withoutSelectionState() }).updatedSearch(nil) })
+                    strongSelf.updateChatPresentationInterfaceState(animated: false, interactive: true, { $0.updatedInterfaceState({ $0.withUpdatedForwardMessageIds(messages.map { $0.id }).withUpdatedForwardOptionsState(ChatInterfaceForwardOptionsState(hideNames: !hasNotOwnMessages || (options?.hideNames ?? false) , hideCaptions: options?.hideCaptions ?? false, unhideNamesOnCaptionChange: false)).withoutSelectionState() }).updatedSearch(nil) })
                     strongSelf.updateItemNodesSearchTextHighlightStates()
                     strongSelf.searchResultsController = nil
                     strongController.dismiss()
@@ -698,17 +430,12 @@ extension ChatControllerImpl {
                             source: message.id,
                             threadId: nil,
                             grouping: .auto,
-                            attributes: (
-                                options?.hideNames == true
-                            )
-                            ? [
+                            attributes: [
                                 ForwardOptionsMessageAttribute(
-                                    hideNames: true,
-                                    hideCaptions:
-                                        options?.hideCaptions == true
+                                    hideNames: options?.hideNames == true,
+                                    hideCaptions: options?.hideCaptions == true
                                 )
-                            ]
-                            : [],
+                            ],
                             correlationId: correlationId
                         )
                     }

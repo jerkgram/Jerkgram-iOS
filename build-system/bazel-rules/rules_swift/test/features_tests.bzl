@@ -5,6 +5,10 @@ load(
     "//test/rules:action_command_line_test.bzl",
     "make_action_command_line_test_rule",
 )
+load(
+    "//test/rules:action_inputs_test.bzl",
+    "make_action_inputs_test_rule",
+)
 
 default_test = make_action_command_line_test_rule()
 
@@ -40,6 +44,14 @@ disabled_file_prefix_map_test = make_action_command_line_test_rule(
     },
 )
 
+unsupported_developer_dir_file_prefix_map_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:features": [
+            "-swift._supports_developer_dir",
+        ],
+    },
+)
+
 use_global_index_store_test = make_action_command_line_test_rule(
     config_settings = {
         "//command_line_option:features": [
@@ -65,25 +77,15 @@ disable_swift_sandbox_test = make_action_command_line_test_rule(
     },
 )
 
-vfsoverlay_test = make_action_command_line_test_rule(
-    config_settings = {
-        "//command_line_option:features": [
-            "swift.vfsoverlay",
-        ],
-    },
-)
-
-# Test with enabled `swift.add_target_name_to_output` feature
-vfsoverlay_with_target_name_test = make_action_command_line_test_rule(
-    config_settings = {
-        "//command_line_option:features": [
-            "swift.vfsoverlay",
-            "swift.add_target_name_to_output",
-        ],
-    },
-)
-
 explicit_swift_module_map_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:features": [
+            "swift.use_explicit_swift_module_map",
+        ],
+    },
+)
+
+explicit_swift_module_map_inputs_test = make_action_inputs_test_rule(
     config_settings = {
         "//command_line_option:features": [
             "swift.use_explicit_swift_module_map",
@@ -106,6 +108,14 @@ disable_objc_test = make_action_command_line_test_rule(
         "//command_line_option:features": [
             "-objc_link_flag",
             "-swift.objc_link_flag",
+        ],
+    },
+)
+
+ios_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:platforms": [
+            str(Label("@apple_support//platforms:ios_arm64")),
         ],
     },
 )
@@ -174,6 +184,17 @@ def features_test_suite(name, tags = []):
         target_under_test = "//test/fixtures/debug_settings:simple",
     )
 
+    unsupported_developer_dir_file_prefix_map_test(
+        name = "{}_file_prefix_xcode_remap_unsupported_developer_dir_test".format(name),
+        tags = all_tags,
+        not_expected_argv = [
+            "__BAZEL_XCODE_DEVELOPER_DIR__=/PLACEHOLDER_DEVELOPER_DIR",
+        ],
+        target_compatible_with = ["@platforms//os:macos"],
+        mnemonic = "SwiftCompile",
+        target_under_test = "//test/fixtures/debug_settings:simple",
+    )
+
     use_global_index_store_test(
         name = "{}_use_global_index_store_test".format(name),
         tags = all_tags,
@@ -206,10 +227,26 @@ def features_test_suite(name, tags = []):
         target_under_test = "//test/fixtures/debug_settings:simple",
     )
 
+    disable_swift_sandbox_test(
+        name = "{}_disable_swift_sandbox_module_interface_test".format(name),
+        tags = all_tags,
+        expected_argv = [
+            "-disable-sandbox",
+        ],
+        mnemonic = "SwiftCompileModuleInterface",
+        target_compatible_with = ["@platforms//os:macos"],
+        target_under_test = "//test/fixtures/module_interface:toy_module",
+    )
+
     default_opt_test(
         name = "{}_default_opt_test".format(name),
         tags = all_tags,
-        expected_argv = ["-emit-object", "-O", "-whole-module-optimization"],
+        expected_argv = [
+            "-emit-object",
+            "-O",
+            "-whole-module-optimization",
+            "-num-threads 12",
+        ],
         mnemonic = "SwiftCompile",
         target_under_test = "//test/fixtures/debug_settings:simple",
     )
@@ -223,21 +260,6 @@ def features_test_suite(name, tags = []):
         target_under_test = "//test/fixtures/debug_settings:simple",
     )
 
-    vfsoverlay_test(
-        name = "{}_vfsoverlay_test".format(name),
-        tags = all_tags,
-        expected_argv = [
-            "-Xfrontend -vfsoverlay$(BIN_DIR)/test/fixtures/basic/second.vfsoverlay.yaml",
-            "-I/__build_bazel_rules_swift/swiftmodules",
-        ],
-        not_expected_argv = [
-            "-I$(BIN_DIR)/test/fixtures/basic",
-            "-explicit-swift-module-map-file",
-        ],
-        mnemonic = "SwiftCompile",
-        target_under_test = "//test/fixtures/basic:second",
-    )
-
     explicit_swift_module_map_test(
         name = "{}_explicit_swift_module_map_test".format(name),
         tags = all_tags,
@@ -246,11 +268,28 @@ def features_test_suite(name, tags = []):
         ],
         not_expected_argv = [
             "-I$(BIN_DIR)/test/fixtures/basic",
-            "-I/__build_bazel_rules_swift/swiftmodules",
-            "-Xfrontend -vfsoverlay$(BIN_DIR)/test/fixtures/basic/second.vfsoverlay.yaml",
         ],
         mnemonic = "SwiftCompile",
         target_under_test = "//test/fixtures/basic:second",
+    )
+
+    explicit_swift_module_map_inputs_test(
+        name = "{}_explicit_swift_module_map_inputs_test".format(name),
+        tags = all_tags,
+        expected_inputs = [
+            "first.swiftmodule",
+            "second.swift-explicit-module-map.json",
+        ],
+        mnemonic = "SwiftCompile",
+        target_under_test = "//test/fixtures/basic:second",
+    )
+
+    build_test(
+        name = "{}_explicit_swift_module_map_build_test".format(name),
+        tags = all_tags,
+        targets = [
+            "//test/fixtures/basic:second_explicit_swift_module_map_transitioned",
+        ],
     )
 
     explicit_swift_module_map_with_target_name_test(
@@ -261,8 +300,6 @@ def features_test_suite(name, tags = []):
         ],
         not_expected_argv = [
             "-I$(BIN_DIR)/test/fixtures/basic/second",
-            "-I/__build_bazel_rules_swift/swiftmodules",
-            "-Xfrontend -vfsoverlay$(BIN_DIR)/test/fixtures/basic/second.vfsoverlay.yaml",
         ],
         mnemonic = "SwiftCompile",
         target_under_test = "//test/fixtures/basic:second",
@@ -274,7 +311,6 @@ def features_test_suite(name, tags = []):
         expected_argv = [
             "-L/usr/lib/swift",
             "-ObjC",
-            "-Wl,-objc_abi_version,2",
             "-Wl,-rpath,/usr/lib/swift",
         ],
         mnemonic = "CppLink",
@@ -287,7 +323,6 @@ def features_test_suite(name, tags = []):
         tags = all_tags,
         expected_argv = [
             "-L/usr/lib/swift",
-            "-Wl,-objc_abi_version,2",
             "-Wl,-rpath,/usr/lib/swift",
         ],
         not_expected_argv = ["-ObjC"],
@@ -302,7 +337,6 @@ def features_test_suite(name, tags = []):
         expected_argv = [
             "-L/usr/lib/swift",
             "-ObjC",
-            "-Wl,-objc_abi_version,2",
             "-Wl,-rpath,/usr/lib/swift",
         ],
         mnemonic = "CppLink",
@@ -315,7 +349,6 @@ def features_test_suite(name, tags = []):
         tags = all_tags,
         expected_argv = [
             "-L/usr/lib/swift",
-            "-Wl,-objc_abi_version,2",
             "-Wl,-rpath,/usr/lib/swift",
         ],
         not_expected_argv = ["-ObjC"],
@@ -328,15 +361,30 @@ def features_test_suite(name, tags = []):
         name = "{}_swift_test_rpath_roots_link_test".format(name),
         tags = all_tags,
         expected_argv = [
-            "-Wl,-rpath,__BAZEL_XCODE_DEVELOPER_DIR__/Platforms/MacOSX.platform/Developer/usr/lib",
-            "-Wl,-rpath,__BAZEL_XCODE_DEVELOPER_DIR__/Platforms/MacOSX.platform/Developer/Library/Frameworks",
             "-Wl,-rpath,/private/var/select/developer_dir/Platforms/MacOSX.platform/Developer/usr/lib",
             "-Wl,-rpath,/private/var/select/developer_dir/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+            "-Wl,-rpath,/private/var/select/developer_dir/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
             "-Wl,-rpath,/var/db/xcode_select_link/Platforms/MacOSX.platform/Developer/usr/lib",
             "-Wl,-rpath,/var/db/xcode_select_link/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+            "-Wl,-rpath,/var/db/xcode_select_link/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
         ],
         mnemonic = "CppLink",
         target_under_test = "//test/fixtures/xctest_runner:PassingUnitTests",
+        target_compatible_with = ["@platforms//os:macos"],
+    )
+
+    ios_test(
+        name = "{}_ios_link_omits_developer_dir_symlink_rpaths_test".format(name),
+        tags = all_tags,
+        expected_argv = [
+            "-Wl,-rpath,/usr/lib/swift",
+        ],
+        not_expected_argv = [
+            "-Wl,-rpath,/private/var/select/developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/iphoneos",
+            "-Wl,-rpath,/var/db/xcode_select_link/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/iphoneos",
+        ],
+        mnemonic = "CppLink",
+        target_under_test = "//test/fixtures/linking:bin",
         target_compatible_with = ["@platforms//os:macos"],
     )
 

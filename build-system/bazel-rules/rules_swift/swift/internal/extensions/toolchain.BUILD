@@ -1,0 +1,365 @@
+load("@apple_support//toolchain:cc_toolchain.bzl", apple_support_cc_toolchain = "cc_toolchain")
+load("@rules_cc//cc/toolchains:args.bzl", "cc_args")
+load("@rules_cc//cc/toolchains:feature.bzl", "cc_feature")
+load("@rules_cc//cc/toolchains:make_variable.bzl", "cc_make_variable")
+load("@rules_cc//cc/toolchains:tool.bzl", "cc_tool")
+load("@rules_cc//cc/toolchains:tool_map.bzl", "cc_tool_map")
+load("@rules_cc//cc/toolchains:toolchain.bzl", "cc_toolchain")
+load("@rules_cc//cc/toolchains/args:sysroot.bzl", "cc_sysroot")
+load("@rules_swift//swift/toolchains:swift_toolchain.bzl", "swift_toolchain")
+load("@rules_swift//swift/toolchains:swift_tools.bzl", "swift_tools")
+
+package(default_visibility = ["//visibility:public"])
+
+### Convenience target. Only useful for test / debug. ###
+exports_files([
+    "usr/bin/llvm-objcopy",
+    "usr/bin/llvm-objdump",
+])
+
+### Tools referenced by Swift SDK cross-compilation repositories. ###
+
+exports_files([
+    "usr/bin/clang",
+    "usr/bin/llvm-ar",
+    "usr/bin/swift",
+    "usr/bin/swiftc",
+    "usr/bin/swift-autolink-extract",
+    "usr/bin/swift-symbolgraph-extract",
+])
+
+filegroup(
+    name = "swift_sdk_compiler_inputs",
+    srcs = glob(
+        [
+            "usr/bin/swift*",
+            "usr/lib/clang/**",
+            "usr/lib/lib*.dylib",
+            "usr/lib/lib*.so*",
+            "usr/lib/swift/host/**",
+            "usr/lib/swift/linux/**",
+            "usr/lib/swift/macosx/**",
+        ],
+        allow_empty = True,
+    ),
+)
+
+# The subset of the toolchain that link actions driven by this toolchain's
+# clang need (used by the WebAssembly SDK's cc toolchain).
+filegroup(
+    name = "swift_sdk_linker_inputs",
+    srcs = glob([
+        "usr/bin/clang*",
+        "usr/lib/clang/**",
+    ]) + [
+        "usr/bin/ld.lld",
+        "usr/bin/ld64.lld",
+        "usr/bin/lld",
+        "usr/bin/llvm-ar",
+        "usr/bin/wasm-ld",
+    ],
+)
+
+filegroup(
+    name = "files",
+    srcs = glob(
+        include = ["**/*"],
+        exclude = [
+            "BUILD.bazel",
+            "*.pkg",
+        ],
+    ),
+)
+
+### Tools ###
+cc_tool(
+    name = "ar",
+    src = "usr/bin/llvm-ar",
+    tags = ["manual"],
+)
+
+cc_tool(
+    name = "clang",
+    src = "usr/bin/clang",
+    data = [":swift_sdk_linker_inputs"],
+    tags = ["manual"],
+)
+
+cc_tool(
+    name = "clang++",
+    src = "usr/bin/clang++",
+    data = [":swift_sdk_linker_inputs"],
+    tags = ["manual"],
+)
+
+cc_tool(
+    name = "llvm_cov",
+    src = "usr/bin/llvm-cov",
+    tags = ["manual"],
+)
+
+cc_tool(
+    name = "llvm_objcopy",
+    src = "usr/bin/llvm-objcopy",
+    tags = ["manual"],
+)
+
+cc_tool(
+    name = "llvm_profdata",
+    src = "usr/bin/llvm-profdata",
+    tags = ["manual"],
+)
+
+cc_tool_map(
+    name = "all_tools",
+    tags = ["manual"],
+    tools = {
+        "@rules_cc//cc/toolchains/actions:ar_actions": ":ar",
+        "@rules_cc//cc/toolchains/actions:assembly_actions": ":clang",
+        "@rules_cc//cc/toolchains/actions:c_compile": ":clang",
+        "@rules_cc//cc/toolchains/actions:cpp_compile_actions": ":clang++",
+        "@rules_cc//cc/toolchains/actions:link_actions": ":clang++",
+        "@rules_cc//cc/toolchains/actions:llvm_cov": ":llvm_cov",
+        "@rules_cc//cc/toolchains/actions:llvm_profdata": ":llvm_profdata",
+        "@rules_cc//cc/toolchains/actions:objcopy_embed_data": ":llvm_objcopy",
+        "@rules_cc//cc/toolchains/actions:strip": ":llvm_objcopy",
+    },
+)
+
+cc_sysroot(
+    name = "linux_aarch64_sysroot_args",
+    actions = [
+        "@rules_cc//cc/toolchains/actions:link_actions",
+        "@rules_cc//cc/toolchains/actions:compile_actions",
+    ],
+    data = ["@swift_ubuntu22.04_aarch64_sysroot//:root"],
+    sysroot = "@swift_ubuntu22.04_aarch64_sysroot//:root",
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
+
+cc_feature(
+    name = "linux_aarch64_sysroot",
+    args = [":linux_aarch64_sysroot_args"],
+    feature_name = "sysroot",
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
+
+cc_sysroot(
+    name = "linux_x86_64_sysroot_args",
+    actions = [
+        "@rules_cc//cc/toolchains/actions:link_actions",
+        "@rules_cc//cc/toolchains/actions:compile_actions",
+    ],
+    data = ["@swift_ubuntu22.04_sysroot//:root"],
+    sysroot = "@swift_ubuntu22.04_sysroot//:root",
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
+
+cc_feature(
+    name = "linux_x86_64_sysroot",
+    args = [":linux_x86_64_sysroot_args"],
+    feature_name = "sysroot",
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
+
+alias(
+    name = "linux_sysroot",
+    actual = select({
+        "@platforms//cpu:aarch64": ":linux_aarch64_sysroot",
+        "@platforms//cpu:x86_64": ":linux_x86_64_sysroot",
+    }),
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
+
+alias(
+    name = "selected_linux_sysroot_feature",
+    actual = select({
+        "@rules_swift//swift/toolchains:linux_sysroot_feature_is_default": ":linux_sysroot",
+        "//conditions:default": "@rules_swift//swift/toolchains:linux_sysroot_feature",
+    }),
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
+
+apple_support_cc_toolchain(
+    name = "cc_toolchain_exec",
+    module_map = None,
+    supports_header_parsing = False,
+    sysroot_feature = ":selected_linux_sysroot_feature",
+    target = select({
+        "@platforms//cpu:aarch64": "aarch64-unknown-linux-gnu",
+        "@platforms//cpu:x86_64": "x86_64-unknown-linux-gnu",
+    }),
+    tool_map = ":all_tools",
+)
+
+### Make variables ###
+# Used in _swift_toolchain_impl() in swift/toolchain/swift_toolchain.bzl
+cc_make_variable(
+    name = "variable_cc_target_triple",
+    value = select({
+        "@platforms//cpu:aarch64": "aarch64-none-none-elf",
+        "@platforms//cpu:armv6-m": "armv6m-none-none-eabi",
+        "@platforms//cpu:armv7": "armv7-none-none-eabi",
+        "@platforms//cpu:armv7e-m": "armv7em-none-none-eabi",
+        "@platforms//cpu:riscv32": "riscv32-none-none-eabi",
+        "@platforms//cpu:riscv64": "riscv64-none-none-eabi",
+        "@platforms//cpu:wasm32": "wasm32-unknown-none-wasm",
+        "@platforms//cpu:wasm64": "wasm64-unknown-none-wasm",
+        "@platforms//cpu:x86_32": "i686-unknown-none-elf",
+        "@platforms//cpu:x86_64": "x86_64-unknown-none-elf",
+    }),
+    variable_name = "CC_TARGET_TRIPLE",
+)
+
+cc_args(
+    name = "args_target",
+    actions = [
+        "@rules_cc//cc/toolchains/actions:compile_actions",
+        "@rules_cc//cc/toolchains/actions:link_actions",
+    ],
+    args = [
+        "-target",
+    ] + select({
+        "@platforms//cpu:aarch64": ["aarch64-none-none-elf"],
+        "@platforms//cpu:armv6-m": ["armv6m-none-none-eabi"],
+        "@platforms//cpu:armv7": ["armv7-none-none-eabi"],
+        "@platforms//cpu:armv7e-m": ["armv7em-none-none-eabi"],
+        "@platforms//cpu:riscv32": ["riscv32-none-none-eabi"],
+        "@platforms//cpu:riscv64": ["riscv64-none-none-eabi"],
+        "@platforms//cpu:wasm32": ["wasm32-unknown-none-wasm"],
+        "@platforms//cpu:wasm64": ["wasm64-unknown-none-wasm"],
+        "@platforms//cpu:x86_32": ["i686-unknown-none-elf"],
+        "@platforms//cpu:x86_64": ["x86_64-unknown-none-elf"],
+    }),
+)
+
+cc_args(
+    name = "args_nostdlib",
+    actions = [
+        "@rules_cc//cc/toolchains/actions:link_actions",
+    ],
+    args = ["-nostdlib"],
+)
+
+### Toolchains definition ###
+cc_toolchain(
+    name = "cc_toolchain_embedded",
+    args = [
+        ":args_nostdlib",
+        ":args_target",
+    ],
+    compiler = "clang",
+    enabled_features = [
+        "@rules_cc//cc/toolchains/args/archiver_flags:feature",
+        "@rules_cc//cc/toolchains/args/libraries_to_link:feature",
+        "@rules_cc//cc/toolchains/args/link_flags:feature",
+    ],
+    make_variables = [
+        ":variable_cc_target_triple",
+    ],
+    tool_map = "all_tools",
+)
+
+swift_tools(
+    name = "tools",
+    additional_inputs = glob(
+        [
+            "usr/lib/swift/**",
+        ] + [
+            "usr/bin/swift",
+            "usr/bin/swift-frontend",
+        ],
+        exclude = [
+            # for now we only tested embedded, linux and macos so we can exclude files needed for
+            # other platforms.
+            "usr/lib/swift/xrsimulator/**",
+            "usr/lib/swift/appletvos/**",
+            "usr/lib/swift/watchos/**",
+            "usr/lib/swift/appletvsimulator/**",
+            "usr/lib/swift/iphoneos/**",
+            "usr/lib/swift/iphonesimulator/**",
+            "usr/lib/swift/watchsimulator/**",
+            "usr/lib/swift/xros/**",
+        ],
+    ),
+    swift_autolink_extract = "usr/bin/swift-autolink-extract",
+    swift_driver = "usr/bin/swiftc",
+    swift_symbolgraph_extract = "usr/bin/swift-symbolgraph-extract",
+)
+
+swift_toolchain(
+    name = "swift_toolchain_embedded",
+    arch = "arm64",
+    copts = [
+        # The current version of swift (6.2.3) requires passing -mergeable-symbols to the front-end
+        # to avoid duplicated symbols at link time in embedded mode. This is documented here:
+        # https://github.com/swiftlang/swift-package-manager/issues/8648
+        # Note that this is a workaround that got removed in the change below:
+        # https://github.com/swiftlang/swift-package-manager/pull/9246
+        # TODO: when the new version of the compiler is released, we should remove this.
+        "-Xfrontend",
+        "-mergeable-symbols",
+    ],
+    features = [
+        "swift._supports_upcoming_features",
+        "swift.enable_embedded",
+        "swift.no_embed_debug_module",
+        "swift.use_autolink_extract",
+    ],
+    os = "none",
+    parsed_version = "{swift_version}",
+    swift_tools = "tools",
+    version_file = ".swift-version",
+)
+
+swift_toolchain(
+    name = "swift_toolchain_exec",
+    arch = select({
+        "@platforms//cpu:aarch64": "aarch64",
+        "@platforms//cpu:x86_64": "x86_64",
+    }),
+    dynamic_runtime = glob(
+        [
+            "usr/lib/swift/linux/*.so*",
+            "usr/lib/swift/macosx/*.dylib",
+        ],
+        allow_empty = True,
+    ),
+    features = [
+        "swift._supports_upcoming_features",
+        "swift.no_embed_debug_module",
+        "swift.use_autolink_extract",
+        "swift.lld_gc_workaround",
+        "swift.use_module_wrap",
+        # TODO: This should be removed so that private headers can be used with
+        # explicit modules, but the build targets for CgRPC need to be cleaned up
+        # first because they contain C++ code.
+        "swift.module_map_no_private_headers",
+    ],
+    os = select({
+        "@platforms//os:linux": "linux",
+        "@platforms//os:macos": "macos",
+    }),
+    parsed_version = "{swift_version}",
+    static_runtime = select({
+        "@platforms//os:linux": glob(
+            [
+                "usr/lib/swift/linux/*.a",
+                "usr/lib/swift_static/linux/*.a",
+                "usr/lib/swift_static/linux/*.lnk",
+                "usr/lib/swift_static/linux/*/*.o",
+            ],
+            # NOTE: This shouldn't ever be empty but fails when this select() isn't even hit
+            allow_empty = True,
+        ),
+        "//conditions:default": [],
+    }),
+    swift_tools = "tools",
+    version_file = ".swift-version",
+)

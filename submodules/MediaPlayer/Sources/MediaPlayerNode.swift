@@ -67,9 +67,13 @@ public final class MediaPlayerNode: ASDisplayNode {
     public var videoInHierarchy: Bool = false
     var canPlaybackWithoutHierarchy: Bool = false
     public var updateVideoInHierarchy: ((Bool) -> Void)?
-
+    
     private var secondaryVideoLayers: [ObjectIdentifier: AVSampleBufferDisplayLayer] = [:]
     var secondaryVideoLayersUpdated: (([AVSampleBufferDisplayLayer]) -> Void)?
+    // V2's AVSampleBufferRenderSynchronizer owns its outputs' timebases.
+    // This ownership lasts for the node; async renderer removal is not a
+    // license for the UI detach path to set controlTimebase directly.
+    var secondaryVideoLayersUseRenderSynchronizer = false
     private let captureProtected: Bool
 
     var currentSecondaryVideoLayers: [AVSampleBufferDisplayLayer] {
@@ -136,10 +140,12 @@ public final class MediaPlayerNode: ASDisplayNode {
                 }
 
                 for secondaryLayer in self.secondaryVideoLayers.values {
-                    videoQueue.async {
-                        if secondaryLayer.controlTimebase !== timebase || secondaryLayer.status == .failed {
-                            secondaryLayer.flush()
-                            secondaryLayer.controlTimebase = timebase
+                    if !self.secondaryVideoLayersUseRenderSynchronizer {
+                        videoQueue.async {
+                            if secondaryLayer.controlTimebase !== timebase || secondaryLayer.status == .failed {
+                                secondaryLayer.flush()
+                                secondaryLayer.controlTimebase = timebase
+                            }
                         }
                     }
                     if secondaryLayer.affineTransform() != transform {
@@ -178,7 +184,9 @@ public final class MediaPlayerNode: ASDisplayNode {
             return
         }
         layer.flushAndRemoveImage()
-        layer.controlTimebase = nil
+        if !self.secondaryVideoLayersUseRenderSynchronizer {
+            layer.controlTimebase = nil
+        }
         self.secondaryVideoLayersUpdated?(self.currentSecondaryVideoLayers)
     }
 
@@ -197,7 +205,7 @@ public final class MediaPlayerNode: ASDisplayNode {
             }
         }
     }
-
+    
     private func startPolling() {
         if !self.polling {
             self.polling = true

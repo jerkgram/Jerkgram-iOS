@@ -58,9 +58,9 @@ private func mediaForMessage(message: Message) -> Media? {
 
 private final class SecretMediaPreviewControllerNode: GalleryControllerNode {
     fileprivate var timeoutNode: RadialStatusNode?
-
+    
     private var validLayout: (ContainerViewLayout, CGFloat)?
-
+        
     var beginTimeAndTimeout: (Double, Double, Bool)? {
         didSet {
             if let (beginTime, timeout, isOutgoing) = self.beginTimeAndTimeout {
@@ -70,13 +70,13 @@ private final class SecretMediaPreviewControllerNode: GalleryControllerNode {
                     self.timeoutNode = timeoutNode
                     let icon: RadialStatusNodeState.SecretTimeoutIcon
                     let timeoutValue = Int32(timeout)
-
+                    
                     let state: RadialStatusNodeState
                     if timeoutValue == 0 && isOutgoing {
                         state = .staticTimeout
                     } else if timeoutValue == viewOnceTimeout {
                         beginTime = CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970
-
+                        
                         if let image = generateTintedImage(image: UIImage(bundleImageName: "Media Gallery/ViewOnce"), color: .white) {
                             icon = .image(image)
                         } else {
@@ -88,9 +88,9 @@ private final class SecretMediaPreviewControllerNode: GalleryControllerNode {
                     }
                     timeoutNode.transitionToState(state, completion: {})
                     self.addSubnode(timeoutNode)
-
+  
                     timeoutNode.addTarget(self, action: #selector(self.statusTapGesture), forControlEvents: .touchUpInside)
-
+                    
                     if let (layout, navigationHeight) = self.validLayout {
                         self.layoutTimeoutNode(layout, navigationBarHeight: navigationHeight, transition: .immediate)
                     }
@@ -101,42 +101,42 @@ private final class SecretMediaPreviewControllerNode: GalleryControllerNode {
             }
         }
     }
-
+    
     var statusPressed: (UIView) -> Void = { _ in }
     @objc private func statusTapGesture() {
         if let sourceView = self.timeoutNode?.view {
             self.statusPressed(sourceView)
         }
     }
-
+    
     var onDismissTransitionUpdate: (CGFloat) -> Void = { _ in }
-
+    
     override func animateIn(animateContent: Bool, useSimpleAnimation: Bool) {
         super.animateIn(animateContent: animateContent, useSimpleAnimation: useSimpleAnimation)
-
+        
         self.timeoutNode?.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
     }
-
+    
     override func animateOut(animateContent: Bool, completion: @escaping () -> Void) {
         super.animateOut(animateContent: animateContent, completion: completion)
-
+        
         if let timeoutNode = self.timeoutNode {
             timeoutNode.layer.animateAlpha(from: timeoutNode.alpha, to: 0.0, duration: 0.2, removeOnCompletion: false)
         }
     }
-
+    
     override func updateDismissTransition(_ value: CGFloat) {
         self.timeoutNode?.alpha = value
         self.onDismissTransitionUpdate(value)
     }
-
+    
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, navigationBarHeight: navigationBarHeight, transition: transition)
-
+        
         self.validLayout = (layout, navigationBarHeight)
         self.layoutTimeoutNode(layout, navigationBarHeight: navigationBarHeight, transition: transition)
     }
-
+    
     private func layoutTimeoutNode(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
         if let timeoutNode = self.timeoutNode {
             let diameter: CGFloat = 28.0
@@ -148,51 +148,51 @@ private final class SecretMediaPreviewControllerNode: GalleryControllerNode {
 public final class SecretMediaPreviewController: ViewController {
     private let context: AccountContext
     private let messageId: MessageId
-
+    
     private let _ready = Promise<Bool>()
     override public var ready: Promise<Bool> {
         return self._ready
     }
     private var didSetReady = false
-
+    
     private let disposable = MetaDisposable()
     private let markMessageAsConsumedDisposable = MetaDisposable()
-
+    
     private var controllerNode: SecretMediaPreviewControllerNode {
         return self.displayNode as! SecretMediaPreviewControllerNode
     }
-
+    
     private var messageView: MessageView?
     private var currentNodeMessageId: MessageId?
     private var currentNodeMessageIsVideo = false
     private var currentNodeMessageIsViewOnce = false
     private var currentMessageIsDismissed = false
     private var tempFile: TempBoxFile?
-
+    
     private let centralItemAttributesDisposable = DisposableSet();
     private let footerContentNode = Promise<(GalleryFooterContentNode?, GalleryOverlayContentNode?)>()
-
+    
     private let _hiddenMedia = Promise<(MessageId, Media)?>(nil)
     private var hiddenMediaManagerIndex: Int?
-
+    
     private let presentationData: PresentationData
-
+    
     private var screenCaptureEventsDisposable: Disposable?
-
+    
     private weak var tooltipController: TooltipScreen?
-
+    
     public init(context: AccountContext, messageId: MessageId) {
         self.context = context
         self.messageId = messageId
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
-
+        
         super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: GalleryController.darkNavigationTheme, strings: NavigationBarStrings(presentationStrings: self.presentationData.strings)))
-
+        
         let backItem = UIBarButtonItem(backButtonAppearanceWithTitle: presentationData.strings.Common_Back, target: self, action: #selector(self.donePressed))
         self.navigationItem.leftBarButtonItem = backItem
-
+        
         self.statusBar.statusBarStyle = .White
-
+        
         self.disposable.set((context.account.postbox.messageView(messageId) |> deliverOnMainQueue).start(next: { [weak self] view in
             if let strongSelf = self {
                 strongSelf.messageView = view
@@ -201,7 +201,7 @@ public final class SecretMediaPreviewController: ViewController {
                 }
             }
         }))
-
+        
         self.hiddenMediaManagerIndex = self.context.sharedContext.mediaManager.galleryHiddenMediaManager.addSource(self._hiddenMedia.get()
         |> map { messageIdAndMedia in
             if let (messageId, media) = messageIdAndMedia {
@@ -210,7 +210,7 @@ public final class SecretMediaPreviewController: ViewController {
                 return nil
             }
         })
-
+        
         self.centralItemAttributesDisposable.add(self.footerContentNode.get().start(next: { [weak self] footerContentNode, _ in
             guard let self else {
                 return
@@ -220,11 +220,11 @@ public final class SecretMediaPreviewController: ViewController {
             }, transition: .immediate)
         }))
     }
-
+    
     required public init(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-
+    
     deinit {
         self.disposable.dispose()
         self.markMessageAsConsumedDisposable.dispose()
@@ -237,11 +237,11 @@ public final class SecretMediaPreviewController: ViewController {
         }
         self.centralItemAttributesDisposable.dispose()
     }
-
+    
     @objc func donePressed() {
         self.dismiss(forceAway: false)
     }
-
+    
     public override func loadDisplayNode() {
         let controllerInteraction = GalleryControllerInteraction(presentController: { [weak self] controller, arguments in
             if let strongSelf = self {
@@ -259,22 +259,22 @@ public final class SecretMediaPreviewController: ViewController {
         })
         self.displayNode = SecretMediaPreviewControllerNode(context: self.context, controllerInteraction: controllerInteraction, titleView: nil)
         self.displayNodeDidLoad()
-
+        
         self.controllerNode.statusPressed = { [weak self] _ in
             if let self {
                 self.presentViewOnceTooltip()
             }
         }
-
+        
         self.controllerNode.onDismissTransitionUpdate = { [weak self] _ in
             if let self {
                 self.dismissAllTooltips()
             }
         }
-
+        
         self.controllerNode.statusBar = self.statusBar
         self.controllerNode.navigationBar = self.navigationBar
-
+        
         self.controllerNode.transitionDataForCentralItem = { [weak self] in
             if let strongSelf = self {
                 if let _ = strongSelf.controllerNode.pager.centralItemNode(), let presentationArguments = strongSelf.presentationArguments as? GalleryControllerPresentationArguments {
@@ -291,23 +291,23 @@ public final class SecretMediaPreviewController: ViewController {
             self?._hiddenMedia.set(.single(nil))
             self?.presentingViewController?.dismiss(animated: false, completion: nil)
         }
-
+        
         self.controllerNode.beginCustomDismiss = { [weak self] _ in
             if let strongSelf = self {
                 strongSelf._hiddenMedia.set(.single(nil))
-
+                
                 let animatedOutNode = true
-
+                
                 strongSelf.controllerNode.animateOut(animateContent: animatedOutNode, completion: {
                 })
             }
         }
-
+        
         self.controllerNode.completeCustomDismiss = { [weak self] _ in
             self?._hiddenMedia.set(.single(nil))
             self?.presentingViewController?.dismiss(animated: false, completion: nil)
         }
-
+        
         self.controllerNode.pager.centralItemIndexUpdated = { [weak self] index in
             if let strongSelf = self {
                 var hiddenItem: (MessageId, Media)?
@@ -320,12 +320,12 @@ public final class SecretMediaPreviewController: ViewController {
                                 videoDuration = file.duration
                             }
                         }
-
+                        
                         var timerStarted = false
                         let isOutgoing = !message.flags.contains(.Incoming)
                         if let attribute = message.autoclearAttribute {
                             strongSelf.currentNodeMessageIsViewOnce = attribute.timeout == viewOnceTimeout
-
+                            
                             if let countdownBeginTime = attribute.countdownBeginTime {
                                 timerStarted = true
                                 if let videoDuration = videoDuration, attribute.timeout != viewOnceTimeout {
@@ -338,7 +338,7 @@ public final class SecretMediaPreviewController: ViewController {
                             }
                         } else if let attribute = message.autoremoveAttribute {
                             strongSelf.currentNodeMessageIsViewOnce = attribute.timeout == viewOnceTimeout
-
+                            
                             if let countdownBeginTime = attribute.countdownBeginTime {
                                 timerStarted = true
                                 if let videoDuration = videoDuration, attribute.timeout != viewOnceTimeout {
@@ -350,7 +350,7 @@ public final class SecretMediaPreviewController: ViewController {
                                beginTimeAndTimeout = (CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970, attribute.timeout != viewOnceTimeout ? 0.0 : Double(viewOnceTimeout), isOutgoing)
                            }
                         }
-
+                        
                         if let file = media as? TelegramMediaFile {
                             if file.isAnimated {
                                 strongSelf.title = strongSelf.presentationData.strings.SecretGif_Title
@@ -368,11 +368,11 @@ public final class SecretMediaPreviewController: ViewController {
                                 strongSelf.title = strongSelf.presentationData.strings.SecretImage_Title
                             }
                         }
-
+                        
                         if let beginTimeAndTimeout = beginTimeAndTimeout {
                             strongSelf.controllerNode.beginTimeAndTimeout = beginTimeAndTimeout
                         }
-
+                        
                         if message.flags.contains(.Incoming) || strongSelf.currentNodeMessageIsVideo {
                             if let node = strongSelf.controllerNode.pager.centralItemNode() {
                                 strongSelf.footerContentNode.set(node.footerContent())
@@ -409,15 +409,15 @@ public final class SecretMediaPreviewController: ViewController {
                 }
             }
         }
-
+        
         if let _ = self.messageView {
             self.applyMessageView()
         }
     }
-
+    
     override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-
+        
         if self.screenCaptureEventsDisposable == nil {
             self.screenCaptureEventsDisposable = (screenCaptureEvents()
             |> deliverOnMainQueue).start(next: { [weak self] _ in
@@ -434,33 +434,33 @@ public final class SecretMediaPreviewController: ViewController {
                 }
             })
         }
-
+        
         var nodeAnimatesItself = false
-
+        
         if let centralItemNode = self.controllerNode.pager.centralItemNode(), let message = self.messageView?.message {
             if let media = mediaForMessage(message: message) {
                 if let presentationArguments = self.presentationArguments as? GalleryControllerPresentationArguments, let transitionArguments = presentationArguments.transitionArguments(message.id, media) {
                     nodeAnimatesItself = true
                     centralItemNode.activateAsInitial()
-
+                    
                     if presentationArguments.animated {
                         centralItemNode.animateIn(from: transitionArguments.transitionNode, addToTransitionSurface: transitionArguments.addToTransitionSurface, completion: {})
                     }
-
+                    
                     self._hiddenMedia.set(.single((message.id, media)))
                 } else if self.isPresentedInPreviewingContext() {
                     centralItemNode.activateAsInitial()
                 }
             }
         }
-
+        
         self.controllerNode.setControlsHidden(false, animated: false)
         if let presentationArguments = self.presentationArguments as? GalleryControllerPresentationArguments {
             if presentationArguments.animated {
                 self.controllerNode.animateIn(animateContent: !nodeAnimatesItself, useSimpleAnimation: false)
             }
         }
-
+        
         if self.currentNodeMessageIsViewOnce {
             let _ = (ApplicationSpecificNotice.incrementViewOnceTooltip(accountManager: self.context.sharedContext.accountManager)
             |> deliverOnMainQueue).start(next: { [weak self] count in
@@ -473,7 +473,7 @@ public final class SecretMediaPreviewController: ViewController {
             })
         }
     }
-
+    
     @objc private func ghostBaseSaveCurrentTimedMedia() {
         guard let message = self.messageView?.message else {
             return
@@ -499,17 +499,17 @@ public final class SecretMediaPreviewController: ViewController {
 
     private func dismiss(forceAway: Bool) {
         self.dismissAllTooltips()
-
+        
         var animatedOutNode = true
         var animatedOutInterface = false
-
+        
         let completion = { [weak self] in
             if animatedOutNode && animatedOutInterface {
                 self?._hiddenMedia.set(.single(nil))
                 self?.presentingViewController?.dismiss(animated: false, completion: nil)
             }
         }
-
+        
         if let centralItemNode = self.controllerNode.pager.centralItemNode(), let presentationArguments = self.presentationArguments as? GalleryControllerPresentationArguments, let message = self.messageView?.message {
             if let media = mediaForMessage(message: message), let transitionArguments = presentationArguments.transitionArguments(message.id, media), !forceAway {
                 animatedOutNode = false
@@ -519,13 +519,13 @@ public final class SecretMediaPreviewController: ViewController {
                 })
             }
         }
-
+        
         self.controllerNode.animateOut(animateContent: animatedOutNode, completion: {
             animatedOutInterface = true
             completion()
         })
     }
-
+    
     private func applyMessageView() {
         var message: Message?
         if let messageView = self.messageView, let m = messageView.message {
@@ -562,7 +562,7 @@ public final class SecretMediaPreviewController: ViewController {
                         break
                     }
                 }
-
+                                
                 let ghostBaseAllowOneTimeSave = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.paidContent == nil)
                 let entry = GalleryEntry(entry: MessageHistoryEntry(message: message, isRead: false, location: nil, monthLocation: nil, attributes: MutableMessageHistoryEntryAttributes(authorIsContact: false)))
                 guard let item = galleryItemForEntry(context: self.context, presentationData: self.presentationData, entry: entry, streamVideos: false, hideControls: !ghostBaseAllowOneTimeSave, isSecret: !ghostBaseAllowOneTimeSave, playbackRate: { nil }, peerIsCopyProtected: !ghostBaseAllowOneTimeSave, tempFilePath: tempFilePath, playbackCompleted: { [weak self] in
@@ -579,7 +579,7 @@ public final class SecretMediaPreviewController: ViewController {
                     self._ready.set(.single(true))
                     return
                 }
-
+                
                 self.controllerNode.pager.replaceItems([item], centralItemIndex: 0)
                 let ready = self.controllerNode.pager.ready() |> timeout(2.0, queue: Queue.mainQueue(), alternate: .single(Void())) |> afterNext { [weak self] _ in
                     self?.didSetReady = true
@@ -597,7 +597,7 @@ public final class SecretMediaPreviewController: ViewController {
                         videoDuration = file.duration
                     }
                 }
-
+                
                 let isOutgoing = !message.flags.contains(.Incoming)
                 if let attribute = message.autoclearAttribute {
                     if let countdownBeginTime = attribute.countdownBeginTime {
@@ -620,7 +620,7 @@ public final class SecretMediaPreviewController: ViewController {
                         beginTimeAndTimeout = (CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970, attribute.timeout != viewOnceTimeout ? 0.0 : Double(viewOnceTimeout), isOutgoing)
                     }
                 }
-
+                
                 if self.isNodeLoaded {
                     if let beginTimeAndTimeout = beginTimeAndTimeout {
                         self.controllerNode.beginTimeAndTimeout = beginTimeAndTimeout
@@ -638,24 +638,24 @@ public final class SecretMediaPreviewController: ViewController {
             self.currentMessageIsDismissed = true
         }
     }
-
+    
     private func dismissAllTooltips() {
         if let tooltipController = self.tooltipController {
             self.tooltipController = nil
             tooltipController.dismiss()
         }
     }
-
+    
     private func presentViewOnceTooltip() {
         guard self.currentNodeMessageIsViewOnce, let sourceView = self.controllerNode.timeoutNode?.view else {
             return
         }
-
+                
         self.dismissAllTooltips()
-
+        
         let absoluteFrame = sourceView.convert(sourceView.bounds, to: nil)
         let location = CGRect(origin: CGPoint(x: absoluteFrame.midX, y: absoluteFrame.maxY + 2.0), size: CGSize())
-
+        
         let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
         let iconName = "anim_autoremove_on"
         let text: String
@@ -664,7 +664,7 @@ public final class SecretMediaPreviewController: ViewController {
         } else {
             text = presentationData.strings.Gallery_ViewOncePhotoTooltip
         }
-
+        
         let tooltipController = TooltipScreen(
             account: self.context.account,
             sharedContext: self.context.sharedContext,
@@ -685,14 +685,14 @@ public final class SecretMediaPreviewController: ViewController {
         self.tooltipController = tooltipController
         self.present(tooltipController, in: .window(.root))
     }
-
+    
     public override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, transition: transition)
-
+        
         self.controllerNode.frame = CGRect(origin: CGPoint(), size: layout.size)
         self.controllerNode.containerLayoutUpdated(layout, navigationBarHeight: self.navigationLayout(layout: layout).navigationFrame.maxY, transition: transition)
     }
-
+    
     override public func dismiss(completion: (() -> Void)? = nil) {
         self.presentingViewController?.dismiss(animated: false, completion: completion)
     }

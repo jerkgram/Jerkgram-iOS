@@ -31,12 +31,17 @@ load(
     "sets",
 )
 load(
-    "@build_bazel_rules_swift//swift:swift.bzl",
+    "@rules_cc//cc:find_cc_toolchain.bzl",
+    "find_cc_toolchain",
+    "use_cc_toolchain",
+)
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+load(
+    "@rules_swift//swift:swift.bzl",
     "swift_clang_module_aspect",
     "swift_common",
 )
-load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
-load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load(
     "//apple:providers.bzl",
     "AppleFrameworkImportInfo",
@@ -47,15 +52,11 @@ load(
 )
 load(
     "//apple/internal:apple_toolchains.bzl",
-    "AppleXPlatToolsToolchainInfo",
+    "apple_toolchain_utils",
 )
 load(
     "//apple/internal:cc_toolchain_info_support.bzl",
     "cc_toolchain_info_support",
-)
-load(
-    "//apple/internal:experimental.bzl",
-    "is_experimental_tree_artifact_enabled",
 )
 load(
     "//apple/internal:framework_import_support.bzl",
@@ -143,7 +144,7 @@ def _is_debugging(compilation_mode):
     """
     return compilation_mode in ("dbg", "fastbuild")
 
-def _ensure_swiftmodule_is_embedded(swiftmodule):
+def _ensure_swiftmodule_is_embedded(label, swiftmodule):
     """Ensures that a `.swiftmodule` file is embedded in a library or binary.
 
     rules_apple specific implementation of rules_swift's
@@ -151,9 +152,18 @@ def _ensure_swiftmodule_is_embedded(swiftmodule):
 
     See: https://github.com/bazelbuild/rules_swift/blob/e78ceb37c401a9bf9e551a6accd1df7d864688d5/swift/internal/debugging.bzl#L20-L47
     """
-    return dict(
-        linkopt = depset(["-Wl,-add_ast_path,{}".format(swiftmodule.path)]),
-        link_inputs = depset([swiftmodule]),
+    return CcInfo(
+        linking_context = cc_common.create_linking_context(
+            linker_inputs = depset([
+                cc_common.create_linker_input(
+                    owner = label,
+                    additional_inputs = depset([swiftmodule]),
+                    user_link_flags = [
+                        "-Wl,-add_ast_path,{}".format(swiftmodule.path),
+                    ],
+                ),
+            ]),
+        ),
     )
 
 def _framework_search_paths(header_imports):
@@ -171,7 +181,6 @@ def _framework_search_paths(header_imports):
 def _apple_dynamic_framework_import_impl(ctx):
     """Implementation for the apple_dynamic_framework_import rule."""
     actions = ctx.actions
-    apple_xplat_toolchain_info = ctx.attr._xplat_toolchain[AppleXPlatToolsToolchainInfo]
     cc_toolchain = find_cc_toolchain(ctx)
     deps = ctx.attr.deps
     disabled_features = ctx.disabled_features
@@ -179,22 +188,7 @@ def _apple_dynamic_framework_import_impl(ctx):
     framework_imports = ctx.files.framework_imports
     label = ctx.label
 
-    # TODO(b/258492867): Add tree artifacts support when Bazel can handle remote actions with
-    # symlinks. See https://github.com/bazelbuild/bazel/issues/16361.
     target_triplet = cc_toolchain_info_support.get_apple_clang_triplet(cc_toolchain)
-    has_versioned_framework_files = framework_import_support.has_versioned_framework_files(
-        framework_imports,
-    )
-    tree_artifact_enabled = (
-        apple_xplat_toolchain_info.build_settings.use_tree_artifacts_outputs or
-        is_experimental_tree_artifact_enabled(config_vars = ctx.var)
-    )
-    if target_triplet.os == "macos" and has_versioned_framework_files and tree_artifact_enabled:
-        fail("The apple_dynamic_framework_import rule does not yet support versioned " +
-             "frameworks with the experimental tree artifact feature/build setting. " +
-             "Please ensure that the `apple.experimental.tree_artifact_outputs` variable is not " +
-             "set to 1 on the command line or in your active build configuration.")
-
     providers = []
     framework = framework_import_support.classify_framework_imports(
         ctx.var,
@@ -222,6 +216,12 @@ def _apple_dynamic_framework_import_impl(ctx):
         ),
     ))
 
+    framework_includes = _framework_search_paths(
+        framework.header_imports +
+        framework.swift_interface_imports +
+        framework.swift_module_imports,
+    )
+
     # Create CcInfo provider.
     cc_info = framework_import_support.cc_info_with_dependencies(
         actions = actions,
@@ -230,11 +230,7 @@ def _apple_dynamic_framework_import_impl(ctx):
         deps = deps,
         disabled_features = disabled_features,
         features = features,
-        framework_includes = _framework_search_paths(
-            framework.header_imports +
-            framework.swift_interface_imports +
-            framework.swift_module_imports,
-        ),
+        framework_includes = framework_includes,
         header_imports = framework.header_imports,
         kind = "dynamic",
         label = label,
@@ -253,13 +249,15 @@ def _apple_dynamic_framework_import_impl(ctx):
         framework_files = depset(framework_imports),
     ))
 
-    if "apple._import_framework_via_swiftinterface" in features and framework.swift_interface_imports:
+    swiftinterface_files = framework_import_support.get_swiftinterface_files_with_target_triplet_if_enabled(
+        swift_interface_imports = framework.swift_interface_imports,
+        target_triplet = target_triplet,
+        features = features,
+    )
+
+    if swiftinterface_files:
         # Create SwiftInfo provider
-        swift_toolchain = swift_common.get_toolchain(ctx)
-        swiftinterface_files = framework_import_support.get_swift_module_files_with_target_triplet(
-            swift_module_files = framework.swift_interface_imports,
-            target_triplet = target_triplet,
-        )
+        swift_toolchains = swift_common.find_all_toolchains(ctx)
         providers.append(
             framework_import_support.swift_info_from_module_interface(
                 actions = actions,
@@ -267,20 +265,42 @@ def _apple_dynamic_framework_import_impl(ctx):
                 deps = deps,
                 disabled_features = disabled_features,
                 features = features,
+                framework_includes = framework_includes,
+                hdrs = framework.header_imports,
+                module_maps = framework.module_map_imports,
                 module_name = framework.bundle_name,
-                swift_toolchain = swift_toolchain,
-                swiftinterface_file = swiftinterface_files[0],
+                rule_label = label,
+                swift_toolchains = swift_toolchains,
+                swiftinterface_files = swiftinterface_files,
             ),
         )
     else:
-        # Create _SwiftInteropInfo provider.
-        swift_interop_info = framework_import_support.swift_interop_info_with_dependencies(
-            deps = deps,
-            module_name = framework.bundle_name,
-            module_map_imports = framework.module_map_imports,
-        )
-        if swift_interop_info:
-            providers.append(swift_interop_info)
+        swift_info = None
+        if framework_import_support.has_private_module_map(framework.module_map_imports):
+            swift_toolchains = swift_common.find_all_toolchains(ctx)
+            swift_info = framework_import_support.swift_info_from_module_maps(
+                actions = actions,
+                cc_info = cc_info,
+                ctx = ctx,
+                deps = deps,
+                disabled_features = disabled_features,
+                features = features,
+                framework_includes = framework_includes,
+                module_name = framework.bundle_name,
+                module_maps = framework.module_map_imports,
+                swift_toolchains = swift_toolchains,
+            )
+        if swift_info:
+            providers.append(swift_info)
+        else:
+            # Create _SwiftInteropInfo provider.
+            providers.append(
+                framework_import_support.swift_interop_info_with_dependencies(
+                    deps = deps,
+                    module_name = framework.bundle_name,
+                    module_map_imports = framework.module_map_imports,
+                ),
+            )
 
     return providers
 
@@ -316,12 +336,10 @@ def _apple_static_framework_import_impl(ctx):
         deps = deps,
     ))
 
-    # Collect transitive Objc/CcInfo providers from Swift toolchain
+    # Collect transitive CcInfo providers from Swift toolchain.
     additional_cc_infos = []
-    additional_objc_providers = []
-    additional_objc_provider_fields = {}
     if framework.swift_interface_imports or framework.swift_module_imports or has_swift:
-        toolchain = swift_common.get_toolchain(ctx)
+        swift_toolchains = swift_common.find_all_toolchains(ctx)
         providers.append(SwiftUsageInfo())
 
         # The Swift toolchain propagates Swift-specific linker flags (e.g.,
@@ -329,11 +347,7 @@ def _apple_static_framework_import_impl(ctx):
         # rare case that a binary has a Swift framework import dependency but
         # no other Swift dependencies, make sure we pick those up so that it
         # links to the standard libraries correctly.
-        additional_cc_infos.extend(toolchain.implicit_deps_providers.cc_infos)
-
-        # TODO: remove this once rules_swift 3+ is required
-        if hasattr(toolchain.implicit_deps_providers, "objc_infos"):
-            additional_objc_providers.extend(toolchain.implicit_deps_providers.objc_infos)
+        additional_cc_infos.extend(swift_toolchains.swift.implicit_deps_providers.cc_infos)
 
         if _is_debugging(compilation_mode):
             swiftmodule = _swiftmodule_for_cpu(
@@ -341,14 +355,7 @@ def _apple_static_framework_import_impl(ctx):
                 target_triplet.architecture,
             )
             if swiftmodule:
-                additional_objc_provider_fields.update(_ensure_swiftmodule_is_embedded(swiftmodule))
-
-    # Create apple_common.Objc provider
-    additional_objc_providers.extend([
-        dep[apple_common.Objc]
-        for dep in deps
-        if apple_common.Objc in dep
-    ])
+                additional_cc_infos.append(_ensure_swiftmodule_is_embedded(label, swiftmodule))
 
     linkopts = []
     if sdk_dylibs:
@@ -365,39 +372,42 @@ def _apple_static_framework_import_impl(ctx):
             linkopts.append("-weak_framework")
             linkopts.append(sdk_framework)
 
-    # Create CcInfo provider
-    providers.append(
-        framework_import_support.cc_info_with_dependencies(
-            actions = actions,
-            additional_cc_infos = additional_cc_infos,
-            alwayslink = alwayslink,
-            cc_toolchain = cc_toolchain,
-            ctx = ctx,
-            deps = deps,
-            disabled_features = disabled_features,
-            features = features,
-            framework_includes = _framework_search_paths(
-                framework.header_imports +
-                framework.swift_interface_imports +
-                framework.swift_module_imports,
-            ),
-            header_imports = framework.header_imports,
-            kind = "static",
-            label = label,
-            libraries = framework.binary_imports,
-            linkopts = linkopts,
-            swiftinterface_imports = framework.swift_interface_imports,
-            swiftmodule_imports = framework.swift_module_imports,
-        ),
+    framework_includes = _framework_search_paths(
+        framework.header_imports +
+        framework.swift_interface_imports +
+        framework.swift_module_imports,
     )
 
-    if "apple._import_framework_via_swiftinterface" in features and framework.swift_interface_imports:
+    # Create CcInfo provider
+    cc_info = framework_import_support.cc_info_with_dependencies(
+        actions = actions,
+        additional_cc_infos = additional_cc_infos,
+        alwayslink = alwayslink,
+        cc_toolchain = cc_toolchain,
+        ctx = ctx,
+        deps = deps,
+        disabled_features = disabled_features,
+        features = features,
+        framework_includes = framework_includes,
+        header_imports = framework.header_imports,
+        kind = "static",
+        label = label,
+        libraries = framework.binary_imports,
+        linkopts = linkopts,
+        swiftinterface_imports = framework.swift_interface_imports,
+        swiftmodule_imports = framework.swift_module_imports,
+    )
+    providers.append(cc_info)
+
+    swiftinterface_files = framework_import_support.get_swiftinterface_files_with_target_triplet_if_enabled(
+        swift_interface_imports = framework.swift_interface_imports,
+        target_triplet = target_triplet,
+        features = features,
+    )
+
+    if swiftinterface_files:
         # Create SwiftInfo provider
-        swift_toolchain = swift_common.get_toolchain(ctx)
-        swiftinterface_files = framework_import_support.get_swift_module_files_with_target_triplet(
-            swift_module_files = framework.swift_interface_imports,
-            target_triplet = target_triplet,
-        )
+        swift_toolchains = swift_common.find_all_toolchains(ctx)
         providers.append(
             framework_import_support.swift_info_from_module_interface(
                 actions = actions,
@@ -405,20 +415,42 @@ def _apple_static_framework_import_impl(ctx):
                 deps = deps,
                 disabled_features = disabled_features,
                 features = features,
+                framework_includes = framework_includes,
+                hdrs = framework.header_imports,
+                module_maps = framework.module_map_imports,
                 module_name = framework.bundle_name,
-                swift_toolchain = swift_toolchain,
-                swiftinterface_file = swiftinterface_files[0],
+                rule_label = label,
+                swift_toolchains = swift_toolchains,
+                swiftinterface_files = swiftinterface_files,
             ),
         )
     else:
-        # Create SwiftInteropInfo provider for swift_clang_module_aspect
-        swift_interop_info = framework_import_support.swift_interop_info_with_dependencies(
-            deps = deps,
-            module_name = framework.bundle_name,
-            module_map_imports = framework.module_map_imports,
-        )
-        if swift_interop_info:
-            providers.append(swift_interop_info)
+        swift_info = None
+        if framework_import_support.has_private_module_map(framework.module_map_imports):
+            swift_toolchains = swift_common.find_all_toolchains(ctx)
+            swift_info = framework_import_support.swift_info_from_module_maps(
+                actions = actions,
+                cc_info = cc_info,
+                ctx = ctx,
+                deps = deps,
+                disabled_features = disabled_features,
+                features = features,
+                framework_includes = framework_includes,
+                module_name = framework.bundle_name,
+                module_maps = framework.module_map_imports,
+                swift_toolchains = swift_toolchains,
+            )
+        if swift_info:
+            providers.append(swift_info)
+        else:
+            # Create SwiftInteropInfo provider for swift_clang_module_aspect
+            providers.append(
+                framework_import_support.swift_interop_info_with_dependencies(
+                    deps = deps,
+                    module_name = framework.bundle_name,
+                    module_map_imports = framework.module_map_imports,
+                ),
+            )
 
     # Create AppleFrameworkImportBundleInfo provider.
     bundle_files = [x for x in framework_imports if ".bundle/" in x.short_path]
@@ -466,10 +498,6 @@ Avoid linking the dynamic framework, but still include it in the app. This is us
 to manually dlopen the framework at runtime.
 """,
             ),
-            "_cc_toolchain": attr.label(
-                default = "@rules_cc//cc:current_cc_toolchain",
-                doc = "The C++ toolchain to use.",
-            ),
         },
     ),
     doc = """
@@ -493,7 +521,8 @@ objc_library(
 )
 ```
 """,
-    toolchains = swift_common.use_toolchain() + use_cc_toolchain(),
+    exec_groups = apple_toolchain_utils.use_apple_exec_group_toolchain(),
+    toolchains = swift_common.use_all_toolchains() + use_cc_toolchain(),
 )
 
 apple_static_framework_import = rule(
@@ -571,13 +600,8 @@ not include Swift interface or Swift module files.
 """,
                 default = False,
             ),
-            "_cc_toolchain": attr.label(
-                default = "@rules_cc//cc:current_cc_toolchain",
-                doc = "The C++ toolchain to use.",
-            ),
         },
     ),
-    toolchains = swift_common.use_toolchain() + use_cc_toolchain(),
     doc = """
 This rule encapsulates an already-built static framework. It is defined by a list of
 files in exactly one `.framework` directory. `apple_static_framework_import` targets
@@ -599,4 +623,6 @@ objc_library(
 )
 ```
 """,
+    exec_groups = apple_toolchain_utils.use_apple_exec_group_toolchain(),
+    toolchains = swift_common.use_all_toolchains() + use_cc_toolchain(),
 )

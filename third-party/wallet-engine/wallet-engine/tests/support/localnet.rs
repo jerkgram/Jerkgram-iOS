@@ -1,0 +1,1391 @@
+use std::cmp::Reverse;
+use std::collections::HashSet;
+use std::env;
+use std::fs::File;
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::str::FromStr;
+use std::sync::{Condvar, Mutex, MutexGuard};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use reqwest::Method;
+use reqwest::Url;
+use reqwest::blocking::Client;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use ton::block_tlb::{CommonMsgInfo, CommonMsgInfoInt, Msg, Tx, TxDescr};
+use ton::tlb_adapters::{DictKeyAdapterUint, DictValAdapterTLB, TLBHashMap};
+use ton::ton_core::cell::TonCell;
+use ton::ton_core::traits::tlb::TLB;
+use ton::ton_core::types::TonAddress;
+use ton::ton_core::types::tlb_core::{MsgAddressExt, TLBCoins, TLBRef};
+use ton::ton_wallet::{
+    TonWallet, WALLET_SUBWALLET_ID_DEFAULT_TESTNET, WalletData, WalletExtMsgBody, WalletVersion,
+};
+use wallet_engine::{
+    Boc, HttpHeader, HttpHostError, HttpHostErrorKind, HttpMethod, HttpRequest, HttpRequestId,
+    HttpResponse, WalletHttpHost,
+};
+
+use super::host::{RequestKind, SubmittedMessage, decode_submitted_comment};
+use super::test_wallet;
+
+const READY_TIMEOUT: Duration = Duration::from_secs(45);
+const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Opcode of Wallet rev00's `OnKeyHasBeenChangedEvent` external-out log.
+const KEY_CHANGED_LOG_OPCODE: u32 = 0xeba1_9948;
+/// Opcodes of Wallet rev00's `ChangePublicKeyRequestI` and `ChangePublicKeyRequestE`.
+const CHANGE_PUBLIC_KEY_OPCODES: [u32; 2] = [0xfbba_99c7, 0xfbba_99c8];
+const REQUEST_SIGNATURE_BITS: usize = 512;
+const KEY_BITS: usize = 256;
+/// Toncenter's action type for a Wallet rev00 signing-key rotation.
+const CHANGE_WALLET_KEY_ACTION: &str = "change_wallet_key";
+/// The most transactions the localnet transaction helpers read for one account.
+const MAX_SHIM_TRANSACTIONS: usize = 100;
+
+pub(super) struct LocalnetHttpHost {
+    localnet: Mutex<Localnet>,
+    address: String,
+    cancelled: Mutex<HashSet<HttpRequestId>>,
+    submitted_message: Mutex<Option<SubmittedMessage>>,
+    submitted_boc_base64: Mutex<Option<String>>,
+    activity_requests: Mutex<Vec<String>>,
+    key_change_action_requests: Mutex<Vec<String>>,
+    request_gate: Mutex<Option<RequestGate>>,
+    request_changed: Condvar,
+}
+
+struct RequestGate {
+    name: String,
+    kind: RequestKind,
+    request_id: Option<HttpRequestId>,
+    reached: bool,
+    released: bool,
+}
+
+impl std::fmt::Debug for LocalnetHttpHost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LocalnetHttpHost")
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalnetHttpHost {
+    pub(super) fn start(address: &str, balance_nanograms: &str) -> Result<Self, String> {
+        let balance = balance_nanograms
+            .parse::<u64>()
+            .map_err(|error| format!("localnet balance does not fit u64: {error}"))?;
+        let localnet = Localnet::start()?;
+        localnet.fund(address, balance)?;
+        localnet.mine()?;
+        localnet.wait_for_state(address, "uninitialized", None)?;
+
+        Ok(Self {
+            localnet: Mutex::new(localnet),
+            address: address.to_owned(),
+            cancelled: Mutex::new(HashSet::new()),
+            submitted_message: Mutex::new(None),
+            submitted_boc_base64: Mutex::new(None),
+            activity_requests: Mutex::new(Vec::new()),
+            key_change_action_requests: Mutex::new(Vec::new()),
+            request_gate: Mutex::new(None),
+            request_changed: Condvar::new(),
+        })
+    }
+
+    pub(super) fn provider_base_url(&self) -> String {
+        lock(&self.localnet).base_url.clone()
+    }
+
+    pub(super) fn submitted_message(&self) -> Option<SubmittedMessage> {
+        lock(&self.submitted_message).clone()
+    }
+
+    pub(super) fn submitted_boc(&self) -> Option<String> {
+        lock(&self.submitted_boc_base64).clone()
+    }
+
+    pub(super) fn last_activity_request(&self) -> Option<String> {
+        lock(&self.activity_requests).last().cloned()
+    }
+
+    /// Counts the Toncenter v3 `change_wallet_key` action requests the indexer shim received.
+    pub(super) fn key_change_action_request_count(&self) -> usize {
+        lock(&self.key_change_action_requests).len()
+    }
+
+    /// Returns the wallet's raw localnet transactions, newest first.
+    pub(super) fn wallet_transactions(&self) -> Result<Vec<Tx>, String> {
+        let transactions = lock(&self.localnet).raw_transactions(&self.address)?;
+        Ok(transactions
+            .into_iter()
+            .map(|transaction| transaction.transaction)
+            .collect())
+    }
+
+    pub(super) fn pause_next_request(&self, name: String, kind: RequestKind) {
+        *lock(&self.request_gate) = Some(RequestGate {
+            name,
+            kind,
+            request_id: None,
+            reached: false,
+            released: false,
+        });
+    }
+
+    pub(super) fn wait_for_request(&self, name: &str) -> Result<(), String> {
+        let mut gate = lock(&self.request_gate);
+        let deadline = Instant::now() + CONFIRMATION_TIMEOUT;
+        loop {
+            let checkpoint = gate
+                .as_ref()
+                .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
+            if checkpoint.name != name {
+                return Err(format!(
+                    "expected request checkpoint `{}`, got `{name}`",
+                    checkpoint.name
+                ));
+            }
+            if checkpoint.reached {
+                return Ok(());
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "request checkpoint `{name}` was not reached within {CONFIRMATION_TIMEOUT:?}"
+                ));
+            }
+            gate = match self.request_changed.wait_timeout(gate, remaining) {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+    }
+
+    pub(super) fn release_request(&self, name: &str) -> Result<(), String> {
+        self.wait_for_request(name)?;
+        let mut gate = lock(&self.request_gate);
+        let checkpoint = gate
+            .as_mut()
+            .ok_or_else(|| format!("request checkpoint `{name}` disappeared"))?;
+        checkpoint.released = true;
+        self.request_changed.notify_all();
+        Ok(())
+    }
+
+    pub(super) fn request_was_cancelled(&self, name: &str) -> Result<bool, String> {
+        let gate = lock(&self.request_gate);
+        let checkpoint = gate
+            .as_ref()
+            .ok_or_else(|| format!("request checkpoint `{name}` does not exist"))?;
+        let request_id = checkpoint
+            .request_id
+            .ok_or_else(|| format!("request checkpoint `{name}` was not reached"))?;
+        Ok(lock(&self.cancelled).contains(&request_id))
+    }
+
+    fn wait_at_request_gate(
+        &self,
+        kind: RequestKind,
+        request_id: HttpRequestId,
+    ) -> Result<(), HttpHostError> {
+        let mut gate = lock(&self.request_gate);
+        if matches!(gate.as_ref(), Some(checkpoint) if checkpoint.kind == kind && checkpoint.request_id.is_none())
+        {
+            let checkpoint = gate.as_mut().expect("request checkpoint exists");
+            checkpoint.request_id = Some(request_id);
+            checkpoint.reached = true;
+            self.request_changed.notify_all();
+        }
+
+        loop {
+            let Some(checkpoint) = gate.as_ref() else {
+                return Ok(());
+            };
+            if checkpoint.request_id != Some(request_id) {
+                return Ok(());
+            }
+            if checkpoint.released {
+                *gate = None;
+                return Ok(());
+            }
+            gate = match self.request_changed.wait(gate) {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+    }
+
+    pub(super) fn assert_wallet(
+        &self,
+        expect_active: bool,
+        expected_seqno: Option<u32>,
+    ) -> Result<(), String> {
+        let expected_state = if expect_active {
+            "active"
+        } else {
+            "uninitialized"
+        };
+        self.assert_account(&self.address, expected_state, expected_seqno)
+    }
+
+    /// Waits for any localnet account to reach an exact state and optional wallet sequence number.
+    pub(super) fn assert_account(
+        &self,
+        address: &str,
+        expected_state: &str,
+        expected_seqno: Option<u32>,
+    ) -> Result<(), String> {
+        lock(&self.localnet).wait_for_state(address, expected_state, expected_seqno)
+    }
+
+    /// Verifies that an unfunded deployment target has not become active before submission.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    pub(super) fn assert_account_absent(&self, address: &str) -> Result<(), String> {
+        let localnet = lock(&self.localnet);
+        let state = localnet.account_state(address)?;
+        let balance = localnet.balance(address)?;
+        if state == "active" || balance != 0 {
+            return Err(format!(
+                "deployment target must be absent before submission, got state={state}, balance={balance}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns one account's current localnet balance in nanograms.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    pub(super) fn account_balance(&self, address: &str) -> Result<u128, String> {
+        lock(&self.localnet).balance(address)
+    }
+
+    /// Advances Acton's virtual clock without waiting for wall-clock time.
+    pub(super) fn increase_time(&self, seconds: u64) -> Result<(), String> {
+        lock(&self.localnet).increase_time(seconds)
+    }
+
+    /// Delivers a wallet-signed internal message through an independently funded wallet.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    pub(super) fn relay_signed_message(
+        &self,
+        internal_boc: &Boc,
+        attached_nanograms: u64,
+    ) -> Result<(), String> {
+        const RELAYER_BALANCE_NANOGRAMS: u64 = 2_000_000_000;
+
+        let localnet = lock(&self.localnet);
+        let mnemonic = std::str::from_utf8(test_wallet().other_recovery_phrase_bytes())
+            .map_err(|error| error.to_string())?;
+        let key_pair = test_wallet::rotation_anchor_key_pair(mnemonic)?;
+        let relayer_wallet_id = WALLET_SUBWALLET_ID_DEFAULT_TESTNET
+            .checked_add(1)
+            .ok_or_else(|| "localnet relayer wallet ID overflowed".to_owned())?;
+        let relayer =
+            TonWallet::new_with_params(WalletVersion::Wallet, key_pair, 0, relayer_wallet_id)
+                .map_err(|error| error.to_string())?;
+        let relayer_address = relayer.address.to_string();
+        localnet.fund(&relayer_address, RELAYER_BALANCE_NANOGRAMS)?;
+        localnet.mine()?;
+        localnet.wait_for_state(&relayer_address, "uninitialized", None)?;
+
+        let signed_bytes = STANDARD
+            .decode(internal_boc.to_base64())
+            .map_err(|error| error.to_string())?;
+        let signed_cell = TonCell::from_boc(signed_bytes).map_err(|error| error.to_string())?;
+        let signed_message =
+            Msg::<TonCell>::from_cell(&signed_cell).map_err(|error| error.to_string())?;
+        let destination = TonAddress::from_str(&self.address).map_err(|error| error.to_string())?;
+        let mut info = CommonMsgInfoInt::new(
+            destination.to_msg_address(),
+            TLBCoins::new(u128::from(attached_nanograms)),
+        );
+        info.bounce = false;
+        let mut relayed_message = Msg::new(info, signed_message.body.value.clone());
+        relayed_message.init = signed_message.init;
+        let relayed_cell = relayed_message
+            .to_cell()
+            .map_err(|error| error.to_string())?;
+        let external = relayer
+            .create_ext_in_msg(vec![relayed_cell], 0, u32::MAX, true)
+            .map_err(|error| error.to_string())?;
+        let boc = STANDARD.encode(external.to_boc().map_err(|error| error.to_string())?);
+        let (status, body) = request(
+            &localnet.client,
+            Method::POST,
+            &format!("{}/api/v2/jsonRPC", localnet.base_url),
+            Some(&json!({
+                "jsonrpc": "2.0",
+                "id": "wallet-engine-localnet-relay",
+                "method": "sendBoc",
+                "params": { "boc": boc }
+            })),
+        )?;
+        if !(200..300).contains(&status)
+            || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
+        {
+            return Err(format!(
+                "localnet relayer submission failed with HTTP {status}: {body}"
+            ));
+        }
+
+        for _ in 0..3 {
+            localnet.mine()?;
+        }
+        localnet.wait_for_state(&relayer_address, "active", Some(1))
+    }
+
+    pub(super) fn spam_transfers(&self, count: u32) -> Result<(), String> {
+        let localnet = lock(&self.localnet);
+        let mnemonic = std::str::from_utf8(test_wallet().recovery_phrase_bytes())
+            .map_err(|error| error.to_string())?;
+        let key_pair = test_wallet::rotation_anchor_key_pair(mnemonic)?;
+        let wallet = TonWallet::new_with_params(
+            WalletVersion::Wallet,
+            key_pair,
+            0,
+            WALLET_SUBWALLET_ID_DEFAULT_TESTNET,
+        )
+        .map_err(|error| error.to_string())?;
+        let destination = TonAddress::from_str(&self.address).map_err(|error| error.to_string())?;
+        // `runGetMethod` has no meaningful result for an uninitialized account.
+        // Treat its first wallet message as seqno zero and include StateInit.
+        let initial_seqno = if localnet.account_state(&self.address)? == "active" {
+            localnet.seqno(&self.address)?
+        } else {
+            0
+        };
+
+        for offset in 0..count {
+            let mut info = CommonMsgInfoInt::new(destination.to_msg_address(), TLBCoins::new(1));
+            info.bounce = false;
+            let internal = Msg::new(info, TonCell::empty().to_owned())
+                .to_cell()
+                .map_err(|error| error.to_string())?;
+            let seqno = initial_seqno
+                .checked_add(offset)
+                .ok_or_else(|| "localnet spam seqno overflowed".to_owned())?;
+            let external = wallet
+                .create_ext_in_msg(vec![internal], seqno, u32::MAX, seqno == 0)
+                .map_err(|error| error.to_string())?;
+            let boc = STANDARD.encode(external.to_boc().map_err(|error| error.to_string())?);
+            let (status, body) = request(
+                &localnet.client,
+                Method::POST,
+                &format!("{}/api/v2/jsonRPC", localnet.base_url),
+                Some(&json!({
+                    "jsonrpc": "2.0",
+                    "id": format!("wallet-engine-localnet-spam-{offset}"),
+                    "method": "sendBoc",
+                    "params": { "boc": boc }
+                })),
+            )?;
+            if !(200..300).contains(&status)
+                || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
+            {
+                return Err(format!(
+                    "localnet spam submission failed with HTTP {status}: {body}"
+                ));
+            }
+
+            localnet.mine()?;
+        }
+
+        let expected_seqno = initial_seqno
+            .checked_add(count)
+            .ok_or_else(|| "localnet spam seqno overflowed".to_owned())?;
+        localnet.wait_for_state(&self.address, "active", Some(expected_seqno))
+    }
+
+    pub(super) fn replay_last_submission(&self) -> Result<(), String> {
+        let boc = lock(&self.submitted_boc_base64)
+            .clone()
+            .ok_or_else(|| "no submitted BOC is available for replay".to_owned())?;
+        let localnet = lock(&self.localnet);
+        let (status, body) = request(
+            &localnet.client,
+            Method::POST,
+            &format!("{}/api/v2/jsonRPC", localnet.base_url),
+            Some(&json!({
+                "jsonrpc": "2.0",
+                "id": "wallet-engine-localnet-replay",
+                "method": "sendBoc",
+                "params": { "boc": boc }
+            })),
+        )?;
+        if !(200..300).contains(&status)
+            || body.pointer("/result/@type").and_then(Value::as_str) != Some("ok")
+        {
+            return Err(format!(
+                "localnet replay submission failed with HTTP {status}: {body}"
+            ));
+        }
+
+        localnet.mine()
+    }
+
+    /// Submits a complete external message without assuming an ordinary transfer body.
+    pub(super) fn wait_for_seqno(&self, expected_seqno: u32) -> Result<(), String> {
+        let localnet = lock(&self.localnet);
+        for _ in 0..3 {
+            localnet.mine()?;
+        }
+        localnet.wait_for_state(&self.address, "active", Some(expected_seqno))
+    }
+
+    /// Returns the wallet's current public key as normalized lowercase hexadecimal.
+    pub(super) fn public_key_hex(&self) -> Result<String, String> {
+        let value = lock(&self.localnet).get_method_number(&self.address, "get_public_key")?;
+        normalize_u256_hex(&value)
+    }
+
+    fn execute(&self, request: &HttpRequest) -> Result<HttpResponse, HttpHostError> {
+        if lock(&self.cancelled).remove(&request.id) {
+            return Err(host_error(
+                HttpHostErrorKind::Cancelled,
+                "localnet request was cancelled",
+            ));
+        }
+        if request.url.contains("getTransactions") {
+            lock(&self.activity_requests).push(request.url.clone());
+        }
+
+        if request.method == HttpMethod::Get
+            && let Some(query) = KeyChangeActionsQuery::parse(&request.url)
+        {
+            lock(&self.key_change_action_requests).push(request.url.clone());
+            let body = lock(&self.localnet)
+                .key_change_actions(&query)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?;
+            return Ok(json_response(request, &body));
+        }
+
+        if request.method == HttpMethod::Post
+            && let Ok(payload) = serde_json::from_slice::<Value>(&request.body)
+            && payload.get("method").and_then(Value::as_str) == Some("runGetMethod")
+            && let Some(address) = payload.pointer("/params/address").and_then(Value::as_str)
+            && let Some(get_method) = payload.pointer("/params/method").and_then(Value::as_str)
+            && let Some(body) = lock(&self.localnet)
+                .wallet_get_method(address, get_method)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?
+        {
+            return Ok(json_response(request, &body));
+        }
+
+        let method = match request.method {
+            HttpMethod::Get => Method::GET,
+            HttpMethod::Post => Method::POST,
+        };
+        let localnet = lock(&self.localnet);
+        let mut builder = localnet.client.request(method, &request.url);
+        for header in &request.headers {
+            builder = builder.header(&header.name, &header.value);
+        }
+        if !request.body.is_empty() {
+            builder = builder.body(request.body.clone());
+        }
+
+        let response = builder
+            .send()
+            .map_err(|error| host_error(HttpHostErrorKind::ConnectionLost, &error.to_string()))?;
+        let status = response.status().as_u16();
+        let final_url = response.url().to_string();
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value.to_str().ok().map(|value| HttpHeader {
+                    name: name.as_str().to_owned(),
+                    value: value.to_owned(),
+                })
+            })
+            .collect();
+        let body = response
+            .bytes()
+            .map_err(|error| host_error(HttpHostErrorKind::ConnectionLost, &error.to_string()))?
+            .to_vec();
+
+        if request.method == HttpMethod::Post
+            && serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .as_deref()
+                == Some("sendBoc")
+        {
+            let encoded = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .pointer("/params/boc")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .ok_or_else(|| host_error(HttpHostErrorKind::Other, "sendBoc has no BOC"))?;
+            let boc = STANDARD
+                .decode(&encoded)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+            let cell = TonCell::from_boc(boc)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+            let message = Msg::<TonCell>::from_cell(&cell)
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+            let message_hash = message
+                .cell_hash_normalized()
+                .map(|hash| STANDARD.encode(hash.as_slice()))
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error.to_string()))?;
+            if let Ok((body, _)) = WalletExtMsgBody::read_signed(&mut message.body.parser())
+                && let Ok(comment) = decode_submitted_comment(&body)
+            {
+                *lock(&self.submitted_message) = Some(SubmittedMessage {
+                    contains_state_init: message.state_init().is_some(),
+                    send_modes: body.msgs_modes,
+                    comment,
+                    message_hash,
+                });
+            }
+            *lock(&self.submitted_boc_base64) = Some(encoded);
+            localnet
+                .mine()
+                .map_err(|error| host_error(HttpHostErrorKind::Other, &error))?;
+        }
+
+        Ok(HttpResponse {
+            status,
+            headers,
+            body,
+            final_url,
+        })
+    }
+}
+
+#[async_trait]
+impl WalletHttpHost for LocalnetHttpHost {
+    async fn execute_http(&self, request: HttpRequest) -> Result<HttpResponse, HttpHostError> {
+        if request.url.contains("getAddressInformation") {
+            self.wait_at_request_gate(RequestKind::Account, request.id)?;
+        } else if request.url.contains("getTransactions") {
+            self.wait_at_request_gate(RequestKind::Activity, request.id)?;
+        } else if request
+            .body
+            .windows(b"runGetMethod".len())
+            .any(|window| window == b"runGetMethod")
+        {
+            self.wait_at_request_gate(RequestKind::Seqno, request.id)?;
+        } else if request.url.contains("/api/emulate/v1/emulateTrace") {
+            self.wait_at_request_gate(RequestKind::Emulation, request.id)?;
+        } else if request
+            .body
+            .windows(b"sendBoc".len())
+            .any(|window| window == b"sendBoc")
+        {
+            self.wait_at_request_gate(RequestKind::Submission, request.id)?;
+        }
+        self.execute(&request)
+    }
+
+    async fn cancel_http(&self, request_id: HttpRequestId) {
+        lock(&self.cancelled).insert(request_id);
+    }
+}
+
+struct Localnet {
+    child: Child,
+    base_url: String,
+    client: Client,
+    _directory: TempDir,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+impl Localnet {
+    /// Reads one Toncenter-compatible account balance as nanograms.
+    #[allow(
+        dead_code,
+        reason = "used by the separate TON Connect integration-test target"
+    )]
+    fn balance(&self, address: &str) -> Result<u128, String> {
+        let (status, body) = request(
+            &self.client,
+            Method::GET,
+            &format!(
+                "{}/api/v2/getAddressInformation?address={address}",
+                self.base_url
+            ),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "account balance request failed with HTTP {status}: {body}"
+            ));
+        }
+        body.pointer("/result/balance")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("account response has no balance: {body}"))?
+            .parse::<u128>()
+            .map_err(|error| format!("account balance is invalid: {error}"))
+    }
+
+    fn account_state(&self, address: &str) -> Result<String, String> {
+        let (status, body) = request(
+            &self.client,
+            Method::GET,
+            &format!(
+                "{}/api/v2/getAddressInformation?address={address}",
+                self.base_url
+            ),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "account state request failed with HTTP {status}: {body}"
+            ));
+        }
+
+        body.pointer("/result/state")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("account state response has no state: {body}"))
+    }
+
+    fn start() -> Result<Self, String> {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        std::fs::write(
+            directory.path().join("Acton.toml"),
+            concat!(
+                "[package]\n",
+                "name = \"wallet-engine-localnet-test\"\n",
+                "description = \"Wallet engine localnet integration tests\"\n",
+                "version = \"0.0.0\"\n",
+                "license = \"MIT\"\n",
+                "\n[localnet]\n",
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+
+        let port = available_port()?;
+        let stdout_path = directory.path().join("localnet.stdout.log");
+        let stderr_path = directory.path().join("localnet.stderr.log");
+        let stdout = File::create(&stdout_path).map_err(|error| error.to_string())?;
+        let stderr = File::create(&stderr_path).map_err(|error| error.to_string())?;
+        let binary = env::var_os("WALLET_ENGINE_ACTON_BIN")
+            .map_or_else(|| PathBuf::from("acton"), PathBuf::from);
+
+        let child = Command::new(&binary)
+            .arg("--project-root")
+            .arg(directory.path())
+            .arg("simulator")
+            .arg("start")
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--block-time-ms")
+            .arg("50")
+            .arg("--no-mining")
+            .current_dir(directory.path())
+            .env("NO_COLOR", "1")
+            // Acton builds a multi-thread Tokio runtime for each localnet process.
+            // Its default is one worker per CPU, although these tests use one small
+            // HTTP client and a separate single-threaded node loop. Keep one server
+            // worker so parallel scenarios do not multiply the machine's CPU count.
+            .env("TOKIO_WORKER_THREADS", "1")
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .map_err(|error| format!("failed to start `{}`: {error}", binary.to_string_lossy()))?;
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|error| error.to_string())?;
+
+        let mut localnet = Self {
+            child,
+            base_url: format!("http://127.0.0.1:{port}"),
+            client,
+            _directory: directory,
+            stdout_path,
+            stderr_path,
+        };
+        let deadline = Instant::now() + READY_TIMEOUT;
+        while Instant::now() < deadline {
+            if localnet
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                return Err(localnet.failure("Acton localnet exited before it became ready"));
+            }
+            if request(
+                &localnet.client,
+                Method::GET,
+                &format!("{}/api/v2/getMasterchainInfo", localnet.base_url),
+                None,
+            )
+            .is_ok_and(|(status, _)| (200..300).contains(&status))
+            {
+                localnet.install_wallet_bytecode()?;
+                return Ok(localnet);
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        Err(localnet.failure("Acton localnet did not become ready"))
+    }
+
+    /// Publishes the real wallet bytecode into the localnet blockchain config.
+    ///
+    /// Deployed accounts carry only the wallet trampoline, whose code jumps
+    /// into config param -123. Pin that parameter to the fixture even if the
+    /// simulator's bundled wallet bytecode changes between Acton versions.
+    fn install_wallet_bytecode(&self) -> Result<(), String> {
+        const WALLET_TG_CODE_B64: &str = include_str!("wallet_tg_rev00.code");
+        const BYTECODE_CONFIG_KEY: i32 = -123;
+
+        let (status, body) = request(
+            &self.client,
+            Method::GET,
+            &format!("{}/api/v2/getConfigAll", self.base_url),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "localnet config read failed with HTTP {status}: {body}"
+            ));
+        }
+
+        let config_boc = body
+            .pointer("/result/config/bytes")
+            .and_then(Value::as_str)
+            .ok_or("localnet config response has no config cell")?;
+        let config_cell = TonCell::from_boc_base64(config_boc)
+            .map_err(|error| format!("localnet config cell decoding failed: {error}"))?;
+        let dict_codec =
+            TLBHashMap::<DictKeyAdapterUint<u32>, DictValAdapterTLB<TLBRef<TonCell>>>::new(32);
+        let params = dict_codec
+            .read(&mut config_cell.parser())
+            .map_err(|error| format!("localnet config parsing failed: {error}"))?;
+        let wallet_code = TonCell::from_boc_base64(WALLET_TG_CODE_B64.trim())
+            .map_err(|error| error.to_string())?;
+        let key = u32::from_be_bytes(BYTECODE_CONFIG_KEY.to_be_bytes());
+        let current_hash = params
+            .get(&key)
+            .map(TLB::cell_hash)
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        if current_hash.as_ref()
+            == Some(&wallet_code.cell_hash().map_err(|error| error.to_string())?)
+        {
+            return Ok(());
+        }
+        let expected_hash: Option<String> = current_hash.map(|hash| {
+            hash.as_slice()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        });
+
+        let (status, body) = request(
+            &self.client,
+            Method::POST,
+            &format!("{}/acton_setConfigParam", self.base_url),
+            Some(&json!({
+                "index": BYTECODE_CONFIG_KEY,
+                "boc": WALLET_TG_CODE_B64.trim(),
+                "expectedHash": expected_hash,
+            })),
+        )?;
+        if (200..300).contains(&status) && body.get("ok").and_then(Value::as_bool) == Some(true) {
+            Ok(())
+        } else {
+            Err(format!(
+                "localnet config update failed with HTTP {status}: {body}"
+            ))
+        }
+    }
+
+    fn fund(&self, address: &str, amount: u64) -> Result<(), String> {
+        let (status, body) = request(
+            &self.client,
+            Method::POST,
+            &format!("{}/acton_fundAccount", self.base_url),
+            Some(&json!({ "address": address, "amount": amount })),
+        )?;
+        if (200..300).contains(&status)
+            && (body.get("ok").and_then(Value::as_bool) == Some(true)
+                || body.get("success").and_then(Value::as_bool) == Some(true))
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "localnet funding failed with HTTP {status}: {body}"
+            ))
+        }
+    }
+
+    fn mine(&self) -> Result<(), String> {
+        let (status, body) = request(
+            &self.client,
+            Method::POST,
+            &format!("{}/acton_mine", self.base_url),
+            Some(&json!({})),
+        )?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(format!("localnet mining failed with HTTP {status}: {body}"))
+        }
+    }
+
+    fn increase_time(&self, seconds: u64) -> Result<(), String> {
+        let (status, body) = request(
+            &self.client,
+            Method::POST,
+            &format!("{}/acton_increaseTime", self.base_url),
+            Some(&json!({ "seconds": seconds })),
+        )?;
+        if (200..300).contains(&status)
+            && (body.get("ok").and_then(Value::as_bool) == Some(true)
+                || body.get("success").and_then(Value::as_bool) == Some(true))
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "localnet time increase failed with HTTP {status}: {body}"
+            ))
+        }
+    }
+
+    fn wait_for_state(
+        &self,
+        address: &str,
+        expected_state: &str,
+        expected_seqno: Option<u32>,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + CONFIRMATION_TIMEOUT;
+        let mut last_state = None;
+        let mut last_seqno = None;
+
+        while Instant::now() < deadline {
+            let account_url = format!(
+                "{}/api/v2/getAddressInformation?address={address}",
+                self.base_url
+            );
+            if let Ok((status, body)) = request(&self.client, Method::GET, &account_url, None)
+                && (200..300).contains(&status)
+            {
+                last_state = body
+                    .pointer("/result/state")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+
+            if last_state.as_deref() == Some(expected_state) {
+                if let Some(expected_seqno) = expected_seqno {
+                    last_seqno = self.seqno(address).ok();
+                    if last_seqno == Some(expected_seqno) {
+                        return Ok(());
+                    }
+                } else {
+                    return Ok(());
+                }
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        Err(format!(
+            concat!(
+                "wallet did not reach state={}, seqno={:?}; ",
+                "last state={:?}, seqno={:?}\n",
+                "transactions: {}\nlocalnet stdout:\n{}\nlocalnet stderr:\n{}",
+            ),
+            expected_state,
+            expected_seqno,
+            last_state,
+            last_seqno,
+            self.transactions(address),
+            read_log(&self.stdout_path),
+            read_log(&self.stderr_path),
+        ))
+    }
+
+    fn transactions(&self, address: &str) -> String {
+        let url = format!(
+            "{}/api/v2/getTransactions?address={address}&limit=10",
+            self.base_url
+        );
+        request(&self.client, Method::GET, &url, None).map_or_else(
+            |error| format!("request failed: {error}"),
+            |(status, body)| format!("HTTP {status}: {body}"),
+        )
+    }
+
+    /// Reads and decodes an account's raw transactions, newest first.
+    ///
+    /// The simulator returns every transaction's complete BOC in `data`, so
+    /// the decoded transaction carries the exact inbound and outbound
+    /// messages the contract processed and emitted.
+    fn raw_transactions(&self, address: &str) -> Result<Vec<LocalnetTransaction>, String> {
+        let limit = MAX_SHIM_TRANSACTIONS.to_string();
+        let url = Url::parse_with_params(
+            &format!("{}/api/v2/getTransactions", self.base_url),
+            [("address", address), ("limit", limit.as_str())],
+        )
+        .map_err(|error| error.to_string())?;
+        let (status, body) = request(&self.client, Method::GET, url.as_str(), None)?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "localnet transactions request failed with HTTP {status}: {body}"
+            ));
+        }
+        let entries = body
+            .get("result")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("localnet transactions response has no result: {body}"))?;
+        if entries.len() >= MAX_SHIM_TRANSACTIONS {
+            return Err(format!(
+                "account {address} has at least {MAX_SHIM_TRANSACTIONS} transactions; \
+                 the localnet helpers read only one page"
+            ));
+        }
+
+        let mut transactions = entries
+            .iter()
+            .map(|entry| {
+                let data = entry
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("localnet transaction has no raw data: {entry}"))?;
+                let transaction = Tx::from_boc_base64(data)
+                    .map_err(|error| format!("localnet transaction data is invalid: {error}"))?;
+                Ok(LocalnetTransaction {
+                    hash: entry
+                        .pointer("/transaction_id/hash")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    transaction,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        transactions.sort_by_key(|entry| Reverse(entry.transaction.lt));
+        Ok(transactions)
+    }
+
+    /// Serves Toncenter v3 `change_wallet_key` actions from the account's real transactions.
+    ///
+    /// Acton's simulator has no v3 actions index, so `/api/v3/actions` is 404
+    /// there. This is a test stand-in for Toncenter's action classifier, in
+    /// the same spirit as [`Self::wallet_get_method`]: every successful
+    /// transaction of the account whose inbound message is a Wallet rev00
+    /// `ChangePublicKeyRequestI`/`E` and which emitted the
+    /// `OnKeyHasBeenChangedEvent` log becomes one Toncenter v1.3-shaped
+    /// `change_wallet_key` action. The installed key comes from the request,
+    /// the encrypted old private key from the log the contract emitted, and
+    /// the source is the relaying sender of an internal request or `null`
+    /// for an external one. The shim does not reconstruct the rotation
+    /// signature and reports it as `null`. Actions are sorted by logical
+    /// time, then `offset` and `limit` apply, as on Toncenter.
+    fn key_change_actions(&self, query: &KeyChangeActionsQuery) -> Result<Value, String> {
+        let account = TonAddress::from_str(&query.account)
+            .map_err(|error| format!("key-change account is invalid: {error}"))?;
+        let mut actions = Vec::new();
+        for LocalnetTransaction { hash, transaction } in self.raw_transactions(&query.account)? {
+            let Some(rotation) = observed_key_rotation(&transaction) else {
+                continue;
+            };
+            let destination = TonAddress::new(account.workchain, transaction.account_addr.clone());
+            let lt = transaction.lt.to_string();
+            actions.push(json!({
+                "trace_id": hash,
+                "action_id": hash,
+                "start_lt": lt,
+                "end_lt": lt,
+                "transactions": hash.iter().collect::<Vec<_>>(),
+                "type": CHANGE_WALLET_KEY_ACTION,
+                "success": true,
+                "details": {
+                    "source": rotation.source,
+                    "destination": raw_address(&destination),
+                    "new_public_key": hex(&rotation.new_public_key),
+                    "rotation_signature": Value::Null,
+                    "encrypted_old_private_key": hex(&rotation.encrypted_old_private_key),
+                },
+                "finality": "finalized"
+            }));
+        }
+        if !query.newest_first {
+            actions.reverse();
+        }
+        let actions = actions
+            .into_iter()
+            .skip(query.offset)
+            .take(query.limit)
+            .collect::<Vec<_>>();
+
+        Ok(json!({
+            "actions": actions,
+            "address_book": {},
+            "metadata": {}
+        }))
+    }
+
+    /// Serves a wallet get method from the account's storage cell.
+    ///
+    /// Localnet's `runGetMethod` executes the on-account trampoline without
+    /// the chain-state config, so `CONFIGOPTPARAM -123` fails there even
+    /// though transactions see the patched config. Real networks run get
+    /// methods against the full masterchain config, so tests answer the
+    /// wallet's storage-backed get methods locally instead. Returns `None`
+    /// for other methods or accounts without parsable wallet storage.
+    fn wallet_get_method(&self, address: &str, method: &str) -> Result<Option<Value>, String> {
+        if !matches!(method, "seqno" | "get_subwallet_id" | "get_public_key") {
+            return Ok(None);
+        }
+
+        let (status, body) = request(
+            &self.client,
+            Method::GET,
+            &format!(
+                "{}/api/v2/getAddressInformation?address={address}",
+                self.base_url
+            ),
+            None,
+        )?;
+        if !(200..300).contains(&status) {
+            return Err(format!(
+                "account data request failed with HTTP {status}: {body}"
+            ));
+        }
+        let Some(data) = body.pointer("/result/data").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let Ok(data) = STANDARD.decode(data) else {
+            return Ok(None);
+        };
+        let Ok(storage) = WalletData::from_boc(data) else {
+            return Ok(None);
+        };
+
+        let value = match method {
+            "seqno" => format!("0x{:x}", storage.seqno),
+            "get_subwallet_id" => format!("0x{:x}", storage.wallet_id),
+            _ => {
+                let mut encoded = String::with_capacity(66);
+                encoded.push_str("0x");
+                for byte in storage.public_key.as_slice() {
+                    encoded.push_str(&format!("{byte:02x}"));
+                }
+                encoded
+            }
+        };
+        Ok(Some(json!({
+            "ok": true,
+            "result": {
+                "@type": "smc.runResult",
+                "exit_code": 0,
+                "gas_used": 0,
+                "stack": [["num", value]]
+            }
+        })))
+    }
+
+    fn seqno(&self, address: &str) -> Result<u32, String> {
+        let encoded = self.get_method_number(address, "seqno")?;
+        u32::from_str_radix(encoded.trim_start_matches("0x"), 16).map_err(|error| error.to_string())
+    }
+
+    fn get_method_number(&self, address: &str, method: &str) -> Result<String, String> {
+        let body = self
+            .wallet_get_method(address, method)?
+            .ok_or_else(|| format!("{method} is not a wallet storage get method"))?;
+        body.pointer("/result/stack/0/1")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("{method} response has no numeric stack value: {body}"))
+    }
+
+    fn failure(&mut self, message: &str) -> String {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        format!(
+            "{message}\nstdout:\n{}\nstderr:\n{}",
+            read_log(&self.stdout_path),
+            read_log(&self.stderr_path)
+        )
+    }
+}
+
+impl Drop for Localnet {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn available_port() -> Result<u16, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| error.to_string())?;
+    listener
+        .local_addr()
+        .map(|address| address.port())
+        .map_err(|error| error.to_string())
+}
+
+fn request(
+    client: &Client,
+    method: Method,
+    url: &str,
+    body: Option<&Value>,
+) -> Result<(u16, Value), String> {
+    let mut request = client.request(method, url);
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+
+    let response = request.send().map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let text = response.text().map_err(|error| error.to_string())?;
+    let body = serde_json::from_str(&text)
+        .map_err(|error| format!("HTTP {status} returned invalid JSON: {error}; body: {text}"))?;
+    Ok((status, body))
+}
+
+fn read_log(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|error| format!("<failed to read log: {error}>"))
+}
+
+/// One decoded simulator transaction and the hash the simulator reported for it.
+struct LocalnetTransaction {
+    hash: Option<String>,
+    transaction: Tx,
+}
+
+/// A Toncenter v3 `/api/v3/actions` request for one account's key rotations.
+struct KeyChangeActionsQuery {
+    account: String,
+    limit: usize,
+    offset: usize,
+    newest_first: bool,
+}
+
+impl KeyChangeActionsQuery {
+    /// Toncenter's default page size when a request has no `limit`.
+    const DEFAULT_LIMIT: usize = 10;
+
+    /// Recognizes only `change_wallet_key` action requests with an account filter.
+    ///
+    /// Every other URL, including other v3 action queries, returns `None` and
+    /// keeps the simulator's own answer.
+    fn parse(url: &str) -> Option<Self> {
+        let url = Url::parse(url).ok()?;
+        if !url.path().ends_with("/api/v3/actions") {
+            return None;
+        }
+        let mut account = None;
+        let mut action_type = None;
+        let mut limit = Self::DEFAULT_LIMIT;
+        let mut offset = 0;
+        let mut newest_first = true;
+        for (name, value) in url.query_pairs() {
+            match name.as_ref() {
+                "account" => account = Some(value.into_owned()),
+                "action_type" => action_type = Some(value.into_owned()),
+                "limit" => limit = value.parse().ok()?,
+                "offset" => offset = value.parse().ok()?,
+                "sort" => newest_first = value != "asc",
+                _ => {}
+            }
+        }
+        if action_type.as_deref() != Some(CHANGE_WALLET_KEY_ACTION) {
+            return None;
+        }
+        Some(Self {
+            account: account?,
+            limit,
+            offset,
+            newest_first,
+        })
+    }
+}
+
+/// A successful Wallet rev00 key rotation observed in one transaction.
+struct ObservedKeyRotation {
+    /// The raw address that relayed an internal request, or `None` for an external one.
+    source: Option<String>,
+    new_public_key: [u8; 32],
+    encrypted_old_private_key: [u8; 32],
+}
+
+/// Classifies one transaction as a successful key rotation.
+///
+/// The transaction must not be aborted, its inbound message must be a
+/// `ChangePublicKeyRequestI`/`E`, and it must emit exactly one
+/// `OnKeyHasBeenChangedEvent` log. Contract revisions without the log are not
+/// reported.
+fn observed_key_rotation(transaction: &Tx) -> Option<ObservedKeyRotation> {
+    if transaction_aborted(transaction) {
+        return None;
+    }
+    let in_msg = transaction.msgs.in_msg.as_ref()?;
+    let new_public_key = change_key_request_public_key(&in_msg.body.value)?;
+    let mut logs = transaction
+        .msgs
+        .out_msgs
+        .iter()
+        .filter(|message| matches!(message.info, CommonMsgInfo::ExtOut(_)))
+        .map(parse_key_changed_log);
+    let encrypted_old_private_key = match (logs.next(), logs.next()) {
+        (Some(Ok(encrypted)), None) => encrypted,
+        _ => return None,
+    };
+    let source = match &in_msg.info {
+        CommonMsgInfo::Int(info) => Some(raw_address(
+            &TonAddress::from_msg_address(info.src.clone()).ok()?,
+        )),
+        CommonMsgInfo::ExtIn(_) | CommonMsgInfo::ExtOut(_) => None,
+    };
+    Some(ObservedKeyRotation {
+        source,
+        new_public_key,
+        encrypted_old_private_key,
+    })
+}
+
+/// Reports whether a transaction's description marks it aborted.
+pub(super) fn transaction_aborted(transaction: &Tx) -> bool {
+    match &*transaction.descr {
+        TxDescr::Ord(value) => value.aborted,
+        TxDescr::Storage(_) => false,
+        TxDescr::TickTock(value) => value.aborted,
+        TxDescr::SplitPrepare(value) => value.aborted,
+        TxDescr::SplitInstall(value) => !value.installed,
+        TxDescr::MergePrepare(value) => value.aborted,
+        TxDescr::MergeInstall(value) => value.aborted,
+    }
+}
+
+/// Returns the new public key of a signed `ChangePublicKeyRequestI`/`E` body.
+///
+/// The body is the 512-bit request signature followed by the request:
+/// opcode, subwallet ID, `valid_until`, seqno, and the new 256-bit key.
+pub(super) fn change_key_request_public_key(body: &TonCell) -> Option<[u8; 32]> {
+    let mut parser = body.parser();
+    let _signature = parser.read_bits(REQUEST_SIGNATURE_BITS).ok()?;
+    let opcode: u32 = parser.read_num(32).ok()?;
+    if !CHANGE_PUBLIC_KEY_OPCODES.contains(&opcode) {
+        return None;
+    }
+    let _subwallet_id: u32 = parser.read_num(32).ok()?;
+    let _valid_until: u32 = parser.read_num(32).ok()?;
+    let _seqno: u32 = parser.read_num(32).ok()?;
+    <[u8; 32]>::try_from(parser.read_bits(KEY_BITS).ok()?).ok()
+}
+
+/// Parses one `OnKeyHasBeenChangedEvent` log and returns its encrypted old private key.
+///
+/// The log is an external-out message to `addr_none` whose body is exactly
+/// the 32-bit opcode and the 256-bit encrypted key, with no refs.
+pub(super) fn parse_key_changed_log(message: &Msg) -> Result<[u8; 32], String> {
+    let CommonMsgInfo::ExtOut(info) = &message.info else {
+        return Err("the key-changed log is not an external-out message".to_owned());
+    };
+    if info.dst != MsgAddressExt::NONE {
+        return Err(format!(
+            "the key-changed log destination is {:?}, not addr_none",
+            info.dst
+        ));
+    }
+    if message.init.is_some() {
+        return Err("the key-changed log carries a StateInit".to_owned());
+    }
+    let body = &message.body.value;
+    let expected_bits = KEY_BITS + 32;
+    if body.data_len_bits() != expected_bits || !body.refs().is_empty() {
+        return Err(format!(
+            "the key-changed log body has {} bits and {} refs, expected {expected_bits} bits and no refs",
+            body.data_len_bits(),
+            body.refs().len()
+        ));
+    }
+    let mut parser = body.parser();
+    let opcode: u32 = parser.read_num(32).map_err(|error| error.to_string())?;
+    if opcode != KEY_CHANGED_LOG_OPCODE {
+        return Err(format!(
+            "the key-changed log opcode is {opcode:#010x}, expected {KEY_CHANGED_LOG_OPCODE:#010x}"
+        ));
+    }
+    let encrypted = parser
+        .read_bits(KEY_BITS)
+        .map_err(|error| error.to_string())?;
+    <[u8; 32]>::try_from(encrypted)
+        .map_err(|_| "the key-changed log key is not 32 bytes".to_owned())
+}
+
+/// Formats an address in Toncenter's raw `workchain:HEX` form.
+fn raw_address(address: &TonAddress) -> String {
+    format!(
+        "{}:{}",
+        address.workchain,
+        hex(address.hash.as_slice()).to_ascii_uppercase()
+    )
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn json_response(request: &HttpRequest, body: &Value) -> HttpResponse {
+    HttpResponse {
+        status: 200,
+        headers: vec![HttpHeader {
+            name: "content-type".to_owned(),
+            value: "application/json".to_owned(),
+        }],
+        body: body.to_string().into_bytes(),
+        final_url: request.url.clone(),
+    }
+}
+
+fn host_error(kind: HttpHostErrorKind, diagnostic: &str) -> HttpHostError {
+    HttpHostError::Failed {
+        kind,
+        diagnostic: diagnostic.to_owned(),
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn normalize_u256_hex(value: &str) -> Result<String, String> {
+    let digits = value.strip_prefix("0x").unwrap_or(value);
+    if digits.is_empty()
+        || digits.len() > 64
+        || !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "get_public_key returned an invalid uint256: {value}"
+        ));
+    }
+    Ok(format!("{:0>64}", digits.to_ascii_lowercase()))
+}

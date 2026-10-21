@@ -40,6 +40,7 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
 @interface RTC_OBJC_TYPE (RTCAudioSession)
 () @property(nonatomic,
              readonly) std::vector<__weak id<RTC_OBJC_TYPE(RTCAudioSessionDelegate)> > delegates;
+- (NSString *)tgcallsSessionStateDescription;
 @end
 
 // This class needs to be thread-safe because it is accessed from many threads.
@@ -61,6 +62,16 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
 @synthesize delegates = _delegates;
 @synthesize ignoresPreferredAttributeConfigurationErrors =
     _ignoresPreferredAttributeConfigurationErrors;
+
+static std::atomic<bool> gRTCAudioSessionLegacyDeactivationEnabled{false};
+
++ (void)setLegacyDeactivationEnabled:(BOOL)enabled {
+  gRTCAudioSessionLegacyDeactivationEnabled.store(enabled ? true : false);
+}
+
++ (BOOL)legacyDeactivationEnabled {
+  return gRTCAudioSessionLegacyDeactivationEnabled.load() ? YES : NO;
+}
 
 + (instancetype)sharedInstance {
   static dispatch_once_t onceToken;
@@ -721,6 +732,10 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
   if (![self setConfiguration:webRTCConfig active:YES error:&error disableRecording:disableRecording]) {
     RTCLogError(@"Failed to set WebRTC audio configuration: %@",
                 error.localizedDescription);
+    // The error alone (typically OSStatus -50 from a *preferred* attribute) does not say which
+    // of the possible causes it is: no record permission, a category without an input, or an
+    // input the system is not handing out. Dump the session state so the log can tell them apart.
+    RTCLogError(@"Audio session state at failure: %@", [self tgcallsSessionStateDescription]);
     // Do not call setActive:NO if setActive:YES failed.
     if (outError) {
       *outError = error;
@@ -777,6 +792,57 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
   return YES;
 }
 
+// One-line snapshot of everything that decides whether the audio unit can start.
+// Logged when a configuration attempt fails: an OSStatus on its own does not say
+// whether the input is missing because of permission, because the category has no
+// input, or because the system is not offering one right now.
+- (NSString *)tgcallsSessionStateDescription {
+  AVAudioSession *session = self.session;
+
+  NSString *recordPermission = @"unavailable";
+  if (@available(iOS 17.0, *)) {
+    switch (AVAudioApplication.sharedInstance.recordPermission) {
+      case AVAudioApplicationRecordPermissionGranted: recordPermission = @"granted"; break;
+      case AVAudioApplicationRecordPermissionDenied: recordPermission = @"denied"; break;
+      case AVAudioApplicationRecordPermissionUndetermined: recordPermission = @"undetermined"; break;
+      default: recordPermission = @"unknown"; break;
+    }
+  }
+
+  NSMutableArray<NSString *> *inputs = [[NSMutableArray alloc] init];
+  for (AVAudioSessionPortDescription *port in session.currentRoute.inputs) {
+    [inputs addObject:port.portType];
+  }
+  NSMutableArray<NSString *> *outputs = [[NSMutableArray alloc] init];
+  for (AVAudioSessionPortDescription *port in session.currentRoute.outputs) {
+    [outputs addObject:port.portType];
+  }
+
+  return [NSString stringWithFormat:
+      @"category=%@ options=%lu mode=%@ isActive=%d isInterrupted=%d canPlayOrRecord=%d "
+      @"activations=%d webRTCSessions=%d recordPermission=%@ inputAvailable=%d "
+      @"inputChannels=%ld maxInputChannels=%ld outputChannels=%ld maxOutputChannels=%ld "
+      @"sampleRate=%.0f route.inputs=[%@] route.outputs=[%@] availableInputs=%lu",
+      session.category,
+      (unsigned long)session.categoryOptions,
+      session.mode,
+      (int)self.isActive,
+      (int)self.isInterrupted,
+      (int)self.canPlayOrRecord,
+      self.activationCount,
+      self.webRTCSessionCount,
+      recordPermission,
+      (int)session.isInputAvailable,
+      (long)session.inputNumberOfChannels,
+      (long)session.maximumInputNumberOfChannels,
+      (long)session.outputNumberOfChannels,
+      (long)session.maximumOutputNumberOfChannels,
+      session.sampleRate,
+      [inputs componentsJoinedByString:@","],
+      [outputs componentsJoinedByString:@","],
+      (unsigned long)session.availableInputs.count];
+}
+
 - (NSError *)configurationErrorWithDescription:(NSString *)description {
   NSDictionary* userInfo = @{
     NSLocalizedDescriptionKey: description,
@@ -788,6 +854,19 @@ ABSL_CONST_INIT thread_local bool mutex_locked = false;
 
 - (void)updateAudioSessionAfterEvent {
   BOOL shouldActivate = self.activationCount > 0;
+  if (!shouldActivate && ![RTC_OBJC_TYPE(RTCAudioSession) legacyDeactivationEnabled]) {
+    // Never deactivate the real session from here. In this app the AVAudioSession is owned by
+    // CallKit and ManagedAudioSession; an activation count of zero means no WebRTC device is
+    // running, so whatever is active at that moment (a media player, a call whose CallKit
+    // activation is still being torn down) is not ours to deactivate. Deactivating a CallKit
+    // session mid-call from an interruption-ended or media-services notification silenced the
+    // call; -setActive:error: was already disabled for the same reason, and this was the last
+    // real setActive: call left in this file. Re-activation is kept: it is a no-op on an active
+    // CallKit session and the only explicit re-activation a non-CallKit call gets after an
+    // interruption. The legacy switch restores the stock behaviour below.
+    self.isActive = NO;
+    return;
+  }
   AVAudioSessionSetActiveOptions options = shouldActivate ?
       0 : AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation;
   NSError *error = nil;

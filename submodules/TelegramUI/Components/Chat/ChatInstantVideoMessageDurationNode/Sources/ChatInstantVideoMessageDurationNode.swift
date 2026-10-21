@@ -76,7 +76,7 @@ public final class ChatInstantVideoMessageDurationNode: ASImageNode {
             }
         }
     }
-
+    
     private var updateTimer: SwiftSignalKit.Timer?
     
     private var statusValue: MediaPlayerStatus? {

@@ -37,7 +37,7 @@ from tools.wrapper_common import execute
 # * Executable=/{path to signed target}
 # * using the deprecated --resource-rules flag
 _BENIGN_CODESIGN_OUTPUT_REGEX = re.compile(
-    r"(signed.*Mach-O (universal|thin)|: replacing existing signature|signed generic|Executable=/|Warning: --resource-rules has been deprecated)"
+    r"(signed.*Mach-O (universal|thin)|: replacing existing signature|signed generic|Executable=/|[Ww]arning: --resource-rules has been deprecated)"
 )
 
 
@@ -225,15 +225,26 @@ def _find_smartcard_identities(identity=None):
       # Valid from: 2021-02-12 21:35:04 +0000 to: 2022-02-12 21:35:05 +0000, SSL trust: NO, X509 trust: YES
       #
       expiry_date = re.search(r"(?<=to:)(.*?)(?=,)", data, re.DOTALL).group().strip()
-      expiry_date = datetime.datetime.strptime(expiry_date, "%Y-%m-%d %H:%M:%S %z")
-      now = datetime.datetime.now(expiry_date.tzinfo)
-      if now > expiry_date:
-        continue
+      # Some smartcards report certs with no expiry date as "N/A". Treat an
+      # unparseable expiry as non-expiring rather than crashing.
+      try:
+        expiry_date = datetime.datetime.strptime(expiry_date, "%Y-%m-%d %H:%M:%S %z")
+      except ValueError:
+        expiry_date = None
+      if expiry_date is not None:
+        now = datetime.datetime.now(expiry_date.tzinfo)
+        if now > expiry_date:
+          continue
 
       # This is a valid identity, decode the certificate, extract
       # Common Name and Fingerprint and handle their values accordingly
       # as described above
-      cert = re.search(r"(?<=-----BEGIN CERTIFICATE-----)(.*?)(?=-----END CERTIFICATE-----)", data, re.DOTALL).group().strip()
+      # Some smartcards report entries with no embedded certificate data, in
+      # which case re.search returns None. Skip those rather than crashing.
+      match = re.search(r"(?<=-----BEGIN CERTIFICATE-----)(.*?)(?=-----END CERTIFICATE-----)", data, re.DOTALL)
+      if not match:
+        continue
+      cert = match.group().strip()
       cert = base64.b64decode(cert)
       cert = _certificate_data(cert)
       common_name = _certificate_common_name(cert)
@@ -319,7 +330,8 @@ def _all_paths_to_sign(targets_to_sign, directories_to_sign):
   return all_paths_to_sign
 
 
-def _filter_paths_already_signed(all_paths_to_sign, signed_paths):
+def _filter_paths_already_signed(all_paths_to_sign, signed_paths,
+                                  codesign_path):
   if set(signed_paths) - set(all_paths_to_sign):
     # TODO(b/151635856): Turn this condition into an error when clang_rt libs
     # for the sanitizers are properly scoped to only the *_application
@@ -327,7 +339,27 @@ def _filter_paths_already_signed(all_paths_to_sign, signed_paths):
     print("WARNING: From the set of all paths to sign, signed frameworks were "
           "not found: %s" % (set(signed_paths) - set(all_paths_to_sign)))
     print("Set of all paths to sign contains: %s" % all_paths_to_sign)
-  return [p for p in all_paths_to_sign if p not in signed_paths]
+
+  # Verify that each signed framework's signature is still valid. A
+  # post-processor (e.g. ipa_post_processor) may have modified the binary
+  # after it was signed, invalidating the signature. Such frameworks need to
+  # be re-signed with the correct identity instead of being skipped.
+  # See: https://github.com/bazelbuild/rules_apple/issues/1953
+  verified_signed_paths = set()
+  for signed_path in signed_paths:
+    if signed_path not in all_paths_to_sign:
+      continue
+    result = subprocess.run(
+        [codesign_path, "--verify", signed_path],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+      verified_signed_paths.add(signed_path)
+    else:
+      print("Re-signing %s (existing signature is invalid, likely modified "
+            "by a post-processor)" % signed_path)
+
+  return [p for p in all_paths_to_sign if p not in verified_signed_paths]
 
 
 def add_parser_arguments(
@@ -419,7 +451,8 @@ def find_identity_and_sign_bundle_paths(args: argparse.Namespace) -> int:
   signed_path = args.signed_path
   if signed_path:
     all_paths_to_sign = _filter_paths_already_signed(all_paths_to_sign,
-                                                     signed_path)
+                                                     signed_path,
+                                                     args.codesign)
 
   for path_to_sign in all_paths_to_sign:
     invoke_codesign(

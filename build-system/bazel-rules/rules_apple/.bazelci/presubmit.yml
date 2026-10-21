@@ -5,26 +5,19 @@ x_defaults:
   common: &common
     platform: macos_arm64
     shell_commands:
-    - xcodebuild -downloadComponent metalToolchain
-    - xcrun simctl runtime list
-    - xcrun simctl runtime match list
-    - xcrun simctl runtime dyld_shared_cache update --all
-    post_shell_commands:
-    - xcrun simctl runtime match list
+      - xcodebuild -downloadComponent metalToolchain
     build_targets:
-    - "tools/..."
-    - "test/..."
+      - "examples/..."
+      - "test/..."
+      - "tools/..."
     build_flags:
-    - --modify_execution_info=AssetCatalogCompile=+exclusive
+      - --config=ci
     test_targets:
-    - "tools/..."
-    - "test/..."
-    - "examples/..."
+      - "examples/..."
+      - "test/..."
+      - "tools/..."
     test_flags:
-    - --local_test_jobs=2
-    - --modify_execution_info=AssetCatalogCompile=+exclusive
-    - --test_tag_filters=-skipci
-    - --ios_simulator_device=iPhone 16
+      - --config=ci
     include_json_profile:
       - build
       - test
@@ -32,6 +25,11 @@ x_defaults:
 # NOTE: To avoid listing the same things for build_flags/test_flags for each
 # of these tasks, they are listed in the .bazelrc instead.
 tasks:
+  macos_8.0.1:
+    name: "8.0.1"
+    bazel: 8.0.1
+    <<: *common
+
   macos_8.x:
     name: "8.x"
     bazel: 8.x
@@ -42,11 +40,11 @@ tasks:
     bazel: 9.x
     <<: *common
 
-  # TODO: Enable ASAP when we remove usage of `//command_line_option:incompatible_enable_apple_toolchain_resolution`
-  # macos_last_green:
-  #   name: "Last Green Bazel"
-  #   bazel: last_green
-  #   <<: *common
+  macos_last_green:
+    name: "Last Green Bazel"
+    # TODO: use last_green when we fix issues, this is the removal of incompatible_enable_apple_toolchain_resolution
+    bazel: 49f430d594662938d1a04e2c2a29f215d74f7f61
+    <<: *common
 
   doc_tests:
     name: "Doc tests"
@@ -55,4 +53,4 @@ tasks:
     test_targets:
     - "doc/..."
 
-buildifier: 8.2.1
+buildifier: 8.5.1

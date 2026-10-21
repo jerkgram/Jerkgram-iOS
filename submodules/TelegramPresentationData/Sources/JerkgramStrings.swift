@@ -951,10 +951,10 @@ public extension JerkgramStrings {
 }
 
 public enum JerkgramReleaseIdentity {
-    public static let displayVersion = "1.0.2"
-    public static let technicalVersion = "1.0.2"
-    public static let build = "138"
-    public static let telegramBase = "12.9.2"
+    public static let displayVersion = "1.1.0"
+    public static let technicalVersion = "1.1.0"
+    public static let build = "163"
+    public static let telegramBase = "13.0"
 
     public static var aboutText: String {
         return "Jerkgram Version \(displayVersion)\nBuild \(build)\nTelegram Base \(telegramBase)"

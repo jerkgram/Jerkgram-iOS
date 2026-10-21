@@ -12,12 +12,19 @@ test --build_tests_only
 
 # We don't need to bump some of our dependencies, just becuse our dev
 # dependencies cause us to use a newer version
-build --check_direct_dependencies=off
+common --check_direct_dependencies=off
 
 # Disable the worker, which has sandboxing disabled by default, which can hide
 # issues with non-hermetic bugs.
 build --spawn_strategy=sandboxed,local
 build --worker_sandboxing=true
 
+build:ci --//apple/build_settings:ios_simulator_device="iPhone 16"
+build:ci --local_test_jobs=2
+build:ci --modify_execution_info=AssetCatalogCompile=+exclusive
+build:ci --test_tag_filters=-skipci
+
 # Use llvm-cov instead of gcov (default).
 coverage --experimental_use_llvm_covmap
+
+try-import %workspace%/user.bazelrc

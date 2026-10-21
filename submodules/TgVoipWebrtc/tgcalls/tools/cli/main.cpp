@@ -20,12 +20,18 @@
 
 #include "group_mode.h"
 #include "group_churn_mode.h"
+#include "group_participant.h"
+#include "platform/fake/FakeInterface.h"
 #include "Instance.h"
 #include "FakeAudioDeviceModule.h"
 #include "VideoCaptureInterface.h"
+#include "StaticThreads.h"
 #include "v2/InstanceV2Impl.h"
 #include "v2/InstanceV2CompatImpl.h"
 #include "v2/InstanceV2ReferenceImpl.h"
+#include "v2wasm/InstanceV2PumpImpl.h"
+
+#include "third-party/json11.hpp"
 
 #include "modules/audio_device/include/audio_device.h"
 #include "api/task_queue/task_queue_factory.h"
@@ -208,6 +214,31 @@ struct CallState {
     std::vector<std::string> errors;
 };
 
+// Merges the optional --custom-params JSON object with the wasm_core_path entry the CLI
+// synthesises, so a test can set engine custom parameters without losing --wasm-core.
+static std::string buildCustomParameters(std::string const &wasmCorePath, std::string const &extraJson) {
+    json11::Json::object params;
+
+    if (!extraJson.empty()) {
+        std::string parsingError;
+        auto parsed = json11::Json::parse(extraJson, parsingError);
+        if (!parsed.is_object()) {
+            fprintf(stderr, "Error: --custom-params must be a JSON object: %s\n", parsingError.c_str());
+            exit(1);
+        }
+        params = parsed.object_items();
+    }
+
+    if (!wasmCorePath.empty()) {
+        params["wasm_core_path"] = wasmCorePath;
+    }
+
+    if (params.empty()) {
+        return std::string();
+    }
+    return json11::Json(params).dump();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -219,15 +250,27 @@ int main(int argc, char* argv[]) {
     std::string reflectorList;
     std::string version = "13.0.0";
     std::string version2;
+    std::string wasmCore;
+    std::string wasmCore2;
+    std::string customParams;
+    std::string customParams2;
+    std::string logFile;
     double dropRate = 0.0;
     int delayMinMs = 0;
     int delayMaxMs = 0;
     int participants = 3;
     int referenceParticipants = 0;
     bool enableVideo = false;
+    bool earlyVideoRequest = false;
+    bool videoSinkChurn = false;
+    bool videoRerequest = false;
+    bool e2e = false;
+    VideoFeed videoFeed = VideoFeed::Source;
+    bool requestOwnVideo = false;
     int churnCycles = 100;
     std::string networkScenario;
     std::set<int> mutedParticipants;
+    int unmuteAfterSeconds = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--duration" && i + 1 < argc) {
@@ -246,16 +289,56 @@ int main(int argc, char* argv[]) {
             version = argv[++i];
         } else if (std::string(argv[i]) == "--version2" && i + 1 < argc) {
             version2 = argv[++i];
+        } else if (std::string(argv[i]) == "--wasm-core" && i + 1 < argc) {
+            wasmCore = argv[++i];
+        } else if (std::string(argv[i]) == "--wasm-core2" && i + 1 < argc) {
+            wasmCore2 = argv[++i];
+        } else if (std::string(argv[i]) == "--custom-params" && i + 1 < argc) {
+            customParams = argv[++i];
+        } else if (std::string(argv[i]) == "--custom-params2" && i + 1 < argc) {
+            customParams2 = argv[++i];
+        } else if (std::string(argv[i]) == "--log-file" && i + 1 < argc) {
+            logFile = argv[++i];
         } else if (std::string(argv[i]) == "--participants" && i + 1 < argc) {
             participants = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--reference-participants" && i + 1 < argc) {
             referenceParticipants = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--video") {
             enableVideo = true;
+        } else if (std::string(argv[i]) == "--early-video-request") {
+            earlyVideoRequest = true;
+        } else if (std::string(argv[i]) == "--e2e") {
+            e2e = true;
+        } else if (std::string(argv[i]) == "--video-sink-churn") {
+            videoSinkChurn = true;
+        } else if (std::string(argv[i]) == "--video-rerequest") {
+            videoRerequest = true;
+        } else if (std::string(argv[i]) == "--video-quality" && i + 1 < argc) {
+            std::string quality = argv[++i];
+            if (quality == "thumbnail") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Thumbnail);
+            } else if (quality == "medium") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Medium);
+            } else if (quality == "full") {
+                setRequestedVideoMaxQuality(tgcalls::VideoChannelDescription::Quality::Full);
+            } else {
+                fprintf(stderr, "--video-quality must be thumbnail, medium or full\n");
+                return 1;
+            }
+        } else if (std::string(argv[i]) == "--video-via-capture") {
+            videoFeed = VideoFeed::CaptureAtJoin;
+        } else if (std::string(argv[i]) == "--video-via-capture-late") {
+            videoFeed = VideoFeed::CaptureLate;
+        } else if (std::string(argv[i]) == "--request-own-video") {
+            requestOwnVideo = true;
+        } else if (std::string(argv[i]) == "--builtin-codec-order") {
+            tgcalls::setFakePlatformBuiltinCodecOrder(true);
         } else if (std::string(argv[i]) == "--churn-cycles" && i + 1 < argc) {
             churnCycles = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--network-scenario" && i + 1 < argc) {
             networkScenario = argv[++i];
+        } else if (std::string(argv[i]) == "--unmute-after" && i + 1 < argc) {
+            unmuteAfterSeconds = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--mute-participants" && i + 1 < argc) {
             std::string list = argv[++i];
             size_t pos = 0;
@@ -281,6 +364,15 @@ int main(int argc, char* argv[]) {
 
     if (version2.empty()) {
         version2 = version;
+    }
+    if (wasmCore == "NONE") {
+        wasmCore = "";
+    }
+    if (wasmCore2.empty()) {
+        wasmCore2 = wasmCore;
+    }
+    if (wasmCore2 == "NONE") {
+        wasmCore2 = "";
     }
 
     // If --reflector-list provided, pick one at random
@@ -321,7 +413,7 @@ int main(int argc, char* argv[]) {
 
     // Group mode: dispatch to separate implementation
     if (mode == "group") {
-        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants);
+        return runGroupMode(participants, referenceParticipants, duration, gQuiet, enableVideo, networkScenario, mutedParticipants, earlyVideoRequest, videoSinkChurn, e2e, videoFeed, requestOwnVideo, unmuteAfterSeconds, videoRerequest);
     }
     if (mode == "group-churn") {
         return runGroupChurnMode(participants, referenceParticipants, duration, gQuiet, enableVideo, churnCycles);
@@ -371,6 +463,7 @@ int main(int argc, char* argv[]) {
     tgcalls::Register<tgcalls::InstanceV2Impl>();
     tgcalls::Register<tgcalls::InstanceV2CompatImpl>();
     tgcalls::Register<tgcalls::InstanceV2ReferenceImpl>();
+    tgcalls::Register<tgcalls::InstanceV2PumpImpl>();
 
     // Create shared encryption key
     auto keyData = std::make_shared<std::array<uint8_t, 256>>();
@@ -399,6 +492,18 @@ int main(int argc, char* argv[]) {
     std::string callerStatsPath = "/tmp/tgcalls_cli_caller_" + std::to_string(getpid()) + ".json";
     std::string calleeStatsPath = "/tmp/tgcalls_cli_callee_" + std::to_string(getpid()) + ".json";
 
+    // --video in p2p/reflector mode: both sides start with the camera already on,
+    // the app's descriptor.videoCapture path (the join-time capture in group mode).
+    // This is the shape that exposed the 18/19 start-glare renegotiation loop.
+    std::shared_ptr<tgcalls::VideoCaptureInterface> callerVideoCapture;
+    std::shared_ptr<tgcalls::VideoCaptureInterface> calleeVideoCapture;
+    if (enableVideo) {
+        auto threads = tgcalls::StaticThreads::getThreads();
+        callerVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "caller");
+        calleeVideoCapture = tgcalls::VideoCaptureInterface::Create(threads, "callee");
+        logMsg("Main", "video capture attached to both descriptors");
+    }
+
     // --- Caller descriptor ---
     auto callerDesc = (tgcalls::Descriptor){
         .version = version,
@@ -407,11 +512,16 @@ int main(int argc, char* argv[]) {
             .receiveTimeout = 10.0,
             .enableP2P = (mode == "p2p"),
             .statsLogPath = {callerStatsPath},
+            // rtc log sinks are process-global, so wiring logPath on just the caller
+            // captures RTC_LOG output for both sides of the call.
+            .logPath = {logFile},
+            .customParameters = buildCustomParameters(wasmCore, customParams),
         },
         .rtcServers = (mode == "reflector")
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, callerPeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, true),
+        .videoCapture = callerVideoCapture,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Caller", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -442,11 +552,13 @@ int main(int argc, char* argv[]) {
             .receiveTimeout = 10.0,
             .enableP2P = (mode == "p2p"),
             .statsLogPath = {calleeStatsPath},
+            .customParameters = buildCustomParameters(wasmCore2, customParams2),
         },
         .rtcServers = (mode == "reflector")
             ? std::vector<tgcalls::RtcServer>{makeReflectorServer(reflectorHost, reflectorPort, calleePeerTag)}
             : std::vector<tgcalls::RtcServer>{},
         .encryptionKey = tgcalls::EncryptionKey(keyData, false),
+        .videoCapture = calleeVideoCapture,
         .stateUpdated = [callState](tgcalls::State state) {
             logMsg("Callee", "state -> %s", stateName(state));
             std::lock_guard<std::mutex> lock(callState->mutex);
@@ -512,6 +624,12 @@ int main(int argc, char* argv[]) {
         };
     };
 
+    if (callerVideoCapture) {
+        callerVideoCapture->setState(tgcalls::VideoState::Inactive);
+    }
+    if (calleeVideoCapture) {
+        calleeVideoCapture->setState(tgcalls::VideoState::Inactive);
+    }
     callerInstance->stop(onStopped("Caller"));
     calleeInstance->stop(onStopped("Callee"));
 

@@ -15,13 +15,20 @@
 """apple_dynamic_xcframework_import Starlark tests."""
 
 load(
+    "//apple:ios.bzl",
+    "ios_build_test",
+)
+load(
     "//apple/build_settings:build_settings.bzl",
     "build_settings_labels",
 )
 load(
+    "//test/starlark_tests/rules:action_inputs_test.bzl",
+    "make_action_inputs_test_rule",
+)
+load(
     "//test/starlark_tests/rules:analysis_failure_message_test.bzl",
     "analysis_failure_message_test",
-    "analysis_failure_message_with_tree_artifact_outputs_test",
 )
 load(
     "//test/starlark_tests/rules:analysis_output_group_info_files_test.bzl",
@@ -31,6 +38,7 @@ load(
 load(
     "//test/starlark_tests/rules:analysis_target_actions_test.bzl",
     "analysis_contains_xcframework_processor_action_test",
+    "make_analysis_target_actions_test",
 )
 load(
     "//test/starlark_tests/rules:apple_verification_test.bzl",
@@ -41,9 +49,32 @@ load(
     "archive_contents_test",
     "binary_contents_test",
 )
+load(
+    "//test/starlark_tests/rules:directory_test.bzl",
+    "directory_test",
+)
+load(
+    ":common.bzl",
+    "common",
+)
 
 analysis_output_group_info_files_with_xcframework_processor_test = make_analysis_output_group_info_files_test({
     build_settings_labels.parse_xcframework_info_plist: True,
+})
+
+action_inputs_with_ios_x86_64_platform_test = make_action_inputs_test_rule({
+    "//command_line_option:platforms": str(Label("@apple_support//platforms:ios_x86_64")),
+})
+
+action_inputs_with_ios_x86_64_import_via_swiftinterface_platform_test = make_action_inputs_test_rule({
+    "//command_line_option:features": [
+        "apple._import_framework_via_swiftinterface",
+    ],
+    "//command_line_option:platforms": str(Label("@apple_support//platforms:ios_x86_64")),
+})
+
+analysis_actions_with_ios_x86_64_platform_test = make_analysis_target_actions_test({
+    "//command_line_option:platforms": str(Label("@apple_support//platforms:ios_x86_64")),
 })
 
 def apple_dynamic_xcframework_import_test_suite(name):
@@ -127,6 +158,140 @@ def apple_dynamic_xcframework_import_test_suite(name):
         ],
         tags = [name],
     )
+    action_inputs_with_ios_x86_64_platform_test(
+        name = "{}_declares_private_swiftinterface_inputs".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:dynamic_swift_xcframework_with_private_swiftinterface_depending_swift_lib",
+        mnemonic = "SwiftCompile",
+        expected_inputs = [
+            "Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+            "Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+            "Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftinterface",
+            "Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.private.swiftinterface",
+        ],
+        tags = [name],
+    )
+
+    analysis_actions_with_ios_x86_64_platform_test(
+        name = "{}_does_not_compile_module_from_swiftinterface_implicit_modules".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:ios_imported_swift_dynamic_xcframework_with_private_swiftinterface",
+        target_mnemonic = "CppModuleMap",
+        not_expected_mnemonic = ["SwiftCompileModuleInterface"],
+        tags = [name],
+    )
+
+    action_inputs_with_ios_x86_64_import_via_swiftinterface_platform_test(
+        name = "{}_compiles_module_from_swiftinterface".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:ios_imported_swift_dynamic_xcframework_with_private_swiftinterface",
+        mnemonic = "SwiftCompileModuleInterface",
+        expected_inputs = [
+            "Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+            "Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+            "Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftinterface",
+            "Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.private.swiftinterface",
+        ],
+        tags = [name],
+    )
+
+    action_inputs_with_ios_x86_64_import_via_swiftinterface_platform_test(
+        name = "{}_compiles_private_modulemap_from_swiftinterface".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:ios_imported_swift_dynamic_xcframework_with_private_modulemap",
+        mnemonic = "SwiftCompileModuleInterface",
+        expected_inputs = [
+            "Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+            "Swift3PFmwkWithGenHeader.framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h",
+            "Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+            "Swift3PFmwkWithGenHeader.framework/Modules/module.private.modulemap",
+            "Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftinterface",
+        ],
+        tags = [name],
+    )
+    action_inputs_with_ios_x86_64_platform_test(
+        name = "{}_precompiles_private_modulemap_from_swiftinterface_explicit_modules".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:ios_imported_swift_dynamic_xcframework_with_private_modulemap_explicit_modules",
+        mnemonic = "SwiftPrecompileCModule",
+        expected_inputs = [
+            "Swift3PFmwkWithGenHeader.framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h",
+            "Swift3PFmwkWithGenHeader.framework/Modules/module.private.modulemap",
+        ],
+        tags = [name],
+    )
+    action_inputs_with_ios_x86_64_platform_test(
+        name = "{}_precompiles_private_modulemap_without_swiftmodule_explicit_modules".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:ios_imported_dynamic_xcframework_with_private_modulemap_no_swiftmodule_explicit_modules",
+        mnemonic = "SwiftPrecompileCModule",
+        expected_inputs = [
+            "Swift3PFmwkWithGenHeader.framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h",
+            "Swift3PFmwkWithGenHeader.framework/Modules/module.private.modulemap",
+        ],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_private_modulemap_swiftinterface_implicit_modules_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:dynamic_swift_xcframework_with_private_modulemap_depending_swift_lib"],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_private_modulemap_swiftinterface_explicit_modules_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:dynamic_swift_xcframework_with_private_modulemap_explicit_modules_depending_swift_lib"],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_private_modulemap_direct_private_import_implicit_modules_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:dynamic_swift_xcframework_with_private_modulemap_direct_private_import_depending_swift_lib"],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_private_modulemap_direct_private_import_explicit_modules_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:dynamic_swift_xcframework_with_private_modulemap_direct_private_import_explicit_modules_depending_swift_lib"],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_private_modulemap_without_swiftmodule_direct_private_import_implicit_modules_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:dynamic_xcframework_with_private_modulemap_no_swiftmodule_direct_private_import_depending_swift_lib"],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_private_modulemap_without_swiftmodule_direct_private_import_explicit_modules_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:dynamic_xcframework_with_private_modulemap_no_swiftmodule_direct_private_import_explicit_modules_depending_swift_lib"],
+        tags = [name],
+    )
+
+    # Framework with swiftmodule and generated modulemap
+    ios_build_test(
+        name = "{}_swiftmodule_xcframework_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:swiftmodule_xcframework_consumer"],
+        tags = [name],
+    )
+    action_inputs_with_ios_x86_64_platform_test(
+        name = "{}_swiftmodule_xcframework_with_modulemap_precompiles_modulemap".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:ios_imported_xcframework_swiftmodule_with_modulemap",
+        mnemonic = "SwiftPrecompileCModule",
+        expected_inputs = [
+            "Swift3PFmwkBinarySwiftmodule.framework/Headers/Swift3PFmwkBinarySwiftmodule.h",
+            "Swift3PFmwkBinarySwiftmodule.framework/Modules/module.modulemap",
+        ],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_swiftmodule_xcframework_with_modulemap_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:swiftmodule_xcframework_with_modulemap_consumer"],
+        tags = [name],
+    )
+    ios_build_test(
+        name = "{}_renamed_xcframework_bundle_uses_framework_module_name_build_test".format(name),
+        minimum_os_version = common.min_os_ios.baseline,
+        targets = ["//test/starlark_tests/targets_under_test/ios:renamed_bundle_dynamic_xcframework_depending_swift_lib"],
+        tags = [name],
+    )
+
     archive_contents_test(
         name = "{}_contains_implementation_deps_imported_xcframework_framework_files".format(name),
         build_type = "simulator",
@@ -483,14 +648,23 @@ def apple_dynamic_xcframework_import_test_suite(name):
         tags = [name],
     )
 
-    # Verify importing XCFramework with versioned frameworks and tree artifacts fails.
-    analysis_failure_message_with_tree_artifact_outputs_test(
-        name = "{}_fails_with_versioned_frameworks_and_tree_artifact_outputs_test".format(name),
-        target_under_test = "//test/starlark_tests/targets_under_test/macos:app_with_imported_dynamic_versioned_xcframework",
-        expected_error = (
-            "The apple_dynamic_xcframework_import rule does not yet support versioned " +
-            "frameworks with the experimental tree artifact feature/build setting."
-        ),
+    directory_test(
+        name = "{}_bundles_versioned_frameworks_with_tree_artifact_outputs_test".format(name),
+        build_settings = {
+            build_settings_labels.use_tree_artifacts_outputs: "True",
+        },
+        build_type = "device",
+        target_under_test = "//test/starlark_tests/targets_under_test/macos:app_with_imported_dynamic_versioned_xcframework_tree_artifacts",
+        expected_directories = {
+            "app_with_imported_dynamic_versioned_xcframework_tree_artifacts.app": [
+                "Contents/Frameworks/generated_dynamic_macos_versioned_xcframework.framework/Resources/Info.plist",
+                "Contents/Frameworks/generated_dynamic_macos_versioned_xcframework.framework/Versions/Current/Resources/Info.plist",
+                "Contents/Frameworks/generated_dynamic_macos_versioned_xcframework.framework/Versions/A/Resources/Info.plist",
+                "Contents/Frameworks/generated_dynamic_macos_versioned_xcframework.framework/generated_dynamic_macos_versioned_xcframework",
+                "Contents/Frameworks/generated_dynamic_macos_versioned_xcframework.framework/Versions/Current/generated_dynamic_macos_versioned_xcframework",
+                "Contents/Frameworks/generated_dynamic_macos_versioned_xcframework.framework/Versions/A/generated_dynamic_macos_versioned_xcframework",
+            ],
+        },
         tags = [name],
     )
 

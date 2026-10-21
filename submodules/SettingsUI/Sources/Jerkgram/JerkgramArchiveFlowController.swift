@@ -301,7 +301,7 @@ private func jerkgramProjectImportedSettingsToActiveDefaults(_ snapshot: Jerkgra
         if let value = snapshot.toggles[portableKey] {
             defaults.set(value, forKey: legacyKey)
             if legacyKey == "GhostBase.GhostMode.ScheduledSend" {
-                (UserDefaults(suiteName: "group.ph.telegra.Telegraph") ?? defaults).set(value, forKey: legacyKey)
+                (UserDefaults(suiteName: "group.com.jerkgram.ios") ?? defaults).set(value, forKey: legacyKey)
             }
         }
     }

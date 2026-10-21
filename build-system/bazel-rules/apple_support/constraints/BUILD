@@ -48,10 +48,16 @@ constraint_value(
     constraint_setting = ":target_vendor",
 )
 
-# Consumed by bazel tests.
-filegroup(
-    name = "for_bazel_tests",
-    testonly = True,
-    srcs = glob(["**"]),
-    visibility = ["//:__pkg__"],
+# A constraint to indicate whether the platform supports Apple's pointer
+# authentication.
+constraint_setting(
+    name = "pointer_authentication_setting",
+    visibility = ["//visibility:private"],
+)
+
+# If a platform has this constraint_value, it supports Apple's pointer
+# authentication.
+constraint_value(
+    name = "pointer_authentication",
+    constraint_setting = ":pointer_authentication_setting",
 )

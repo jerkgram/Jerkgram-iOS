@@ -58,7 +58,7 @@ private final class PeerInfoScreenMemberItemNode: PeerInfoScreenItemNode {
     private let selectionNode: PeerInfoScreenSelectableBackgroundNode
     private let maskNode: ASImageNode
     private let bottomSeparatorNode: ASDisplayNode
-
+    
     private let ghostBaseBotBadgeBackgroundNode: ASDisplayNode
     private let ghostBaseBotBadgeTextNode: ImmediateTextNode
     
@@ -75,7 +75,7 @@ private final class PeerInfoScreenMemberItemNode: PeerInfoScreenItemNode {
         
         self.bottomSeparatorNode = ASDisplayNode()
         self.bottomSeparatorNode.isLayerBacked = true
-
+        
         self.ghostBaseBotBadgeBackgroundNode = ASDisplayNode()
         self.ghostBaseBotBadgeBackgroundNode.isUserInteractionEnabled = false
         self.ghostBaseBotBadgeTextNode = ImmediateTextNode()
@@ -256,20 +256,20 @@ private final class PeerInfoScreenMemberItemNode: PeerInfoScreenItemNode {
             itemNode = current
             peerItem.updateNode(async: { $0() }, node: {
                 return itemNode
-            }, params: params, previousItem: nil, nextItem: nil, animation: .None, completion: { (layout, apply) in
+            }, params: params, neighbors: .none, animation: .None, completion: { (layout, apply) in
                 let nodeFrame = CGRect(origin: CGPoint(), size: CGSize(width: width, height: layout.size.height))
                 
                 itemNode.contentSize = layout.contentSize
                 itemNode.insets = layout.insets
                 itemNode.frame = nodeFrame
                 
-                apply(ListViewItemApply(isOnScreen: true))
+                apply(ListViewItemApply())
             })
         } else {
             var itemNodeValue: ListViewItemNode?
-            peerItem.nodeConfiguredForParams(async: { $0() }, params: params, synchronousLoads: synchronousLoads, previousItem: nil, nextItem: nil, completion: { node, apply in
+            peerItem.nodeConfiguredForParams(async: { $0() }, params: params, synchronousLoads: synchronousLoads, neighbors: .none, completion: { node, apply in
                 itemNodeValue = node
-                apply().1(ListViewItemApply(isOnScreen: true))
+                apply().1(ListViewItemApply())
             })
             itemNode = itemNodeValue as! ItemListPeerItemNode
             self.itemNode = itemNode
@@ -279,7 +279,7 @@ private final class PeerInfoScreenMemberItemNode: PeerInfoScreenItemNode {
         itemNode.visibility = .visible(1.0, .infinite)
         
         let height = itemNode.contentSize.height
-
+        
         if ghostBaseIsBotAccountRow {
             let badgeTextColor = UIColor(rgb: 0x8f5bd7)
             let badgeBackgroundColor = badgeTextColor.withAlphaComponent(0.18)

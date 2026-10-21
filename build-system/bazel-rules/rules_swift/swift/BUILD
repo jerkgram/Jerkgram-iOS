@@ -10,20 +10,20 @@ load(":swift_module_mapping.bzl", "swift_module_mapping")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(
+    ["providers.bzl"],
+    visibility = ["//doc:__pkg__"],
+)
+
 licenses(["notice"])
 
 bzl_library(
     name = "extensions",
     srcs = ["extensions.bzl"],
-    deps = [":repositories"],
-)
-
-bzl_library(
-    name = "repositories",
-    srcs = ["repositories.bzl"],
     deps = [
-        "//doc:bazel_tools_bzl",
-        "//swift/internal:swift_autoconfiguration",
+        "//swift/internal/extensions:standalone_toolchain",
+        "//swift/internal/extensions:swift_sdk_releases",
+        "//swift/internal/extensions:toolchains",
     ],
 )
 
@@ -68,6 +68,7 @@ bzl_library(
     deps = [
         ":module_name",
         ":providers",
+        ":swift_interop_info",
         "//swift/internal:compiling",
         "//swift/internal:feature_names",
         "//swift/internal:features",
@@ -87,6 +88,7 @@ bzl_library(
     srcs = ["swift_common.bzl"],
     deps = [
         "//swift/internal:actions",
+        "//swift/internal:attrs",
         "//swift/internal:compiling",
         "//swift/internal:features",
         "//swift/internal:interface_synthesizing",
@@ -108,10 +110,10 @@ bzl_library(
         "//swift/internal:output_groups",
         "//swift/internal:toolchain_utils",
         "//swift/internal:utils",
+        "@apple_support//lib:apple_support",
+        "@apple_support//lib:lipo",
+        "@apple_support//lib:transitions",
         "@bazel_skylib//lib:dicts",
-        "@build_bazel_apple_support//lib:apple_support",
-        "@build_bazel_apple_support//lib:lipo",
-        "@build_bazel_apple_support//lib:transitions",
         "@rules_cc//cc/common",
     ],
 )
@@ -230,7 +232,7 @@ bzl_library(
 
 bzl_library(
     name = "swift_module_mapping_test",
-    srcs = ["swift_module_mapping_test.bzl"],
+    srcs = ["swift_module_mapping_test.bzl"],  # keep
     deps = [
         ":providers",
         "//swift/internal:providers",
@@ -294,7 +296,7 @@ bzl_library(
 
 bzl_library(
     name = "swift_test",
-    srcs = ["swift_test.bzl"],
+    srcs = ["swift_test.bzl"],  # keep
     deps = [
         ":module_name",
         ":providers",
@@ -342,19 +344,10 @@ bzl_library(
         ":swift_symbol_graph_aspect",
         ":swift_synthesize_interface_aspect",
         ":swift_test",
-    ],
-)
-
-# Consumed by Bazel integration tests.
-filegroup(
-    name = "for_bazel_tests",
-    testonly = True,
-    srcs = glob(["**"]) + [
-        "//swift/internal:for_bazel_tests",
-        "//swift/toolchains:for_bazel_tests",
-    ],
-    visibility = [
-        "//:__pkg__",
+        "//swift/internal:system_clang_module",
+        "//swift/internal:system_module_group",
+        "//swift/internal:system_swiftinterface",
+        "//swift/internal:system_swiftmodule",
     ],
 )
 
@@ -400,7 +393,7 @@ per_module_swiftcopt_flag(
 # //tools/protoc_wrapper:protoc for swift_grpc_library and swift_proto_library,
 # unless you set --proto_compiler manually.
 # If you use this flag, we recommend to also set
-# --proto_compiler=@build_bazel_rules_swift//tools/protoc_wrapper:protoc to
+# --proto_compiler=@rules_swift//tools/protoc_wrapper:protoc to
 # ensure that the same proto compiler is used across your builds.
 bool_flag(
     name = "universal_tools",

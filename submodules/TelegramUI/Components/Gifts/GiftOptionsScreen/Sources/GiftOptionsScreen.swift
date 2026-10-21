@@ -31,169 +31,6 @@ import GlassBarButtonComponent
 
 
 
-private struct GhostBaseSeasonalGiftDescriptor {
-    let id: Int64
-    let title: String
-    let price: Int64
-    let stickerIndex: Int
-}
-
-private let ghostBaseSeasonalGiftDescriptors: [
-    GhostBaseSeasonalGiftDescriptor
-] = [
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5956217000635139069,
-        title: "New Year Bear",
-        price: 50,
-        stickerIndex: 1
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5922558454332916696,
-        title: "Christmas Tree",
-        price: 50,
-        stickerIndex: 2
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5800655655995968830,
-        title: "Valentine Bear",
-        price: 50,
-        stickerIndex: 3
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5866352046986232958,
-        title: "March 8 Bear",
-        price: 50,
-        stickerIndex: 4
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5801108895304779062,
-        title: "Valentine Card",
-        price: 50,
-        stickerIndex: 5
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5893356958802511476,
-        title: "Leprechaun Bear",
-        price: 50,
-        stickerIndex: 6
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5935895822435615975,
-        title: "April 1 Bear",
-        price: 50,
-        stickerIndex: 7
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5969796561943660080,
-        title: "Easter Bear",
-        price: 50,
-        stickerIndex: 8
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 6026193266406327981,
-        title: "Builder Bear",
-        price: 50,
-        stickerIndex: 9
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 5974210632977745012,
-        title: "Football Bear",
-        price: 50,
-        stickerIndex: 10
-    ),
-    GhostBaseSeasonalGiftDescriptor(
-        id: 6046178578163303744,
-        title: "Мишка",
-        price: 50,
-        stickerIndex: 11
-    )
-]
-
-private let ghostBaseSeasonalGiftIds = Set(
-    ghostBaseSeasonalGiftDescriptors.map(\.id)
-)
-
-private func ghostBaseIsSeasonalGift(
-    _ gift: StarGift
-) -> Bool {
-    if case let .generic(gift) = gift {
-        return ghostBaseSeasonalGiftIds.contains(gift.id)
-    } else {
-        return false
-    }
-}
-
-private func ghostBaseMakeSeasonalGifts(
-    items: [StickerPackItem]
-) -> [StarGift] {
-    var result: [StarGift] = []
-
-    for descriptor in ghostBaseSeasonalGiftDescriptors {
-        guard descriptor.stickerIndex >= 0,
-              descriptor.stickerIndex < items.count else {
-            continue
-        }
-
-        let file =
-            items[descriptor.stickerIndex].file._parse()
-
-        let gift = StarGift.Gift(
-            id: descriptor.id,
-            title: descriptor.title,
-            file: file,
-            price: descriptor.price,
-            convertStars: 0,
-            availability: nil,
-            soldOut: nil,
-            flags: [],
-            upgradeStars: nil,
-            releasedBy: nil,
-            perUserLimit: nil,
-            lockedUntilDate: nil,
-            auctionSlug: nil,
-            auctionGiftsPerRound: nil,
-            auctionStartDate: nil,
-            upgradeVariantsCount: nil,
-            background: nil
-        )
-
-        result.append(.generic(gift))
-    }
-
-    return result
-}
-
-private func ghostBaseMergeSeasonalGifts(
-    serverGifts: [StarGift],
-    seasonalGifts: [StarGift]
-) -> [StarGift] {
-    let serverIds = Set(serverGifts.map(\.id))
-
-    let additions = seasonalGifts.filter {
-        !serverIds.contains($0.id)
-    }
-
-    guard !additions.isEmpty else {
-        return serverGifts
-    }
-
-    var insertionIndex = 0
-
-    for (index, gift) in serverGifts.enumerated() {
-        if case let .generic(gift) = gift,
-           gift.availability == nil {
-            insertionIndex = index + 1
-        }
-    }
-
-    var result = serverGifts
-    result.insert(
-        contentsOf: additions,
-        at: min(insertionIndex, result.count)
-    )
-
-    return result
-}
 
 final class GiftOptionsScreenComponent: Component {
     typealias EnvironmentType = ViewControllerComponentContainer.Environment
@@ -251,7 +88,6 @@ final class GiftOptionsScreenComponent: Component {
         case limited
         case inStock
         case resale
-        case seasonal
         case stars(Int64)
         case transfer
         
@@ -268,7 +104,7 @@ final class GiftOptionsScreenComponent: Component {
             case -4:
                 self = .resale
             case -5:
-                self = .seasonal
+                self = .all // Retired category links fall back to the normal catalogue.
             default:
                 self = .stars(rawValue)
             }
@@ -286,8 +122,6 @@ final class GiftOptionsScreenComponent: Component {
                 return -3
             case .resale:
                 return -4
-            case .seasonal:
-                return -5
             case let .stars(stars):
                 return stars
             }
@@ -384,8 +218,6 @@ final class GiftOptionsScreenComponent: Component {
                                         return true
                                     }
                                 }
-                            case .seasonal:
-                                return ghostBaseIsSeasonalGift($0)
                             case .transfer:
                                 break
                             }
@@ -784,14 +616,6 @@ final class GiftOptionsScreenComponent: Component {
                         var isLoading = false
                         switch gift {
                         case let .generic(gift):
-                            if ghostBaseSeasonalGiftIds.contains(
-                                gift.id
-                            ) {
-                                ribbon = GiftItemComponent.Ribbon(
-                                    text: environment.strings.baseLanguageCode == "ru" ? "Сезонный" : "Seasonal",
-                                    color: .blue
-                                )
-                            }
 
                             if let _ = gift.soldOut {
                                 if let availability = gift.availability, availability.resale > 0 {
@@ -1118,26 +942,37 @@ final class GiftOptionsScreenComponent: Component {
                                     }
                                 }
                                 navigationController.setViewControllers(controllers, animated: true)
+                                if let completion = component.completion {
+                                    completion()
+                                }
                             } else {
-                                var controllers = navigationController.viewControllers
-                                controllers = controllers.filter { !($0 is GiftSetupScreen) && !($0 is GiftOptionsScreenProtocol) && !($0 is PeerInfoScreen) && !($0 is ContactSelectionController) }
-                                var foundController = false
-                                for controller in controllers.reversed() {
-                                    if let chatController = controller as? ChatController, case .peer(id: component.peerId) = chatController.chatLocation {
+                                let navigateToChat = {
+                                    var controllers = navigationController.viewControllers
+                                    controllers = controllers.filter { !($0 is GiftSetupScreen) && !($0 is GiftOptionsScreenProtocol) && !($0 is PeerInfoScreen) && !($0 is ContactSelectionController) }
+                                    var foundController = false
+                                    for controller in controllers.reversed() {
+                                        if let chatController = controller as? ChatController, case .peer(id: component.peerId) = chatController.chatLocation {
+                                            chatController.hintPlayNextOutgoingGift()
+                                            foundController = true
+                                            break
+                                        }
+                                    }
+                                    if !foundController {
+                                        let chatController = component.context.sharedContext.makeChatController(context: component.context, chatLocation: .peer(id: component.peerId), subject: nil, botStart: nil, mode: .standard(.default), params: nil)
                                         chatController.hintPlayNextOutgoingGift()
-                                        foundController = true
-                                        break
+                                        controllers.append(chatController)
+                                    }
+                                    navigationController.setViewControllers(controllers, animated: true)
+                                    if let completion = component.completion {
+                                        completion()
                                     }
                                 }
-                                if !foundController {
-                                    let chatController = component.context.sharedContext.makeChatController(context: component.context, chatLocation: .peer(id: component.peerId), subject: nil, botStart: nil, mode: .standard(.default), params: nil)
-                                    chatController.hintPlayNextOutgoingGift()
-                                    controllers.append(chatController)
+                                if peer.id.namespace == Namespaces.Peer.CloudUser {
+                                    let _ = (ApplicationSpecificNotice.incrementDismissedBirthdayPremiumGiftTip(accountManager: component.context.sharedContext.accountManager, peerId: component.peerId, timestamp: Int32(Date().timeIntervalSince1970))
+                                    |> deliverOnMainQueue).startStandalone(completed: navigateToChat)
+                                } else {
+                                    navigateToChat()
                                 }
-                                navigationController.setViewControllers(controllers, animated: true)
-                            }
-                            if let completion = component.completion {
-                                completion()
                             }
                         }
                     }
@@ -1799,22 +1634,7 @@ final class GiftOptionsScreenComponent: Component {
                     id: AnyHashable(StarsFilter.all.rawValue),
                     title: strings.Gift_Options_Gift_Filter_AllGifts
                 ))
-
-                let hasSeasonalGifts =
-                    self.state?.starGifts?.contains(where: {
-                        ghostBaseIsSeasonalGift($0)
-                    }) ?? false
-
-                if hasSeasonalGifts {
-                    tabSelectorItems.append(
-                        TabSelectorComponent.Item(
-                            id: AnyHashable(
-                                StarsFilter.seasonal.rawValue
-                            ),
-                            title: strings.baseLanguageCode == "ru" ? "Сезонные" : "Seasonal"
-                        )
-                    )
-                }
+                
                 
                 if hasTransferGifts {
                     tabSelectorItems.append(TabSelectorComponent.Item(
@@ -1982,22 +1802,6 @@ final class GiftOptionsScreenComponent: Component {
                 ),
                 availableProducts,
                 context.engine.payments.cachedStarGifts(),
-                context.engine.stickers.loadedStickerPack(
-                    reference: .name("DeletedGiftsStickers"),
-                    forceActualized: false
-                )
-                |> map { result -> [StarGift] in
-                    switch result {
-                    case .fetching:
-                        return []
-                    case .none:
-                        return []
-                    case let .result(_, items, _):
-                        return ghostBaseMakeSeasonalGifts(
-                            items: items
-                        )
-                    }
-                },
                 self.starGiftsContext.state
             ).start(next: {
                 [weak self]
@@ -2005,7 +1809,6 @@ final class GiftOptionsScreenComponent: Component {
                 disallowedGifts,
                 availableProducts,
                 starGifts,
-                seasonalGifts,
                 profileGiftsState in
                 guard let self else {
                     return
@@ -2086,11 +1889,7 @@ final class GiftOptionsScreenComponent: Component {
                 var filteredStarGifts: [StarGift]?
 
                 if let starGifts {
-                    filteredStarGifts =
-                        ghostBaseMergeSeasonalGifts(
-                            serverGifts: starGifts,
-                            seasonalGifts: seasonalGifts
-                        )
+                    filteredStarGifts = starGifts
                 } else {
                     filteredStarGifts = nil
                 }

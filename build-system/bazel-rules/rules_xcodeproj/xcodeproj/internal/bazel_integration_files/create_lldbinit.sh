@@ -24,6 +24,8 @@ echo "platform settings -w \"$execution_root\""
 # `bazel-out` when set from Project navigator or swiftsourcefile
 echo "settings set target.source-map ./bazel-out/ \"$BAZEL_OUT\""
 
+# Xcode SDK paths that were removed for hermiticity
+echo "settings append target.source-map /PLACEHOLDER_DEVELOPER_DIR \"$DEVELOPER_DIR\""
 # `external` when set from Project navigator
 echo "settings append target.source-map ./external/ \"$BAZEL_EXTERNAL\""
 # `external` when set from swiftsourcefile
@@ -37,10 +39,10 @@ if [[ "${BAZEL_SEPARATE_INDEXBUILD_OUTPUT_BASE:-}" == "YES" ]]; then
 
   readonly index_bazel_out="$index_execution_root/bazel-out"
   readonly index_external="$index_execution_root/external"
-  
+
   mkdir -p "$index_bazel_out"
   mkdir -p "$index_external"
-  
+
   # `bazel-out` when set from indexing opened file
   echo "settings append target.source-map ./bazel-out/ \"$index_bazel_out\""
   # `external` when set from indexing opened file
@@ -72,21 +74,3 @@ fi
 echo "command script import \"$OBJROOT/$CONFIGURATION/swift_debug_settings.py\""
 
 } > "$BAZEL_LLDB_INIT"
-
-if  [[ -f "$HOME/.lldbinit-Xcode" ]]; then
-  readonly lldbinit="$HOME/.lldbinit-Xcode"
-elif [[ -f "$HOME/.lldbinit" ]]; then
-  readonly lldbinit="$HOME/.lldbinit"
-else
-  readonly lldbinit="$HOME/.lldbinit-Xcode"
-fi
-
-touch "$lldbinit"
-
-readonly required_source='command source ~/.lldbinit-rules_xcodeproj'
-if ! grep -m 1 -q "^$required_source$" "$lldbinit"; then
-  # Add a newline if the file doesn't end with one
-  tail -c 1 "$lldbinit" | read || echo >> "$lldbinit"
-  # Update `$lldbinit to source `~/.lldbinit-rules_xcodeproj`
-  echo "$required_source" >> "$lldbinit"
-fi

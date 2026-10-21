@@ -69,7 +69,6 @@ def _target_arch_from_rule_ctx(ctx):
     arm64_constraint = ctx.attr._arm64_constraint[platform_common.ConstraintValueInfo]
     arm64e_constraint = ctx.attr._arm64e_constraint[platform_common.ConstraintValueInfo]
     arm64_32_constraint = ctx.attr._arm64_32_constraint[platform_common.ConstraintValueInfo]
-    armv7k_constraint = ctx.attr._armv7k_constraint[platform_common.ConstraintValueInfo]
     x86_64_constraint = ctx.attr._x86_64_constraint[platform_common.ConstraintValueInfo]
 
     if ctx.target_platform_has_constraint(arm64_constraint):
@@ -78,8 +77,6 @@ def _target_arch_from_rule_ctx(ctx):
         return "arm64e"
     elif ctx.target_platform_has_constraint(arm64_32_constraint):
         return "arm64_32"
-    elif ctx.target_platform_has_constraint(armv7k_constraint):
-        return "armv7k"
     elif ctx.target_platform_has_constraint(x86_64_constraint):
         return "x86_64"
     fail("ERROR: A valid Apple cpu constraint could not be found from the resolved toolchain.")
@@ -135,17 +132,14 @@ cc_toolchain_forwarder = rule(
         "_arm64_32_constraint": attr.label(
             default = Label("@platforms//cpu:arm64_32"),
         ),
-        "_armv7k_constraint": attr.label(
-            default = Label("@platforms//cpu:armv7k"),
-        ),
         "_x86_64_constraint": attr.label(
             default = Label("@platforms//cpu:x86_64"),
         ),
         "_apple_device_constraint": attr.label(
-            default = Label("@build_bazel_apple_support//constraints:device"),
+            default = Label("//constraints:device"),
         ),
         "_apple_simulator_constraint": attr.label(
-            default = Label("@build_bazel_apple_support//constraints:simulator"),
+            default = Label("//constraints:simulator"),
         ),
     },
     toolchains = use_cpp_toolchain(),

@@ -37,7 +37,7 @@ private enum CustomOperationEvent<T, E> {
 }
 
 private final class UpdatedWebpageSubscriberContext {
-    let subscribers = Bag<(TelegramMediaWebpage) -> Void>()
+    let subscribers = Bag<(TelegramMediaWebpage?) -> Void>()
 }
 
 private final class UpdatedStarsBalanceSubscriberContext {
@@ -252,6 +252,10 @@ public final class AccountStateManager {
         }
         
         private let displayAlertsPipe = ValuePipe<[(text: String, isDropAuth: Bool)]>()
+        func jerkgramDisplayPortableCopyFailure(text: String) {
+            self.displayAlertsPipe.putNext([(text: text, isDropAuth: false)])
+        }
+
         public var displayAlerts: Signal<[(text: String, isDropAuth: Bool)], NoError> {
             return self.displayAlertsPipe.signal()
         }
@@ -329,6 +333,14 @@ public final class AccountStateManager {
         fileprivate let storyUpdatesPipe = ValuePipe<[InternalStoryUpdate]>()
         public var storyUpdates: Signal<[InternalStoryUpdate], NoError> {
             return self.storyUpdatesPipe.signal()
+        }
+
+        fileprivate let walletTransferUpdatesPipe = ValuePipe<[WalletTransferUpdate]>()
+        fileprivate let walletTonConnectUpdatesPipe = ValuePipe<[WalletTonConnectEvent]>()
+
+        fileprivate let walletStateUpdatesPipe = ValuePipe<Api.WalletState>()
+        var walletStateUpdates: Signal<Api.WalletState, NoError> {
+            return self.walletStateUpdatesPipe.signal()
         }
         
         fileprivate let botPreviewUpdatesPipe = ValuePipe<[InternalBotPreviewUpdate]>()
@@ -427,7 +439,7 @@ public final class AccountStateManager {
         }
         
         public func reset() {
-            self.queue.async {
+            self.queue.async { [self] in
                 if self.updateService == nil {
                     self.updateService = UpdateMessageService(peerId: self.accountPeerId)
                     self.updateServiceDisposable.set(self.updateService!.pipe.signal().start(next: { [weak self] groups in
@@ -435,7 +447,7 @@ public final class AccountStateManager {
                             strongSelf.addUpdateGroups(groups)
                         }
                     }))
-                    self.network.mtProto.add(self.updateService)
+                    self.network.addUpdateSink(self.updateService!)
                 }
                 self.operationDisposable.set(nil)
                 self.replaceOperations(with: .pollDifference(self.getNextId(), AccountFinalStateEvents()))
@@ -1135,6 +1147,15 @@ public final class AccountStateManager {
                             }
                             if !events.updatedTonBalance.isEmpty {
                                 strongSelf.notifyUpdatedTonBalance(events.updatedTonBalance)
+                            }
+                            if !events.walletTransferUpdates.isEmpty {
+                                strongSelf.walletTransferUpdatesPipe.putNext(events.walletTransferUpdates)
+                            }
+                            if !events.walletTonConnectEvents.isEmpty {
+                                strongSelf.walletTonConnectUpdatesPipe.putNext(events.walletTonConnectEvents)
+                            }
+                            if let updatedWalletState = events.updatedWalletState {
+                                strongSelf.walletStateUpdatesPipe.putNext(updatedWalletState)
                             }
                             if !events.updatedStarsRevenueStatus.isEmpty {
                                 strongSelf.notifyUpdatedStarsRevenueStatus(events.updatedStarsRevenueStatus)
@@ -1910,7 +1931,7 @@ public final class AccountStateManager {
             }
         }
         
-        public func updatedWebpage(_ webpageId: MediaId) -> Signal<TelegramMediaWebpage, NoError> {
+        public func updatedWebpage(_ webpageId: MediaId) -> Signal<TelegramMediaWebpage?, NoError> {
             let queue = self.queue
             return Signal { [weak self] subscriber in
                 let disposable = MetaDisposable()
@@ -1944,8 +1965,9 @@ public final class AccountStateManager {
             }
         }
         
-        private func notifyUpdatedWebpages(_ updatedWebpages: [MediaId: TelegramMediaWebpage]) {
+        private func notifyUpdatedWebpages(_ updatedWebpages: [MediaId: TelegramMediaWebpage?]) {
             for (id, context) in self.updatedWebpageContexts {
+                // Unwraps the lookup only: a key holding nil is a removal and is delivered.
                 if let media = updatedWebpages[id] {
                     for subscriber in context.subscribers.copyItems() {
                         subscriber(media)
@@ -2209,6 +2231,12 @@ public final class AccountStateManager {
         }
     }
     
+    func jerkgramDisplayPortableCopyFailure(text: String) {
+        self.impl.with { impl in
+            impl.jerkgramDisplayPortableCopyFailure(text: text)
+        }
+    }
+
     public var displayAlerts: Signal<[(text: String, isDropAuth: Bool)], NoError> {
         return self.impl.signalWith { impl, subscriber in
             return impl.displayAlerts.start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
@@ -2510,13 +2538,30 @@ public final class AccountStateManager {
             return impl.updatedTonBalance().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
     }
+
+    func walletTransferUpdates() -> Signal<[WalletTransferUpdate], NoError> {
+        return self.impl.signalWith { impl, subscriber in
+            return impl.walletTransferUpdatesPipe.signal().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+        }
+    }
+
+    func walletTonConnectUpdates() -> Signal<[WalletTonConnectEvent], NoError> {
+        return self.impl.signalWith { impl, subscriber in
+            return impl.walletTonConnectUpdatesPipe.signal().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+        }
+    }
+
+    func walletStateUpdates() -> Signal<Api.WalletState, NoError> {
+        return self.impl.signalWith { impl, subscriber in
+            return impl.walletStateUpdates.start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+        }
+    }
     
     public func updatedStarsRevenueStatus() -> Signal<[PeerId: StarsRevenueStats.Balances], NoError> {
         return self.impl.signalWith { impl, subscriber in
             return impl.updatedStarsRevenueStatus().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
     }
-    
     
     public func updatedStarGiftAuctionState() -> Signal<[Int64: GiftAuctionContext.State.AuctionState], NoError> {
         return self.impl.signalWith { impl, subscriber in
@@ -2542,7 +2587,9 @@ public final class AccountStateManager {
         }
     }
     
-    public func updatedWebpage(_ webpageId: MediaId) -> Signal<TelegramMediaWebpage, NoError> {
+    /// The web page's states as they arrive from the update stream; nil when the server resolved
+    /// it to `webPageEmpty`, i.e. no preview exists for its URL.
+    public func updatedWebpage(_ webpageId: MediaId) -> Signal<TelegramMediaWebpage?, NoError> {
         return self.impl.signalWith { impl, subscriber in
             return impl.updatedWebpage(webpageId).start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
@@ -2559,7 +2606,7 @@ public final class AccountStateManager {
             return impl.standalonePollDifference().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
     }
-
+    
     public func ghostBaseStartBotShadowHistory() {
         self.impl.with { impl in
             impl.ghostBaseStartBotShadowHistory()
@@ -2685,7 +2732,7 @@ func resolveNotificationSettings(list: [TelegramPeerNotificationSettings], defau
 }
 
 public func messagesForNotification(transaction: Transaction, id: MessageId, alwaysReturnMessage: Bool) -> (messages: [Message], notify: Bool, sound: PeerMessageSound, displayContents: Bool, threadData: MessageHistoryThreadData?) {
-    if id.namespace == Namespaces.Message.EphemeralLocal {
+    if id.namespace == Namespaces.Message.EphemeralLocal || Namespaces.Message.allWelcomeMessages.contains(id.namespace) {
         return ([], false, defaultCloudPeerNotificationSound, false, nil)
     }
 

@@ -126,9 +126,7 @@ def _create_autolink_linking_context(
         post_compile_linker_inputs = [
             cc_common.create_linker_input(
                 owner = label,
-                user_link_flags = depset(
-                    ["@{}".format(autolink_file.path)],
-                ),
+                user_link_flags = depset(["@{}".format(autolink_file.path)]),
                 additional_inputs = depset([autolink_file]),
             ),
         ]
@@ -273,6 +271,7 @@ def create_linking_context_from_compilation_outputs(
 
     _, implicit_cc_infos = get_swift_implicit_deps(
         feature_configuration = feature_configuration,
+        include_runtime = False,  # NOTE: Called from swift_library, which should be independent of the final runtime
         swift_toolchain = toolchains.swift,
     )
     extra_linking_contexts = [
@@ -373,6 +372,24 @@ instead.\
         disallow_static_libraries = False,
         disallow_dynamic_library = True,
     )
+
+def entry_point_function_name(module_name):
+    """Returns the name of the entry point function for a module.
+
+    To avoid linking issues for binaries that can also be linked as libraries
+    for tests (`swift_binary`, `swift_compiler_plugin`), we derive a unique name
+    for the entry point based on the module name instead of using `_main`, and
+    then we use the relevant linker flag to ensure that the correct entry point
+    is used for the binary itself. This mirrors the behavior of Swift Package
+    Manager.
+
+    Args:
+        module_name: The name of the module.
+
+    Returns:
+        The name of the entry point function for the module.
+    """
+    return "{}_main".format(module_name)
 
 def malloc_linking_context(ctx):
     """Returns the linking context to use for the malloc implementation.

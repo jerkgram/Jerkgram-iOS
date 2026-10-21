@@ -83,7 +83,7 @@ final class StarsBalanceComponent: Component {
     let secondaryActionCooldownUntilTimestamp: Int32?
     let secondaryAction: (() -> Void)?
     let additionalAction: AnyComponent<Empty>?
-
+    
     init(
         theme: PresentationTheme,
         strings: PresentationStrings,
@@ -121,7 +121,7 @@ final class StarsBalanceComponent: Component {
         self.secondaryAction = secondaryAction
         self.additionalAction = additionalAction
     }
-
+    
     static func ==(lhs: StarsBalanceComponent, rhs: StarsBalanceComponent) -> Bool {
         if lhs.theme !== rhs.theme {
             return false
@@ -161,56 +161,56 @@ final class StarsBalanceComponent: Component {
         }
         return true
     }
-
+    
     final class View: UIView {
         private let icon = UIImageView()
         private let title = ComponentView<Empty>()
         private let subtitle = ComponentView<Empty>()
         private var button = ComponentView<Empty>()
         private var secondaryButton = ComponentView<Empty>()
-
+        
         private var additionalButton = ComponentView<Empty>()
-
+        
         private var component: StarsBalanceComponent?
         private weak var state: EmptyComponentState?
-
+        
         private var timer: Timer?
-
+        
         override init(frame: CGRect) {
             super.init(frame: frame)
-
+            
             self.addSubview(self.icon)
         }
-
+        
         required init?(coder: NSCoder) {
             fatalError("init(coder:) has not been implemented")
         }
-
+        
         func update(component: StarsBalanceComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
             if self.component == nil {
                 switch component.currency {
                 case .ton:
-                    self.icon.image = generateTintedImage(image: UIImage(bundleImageName: "Ads/TonBig"), color: UIColor(rgb: 0x30A1F5))
+                    self.icon.image = UIImage(bundleImageName: "Ads/GramBig")
                 case .stars:
                     self.icon.image = UIImage(bundleImageName: "Premium/Stars/BalanceStar")
                 }
             }
-
+            
             self.component = component
             self.state = state
-
+            
             var remainingCooldownSeconds: Int32 = 0
             if let cooldownUntilTimestamp = component.actionCooldownUntilTimestamp {
                 remainingCooldownSeconds = cooldownUntilTimestamp - Int32(Date().timeIntervalSince1970)
                 remainingCooldownSeconds = max(0, remainingCooldownSeconds)
             }
-
+            
             var remainingSecondaryCooldownSeconds: Int32 = 0
             if let cooldownUntilTimestamp = component.secondaryActionCooldownUntilTimestamp {
                 remainingSecondaryCooldownSeconds = cooldownUntilTimestamp - Int32(Date().timeIntervalSince1970)
                 remainingSecondaryCooldownSeconds = max(0, remainingSecondaryCooldownSeconds)
             }
-
+            
             if remainingCooldownSeconds > 0 || remainingSecondaryCooldownSeconds > 0  {
                 if self.timer == nil {
                     self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true, block: { [weak self] _ in
@@ -226,10 +226,10 @@ final class StarsBalanceComponent: Component {
                     timer.invalidate()
                 }
             }
-
+            
             let sideInset: CGFloat = 16.0
             var contentHeight: CGFloat = sideInset
-
+            
             let formattedLabel: String
             switch component.currency {
             case .ton:
@@ -266,19 +266,19 @@ final class StarsBalanceComponent: Component {
                     let origin = floorToScreenPixels((availableSize.width - totalWidth) / 2.0)
                     let titleFrame = CGRect(origin: CGPoint(x: origin + icon.size.width + spacing, y: contentHeight - 3.0), size: titleSize)
                     titleView.frame = titleFrame
-
+                                        
                     self.icon.frame = CGRect(origin: CGPoint(x: origin, y: floorToScreenPixels(titleFrame.midY - icon.size.height / 2.0)), size: icon.size)
                 }
             }
             contentHeight += titleSize.height
-
+        
             let subtitleText: String
             if let rate = component.rate {
                 subtitleText = "~\(formatTonUsdValue(component.count.value, divide: false, rate: rate, dateTimeFormat: component.dateTimeFormat))"
             } else {
                 subtitleText = component.strings.Stars_Intro_YourBalance
             }
-
+            
             let subtitleSize = self.subtitle.update(
                 transition: .immediate,
                 component: AnyComponent(
@@ -298,15 +298,15 @@ final class StarsBalanceComponent: Component {
                 subtitleView.frame = subtitleFrame
             }
             contentHeight += subtitleSize.height
-
+            
             if component.actionAvailable {
                 contentHeight += 12.0
-
+                
                 var withdrawWidth = availableSize.width - sideInset * 2.0
                 if let _ = component.secondaryAction {
                     withdrawWidth = (withdrawWidth - 10.0) / 2.0
                 }
-
+                
                 let content: AnyComponentWithIdentity<Empty>
                 if remainingCooldownSeconds > 0 {
                     content = AnyComponentWithIdentity(id: AnyHashable(1 as Int), component: AnyComponent(
@@ -331,7 +331,7 @@ final class StarsBalanceComponent: Component {
                         )
                     )
                 }
-
+                                
                 let buttonSize = self.button.update(
                     transition: transition,
                     component: AnyComponent(ButtonComponent(
@@ -362,7 +362,7 @@ final class StarsBalanceComponent: Component {
                     let buttonFrame = CGRect(origin: CGPoint(x: sideInset, y: contentHeight), size: buttonSize)
                     buttonView.frame = buttonFrame
                 }
-
+                
                 if let secondaryActionTitle = component.secondaryActionTitle {
                     let content: AnyComponentWithIdentity<Empty>
                     var items: [AnyComponentWithIdentity<Empty>] = []
@@ -388,7 +388,7 @@ final class StarsBalanceComponent: Component {
                             HStack(items, spacing: 7.0)
                         )
                     )
-
+                    
                     let buttonSize = self.secondaryButton.update(
                         transition: transition,
                         component: AnyComponent(ButtonComponent(
@@ -420,13 +420,16 @@ final class StarsBalanceComponent: Component {
                         buttonView.frame = buttonFrame
                     }
                 }
-
+                
                 contentHeight += buttonSize.height
+            } else {
+                self.button.view?.removeFromSuperview()
+                self.secondaryButton.view?.removeFromSuperview()
             }
-
+            
             if let additionalAction = component.additionalAction {
                 contentHeight += 18.0
-
+                
                 let buttonSize = self.additionalButton.update(
                     transition: transition,
                     component: additionalAction,
@@ -443,17 +446,17 @@ final class StarsBalanceComponent: Component {
                 contentHeight += buttonSize.height
                 contentHeight += 2.0
             }
-
+            
             contentHeight += sideInset
-
+            
             return CGSize(width: availableSize.width, height: contentHeight)
         }
     }
-
+    
     func makeView() -> View {
         return View(frame: CGRect())
     }
-
+    
     func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }

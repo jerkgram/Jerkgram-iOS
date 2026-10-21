@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Postbox
 import TelegramApi
 import SwiftSignalKit
@@ -306,10 +307,126 @@ private func filterMessageAttributesForOutgoingMessage(_ attributes: [MessageAtt
     }
 }
 
+/// The attributes an outgoing message stores for the ones it was requested with. A media timer is
+/// requested as `AutoremoveTimeoutMessageAttribute`: a secret chat stores it as-is in place of the
+/// chat's own timer, any other chat stores it as `AutoclearTimeoutMessageAttribute` beside the chat's
+/// auto-delete period (`peerAutoremoveTimeout`).
+func outgoingMessageAttributes(requestedAttributes: [MessageAttribute], isSecretChat: Bool, peerAutoremoveTimeout: Int32?) -> [MessageAttribute] {
+    var peerAutoremoveTimeout = peerAutoremoveTimeout
+    var attributes: [MessageAttribute] = []
+    for attribute in filterMessageAttributesForOutgoingMessage(requestedAttributes) {
+        if let attribute = attribute as? AutoremoveTimeoutMessageAttribute {
+            if isSecretChat {
+                peerAutoremoveTimeout = nil
+                attributes.append(attribute)
+            } else {
+                attributes.append(AutoclearTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: nil))
+            }
+        } else {
+            attributes.append(attribute)
+        }
+    }
+    if let peerAutoremoveTimeout = peerAutoremoveTimeout {
+        attributes.append(AutoremoveTimeoutMessageAttribute(timeout: peerAutoremoveTimeout, countdownBeginTime: nil))
+    }
+    return attributes
+}
+
+/// What a resent message requests in place of `attribute`, which the failed message stores in the
+/// form `outgoingMessageAttributes` produced; nil when it is not requested again.
+func resentMessageRequestedAttribute(_ attribute: MessageAttribute, isSecretChat: Bool) -> MessageAttribute? {
+    if attribute is PaidStarsMessageAttribute {
+        return nil
+    }
+    if let attribute = attribute as? AutoclearTimeoutMessageAttribute {
+        // The media timer of a cloud chat, which is requested in its autoremove form.
+        return AutoremoveTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: nil)
+    }
+    if attribute is AutoremoveTimeoutMessageAttribute && !isSecretChat {
+        // The chat's auto-delete period, derived again when the message is enqueued. Requested, it
+        // would become a media timer.
+        return nil
+    }
+    return attribute
+}
+
+/// What a forward requests when the server cannot forward it and it is sent as a copy, a new message
+/// with the source's content: the source is not a cloud message, or the destination is a secret chat.
+/// The copy takes the source's content and the forward's own attributes, which say how and where it
+/// is sent. Nothing else the source stores is requested: its timer belongs to its chat and would
+/// become a media timer in a cloud chat or override a secret chat's own, and its paid stars, send-as
+/// peer and schedule are the source chat's. `hidesCaption` drops the formatting of a caption the
+/// forward hides.
+func forwardCopyRequestedAttributes(sourceAttributes: [MessageAttribute], forwardAttributes: [MessageAttribute], hidesCaption: Bool) -> [MessageAttribute] {
+    let contentAttributes = sourceAttributes.filter { attribute in
+        switch attribute {
+        case _ as TextEntitiesMessageAttribute:
+            return !hidesCaption
+        case _ as RichTextMessageAttribute:
+            return true
+        case _ as InlineBotMessageAttribute:
+            return true
+        case _ as OutgoingContentInfoMessageAttribute:
+            return true
+        case _ as ReplyMarkupMessageAttribute:
+            return true
+        case _ as OutgoingChatContextResultMessageAttribute:
+            return true
+        case _ as EmbeddedMediaStickersMessageAttribute:
+            return true
+        case _ as EmojiSearchQueryMessageAttribute:
+            return true
+        case _ as MediaSpoilerMessageAttribute:
+            return true
+        case _ as WebpagePreviewMessageAttribute:
+            return true
+        case _ as InvertMediaMessageAttribute:
+            return true
+        default:
+            return false
+        }
+    }
+    return contentAttributes + forwardAttributes
+}
+
+/// The attributes a forwarded message stores from the forward's request and from its source: one of
+/// each kind, the request's where both have one. A resent forward requests what the failed one
+/// stored, which already includes the source's; and the sender reads the last paid stars a message
+/// stores, which must be the destination's price rather than what the source was paid.
+func forwardedMessageAttributes(requestedAttributes: [MessageAttribute], sourceAttributes: [MessageAttribute], forwardedMessageIds: Set<MessageId>?) -> [MessageAttribute] {
+    let requested = filterMessageAttributesForForwardedMessage(requestedAttributes)
+    let requestedKinds = Set(requested.map { ObjectIdentifier(type(of: $0)) })
+    let source = filterMessageAttributesForForwardedMessage(sourceAttributes, forwardedMessageIds: forwardedMessageIds).filter { attribute in
+        return !requestedKinds.contains(ObjectIdentifier(type(of: attribute)))
+    }
+    return requested + source
+}
+
+/// The local grouping key of a forwarded message: an album stays one album, under a key of its own
+/// so it does not join the source's.
+func forwardGroupingKey(grouping: EnqueueMessageGrouping, sourceGroupingKey: Int64?, generatedKeys: inout [Int64: Int64]) -> Int64? {
+    switch grouping {
+    case .none:
+        return nil
+    case .auto:
+        guard let sourceGroupingKey = sourceGroupingKey else {
+            return nil
+        }
+        if let generatedKey = generatedKeys[sourceGroupingKey] {
+            return generatedKey
+        }
+        let generatedKey = Int64.random(in: Int64.min ... Int64.max)
+        generatedKeys[sourceGroupingKey] = generatedKey
+        return generatedKey
+    }
+}
+
 private func filterMessageAttributesForEphemeralOutgoingMessage(_ attributes: [MessageAttribute]) -> [MessageAttribute] {
     return attributes.filter { attribute in
         switch attribute {
         case _ as TextEntitiesMessageAttribute:
+            return true
+        case _ as RichTextMessageAttribute:
             return true
         case _ as EmbeddedMediaStickersMessageAttribute:
             return true
@@ -422,11 +539,14 @@ private func generateEphemeralOutgoingRandomId() -> Int64 {
     }
 }
 
-private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account: Account, peerId: PeerId, transformedMedia: Bool, message: EnqueueMessage, botPeerId: PeerId) -> MessageId? {
+private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account: Account, peerId: PeerId, transformedMedia: Bool, message: EnqueueMessage, botPeerId: PeerId, isWelcomeTemplate: Bool = false) -> MessageId? {
     guard case let .message(text, requestedAttributes, inlineStickers, mediaReference, threadId, replyToMessageId, _, _, correlationId, bubbleUpEmojiOrStickersets) = message else {
         return nil
     }
-    guard transaction.getPeer(peerId).flatMap(apiInputPeer) != nil, transaction.getPeer(botPeerId).flatMap(apiInputUser) != nil else {
+    guard transaction.getPeer(peerId).flatMap(apiInputPeer) != nil else {
+        return nil
+    }
+    if !isWelcomeTemplate && transaction.getPeer(botPeerId).flatMap(apiInputUser) == nil {
         return nil
     }
 
@@ -436,6 +556,9 @@ private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account: 
 
     var flags = StoreMessageFlags()
     flags.insert(.Sending)
+    if isWelcomeTemplate {
+        flags.insert(.Incoming)
+    }
 
     let randomId = generateEphemeralOutgoingRandomId()
     var infoFlags = OutgoingMessageInfoFlags()
@@ -450,7 +573,7 @@ private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account: 
 
     var attributes: [MessageAttribute] = filterMessageAttributesForEphemeralOutgoingMessage(requestedAttributes)
     attributes.append(OutgoingMessageInfoAttribute(uniqueId: randomId, flags: infoFlags, acknowledged: false, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets, partialReference: partialReference))
-    attributes.append(EphemeralOutgoingMessageAttribute(botPeerId: botPeerId, randomId: randomId, state: .sending))
+    attributes.append(EphemeralOutgoingMessageAttribute(botPeerId: botPeerId, randomId: randomId, state: .sending, isWelcomeTemplate: isWelcomeTemplate))
 
     if let replyAttribute = replyMessageAttributeForEphemeralOutgoingMessage(transaction: transaction, peerId: peerId, replySubject: replyToMessageId) {
         attributes.append(replyAttribute)
@@ -467,9 +590,12 @@ private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account: 
         }
     }
 
-    let localId = generateEphemeralLocalMessageId(peerId: peerId, transaction: transaction)
-    let timestamp = Int32(account.network.context.globalTime())
-    let storeMessage = StoreMessage(id: localId, customStableId: nil, globallyUniqueId: randomId, groupingKey: nil, threadId: threadId, timestamp: timestamp, flags: flags, tags: [], globalTags: [], localTags: [], forwardInfo: nil, authorId: account.peerId, text: text, attributes: attributes, media: mediaList)
+    let localId = generateEphemeralLocalMessageId(peerId: peerId, transaction: transaction, namespace: isWelcomeTemplate ? Namespaces.Message.WelcomeMessageLocal : Namespaces.Message.EphemeralLocal)
+    var timestamp = Int32(account.network.context.globalTime())
+    if isWelcomeTemplate {
+        timestamp += 1
+    }
+    let storeMessage = StoreMessage(id: localId, customStableId: nil, globallyUniqueId: randomId, groupingKey: nil, threadId: threadId, timestamp: timestamp, flags: flags, tags: [], globalTags: [], localTags: [], forwardInfo: nil, authorId: isWelcomeTemplate ? peerId : account.peerId, text: text, attributes: attributes, media: mediaList)
     let _ = transaction.addMessages([storeMessage], location: .Random)
 
     return localId
@@ -522,7 +648,7 @@ func opportunisticallyTransformMessageWithMedia(network: Network, postbox: Postb
 
 private func forwardedMessageToBeReuploaded(transaction: Transaction, id: MessageId) -> Message? {
     if let message = transaction.getMessage(id) {
-        if message.id.namespace != Namespaces.Message.Cloud {
+        if message.id.namespace != Namespaces.Message.Cloud && !Namespaces.Message.allEphemeral.contains(message.id.namespace) {
             return message
         } else {
             return nil
@@ -560,6 +686,15 @@ private enum GhostBasePublicPeerNameStore {
     private static let orderKey = "jerkgram.PublicPeerNamesOrder.V11T"
     private static let maximumCount = 256
     private static let lock = NSLock()
+    private static var values: [String: String]?
+    private static var order: [String] = []
+
+    // All access is protected by lock; these private keys have one in-process writer.
+    private static func loadIfNeeded() {
+        guard self.values == nil else { return }
+        self.values = UserDefaults.standard.dictionary(forKey: self.valuesKey) as? [String: String] ?? [:]
+        self.order = UserDefaults.standard.stringArray(forKey: self.orderKey) ?? []
+    }
 
     static func store(
         peerId: PeerId,
@@ -576,12 +711,12 @@ private enum GhostBasePublicPeerNameStore {
         self.lock.lock()
         defer { self.lock.unlock() }
 
+        self.loadIfNeeded()
         let defaults = UserDefaults.standard
-        var values = defaults.dictionary(
-            forKey: self.valuesKey
-        ) as? [String: String] ?? [:]
-        var order = defaults.stringArray(forKey: self.orderKey) ?? []
         let key = String(peerId.toInt64())
+        if self.values?[key] == name && self.order.last == key { return }
+        var values = self.values ?? [:]
+        var order = self.order
         values[key] = name
         order.removeAll(where: { $0 == key })
         order.append(key)
@@ -590,17 +725,17 @@ private enum GhostBasePublicPeerNameStore {
             let removed = order.removeFirst()
             values.removeValue(forKey: removed)
         }
-        defaults.set(values, forKey: self.valuesKey)
-        defaults.set(order, forKey: self.orderKey)
+        if self.values != values { defaults.set(values, forKey: self.valuesKey) }
+        if self.order != order { defaults.set(order, forKey: self.orderKey) }
+        self.values = values
+        self.order = order
     }
 
     static func name(peerId: PeerId) -> String? {
         self.lock.lock()
         defer { self.lock.unlock() }
-        return (
-            UserDefaults.standard.dictionary(forKey: self.valuesKey)
-            as? [String: String]
-        )?[String(peerId.toInt64())]
+        self.loadIfNeeded()
+        return self.values?[String(peerId.toInt64())]
     }
 }
 
@@ -621,11 +756,24 @@ private struct GhostBaseDeletedMediaResourceSpec {
     let pathExtension: String?
 }
 
+private func ghostBasePruneEmptyDeletedMediaDirectories(root: URL) {
+    let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+    guard let children = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return }
+    for directory in children {
+        guard let values = try? directory.resourceValues(forKeys: Set(keys)),
+            values.isDirectory == true, values.isSymbolicLink != true else { continue }
+        // Atomic empty-directory removal: never recursively remove media or follow links.
+        _ = directory.path.withCString { Darwin.rmdir($0) }
+    }
+}
+
 private enum GhostBaseDeletedMediaCache {
-    private static let queue = DispatchQueue(
-        label: "org.ghostbase.deleted-media-cache",
-        qos: .utility
-    )
+    private static let queueKey = DispatchSpecificKey<Bool>()
+    private static let queue: DispatchQueue = {
+        let queue = DispatchQueue(label: "org.ghostbase.deleted-media-cache", qos: .utility)
+        queue.setSpecific(key: queueKey, value: true)
+        return queue
+    }()
     private static let cleanupLock = NSLock()
     private static var lastCleanupTimestamp: TimeInterval = 0.0
 
@@ -735,6 +883,9 @@ private enum GhostBaseDeletedMediaCache {
         messageId: MessageId,
         spec: GhostBaseDeletedMediaResourceSpec
     ) -> String? {
+        if DispatchQueue.getSpecific(key: self.queueKey) != true {
+            return self.queue.sync { self.copyCompleteResource(mediaBox: mediaBox, messageId: messageId, spec: spec) }
+        }
         let destination = self.fileURL(
             mediaBox: mediaBox,
             messageId: messageId,
@@ -844,6 +995,10 @@ private enum GhostBaseDeletedMediaCache {
     }
 
     private static func cleanupIfNeeded(mediaBox: MediaBox) {
+        if DispatchQueue.getSpecific(key: self.queueKey) != true {
+            self.queue.async { self.cleanupIfNeeded(mediaBox: mediaBox) }
+            return
+        }
         let now = Date().timeIntervalSince1970
         self.cleanupLock.lock()
         if now - self.lastCleanupTimestamp < 300.0 {
@@ -912,6 +1067,7 @@ private enum GhostBaseDeletedMediaCache {
                 }
             }
         }
+        ghostBasePruneEmptyDeletedMediaDirectories(root: root)
     }
 }
 
@@ -942,89 +1098,205 @@ private struct GhostBaseDeletedReplyPlan {
     let authorName: String?
     let authorUsername: String?
     let mentionPeerId: PeerId?
+    let limits: UserLimitsConfiguration
+    var canSendPolls = false
+    var canSendTodos = false
 }
 
 private struct GhostBaseDeletedQuoteBody {
     let text: String
     let originalTextOffset: Int?
+    let entities: [MessageTextEntity]
 }
 
-private func ghostBaseDeletedMediaLabel(_ message: Message) -> String? {
-    // TelegramCore cannot depend on presentation/UI localization.
-    // Portable recovery text therefore uses English canonical labels;
-    // richer UI localization uses semantic JerkgramStringKey values.
+private func ghostBaseDeletedMediaLabel(_ message: Message, languageCode: String) -> String? {
+    func label(_ key: JerkgramDeletedReplyLabel) -> String {
+        return key.text(languageCode: languageCode)
+    }
     if message.groupingKey != nil && !message.media.isEmpty {
-        return "Album"
+        return label(.album)
     }
 
     guard let media = message.media.first else {
         return nil
     }
     if media is TelegramMediaPoll {
-        return "Poll"
+        return label(.poll)
     }
     if media is TelegramMediaMap {
-        return "📍 Location"
+        return label(.location)
     }
     if media is TelegramMediaContact {
-        return "👤 Contact"
+        return label(.contact)
     }
     if media is TelegramMediaDice {
-        return "🎲 Dice"
+        return label(.dice)
     }
     if media is TelegramMediaTodo {
-        return "Task List"
+        return label(.todo)
     }
     if media is TelegramMediaImage {
-        return "📷 Photo"
+        return label(.photo)
     }
     if let file = media as? TelegramMediaFile {
         if file.isSticker {
-            return "Sticker"
+            return label(.sticker)
         } else if file.isVoice {
-            return "🎙 Voice Message"
+            return label(.voice)
         } else if file.isInstantVideo {
-            return "🎥 Video Message"
+            return label(.videoMessage)
         } else if file.isAnimated {
-            return "GIF"
+            return label(.gif)
         } else if file.isVideo {
-            return "🎬 Video"
+            return label(.video)
         } else if file.isMusic {
-            return "🎵 Audio"
-        } else if let name = file.fileName, !name.isEmpty {
-            return "📎 File: \(name)"
+            return label(.audio)
         } else {
-            return "📎 File"
+            return label(.file)
         }
     }
-    return "Attachment"
+    return label(.attachment)
 }
 
 private func ghostBaseQuoteBody(
     source: Message,
-    recoveredMedia: Bool
+    recoveredMedia: Bool,
+    languageCode: String
 ) -> GhostBaseDeletedQuoteBody {
     let sourceText = source.text
-
-    if recoveredMedia || source.media.isEmpty {
-        return GhostBaseDeletedQuoteBody(
-            text: sourceText,
-            originalTextOffset: sourceText.isEmpty ? nil : 0
-        )
+    if let file = source.media.first as? TelegramMediaFile, file.isSticker {
+        var association = ""
+        for attribute in file.attributes {
+            if case let .Sticker(displayText, _, _) = attribute {
+                association = displayText.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                break
+            }
+        }
+        let emoji = JerkgramDeletedReplyLabel.sticker.text(languageCode: languageCode) + (association.isEmpty ? "" : " " + association)
+        return GhostBaseDeletedQuoteBody(text: emoji + (sourceText.isEmpty ? "" : "\n" + sourceText), originalTextOffset: sourceText.isEmpty ? nil : (emoji as NSString).length + 1, entities: [])
+    }
+    let interactiveSnapshot = source.media.first is TelegramMediaPoll || source.media.first is TelegramMediaTodo
+    // Native attachment already conveys its type, filename, contact and map data.
+    if recoveredMedia && !interactiveSnapshot || source.media.isEmpty {
+        return GhostBaseDeletedQuoteBody(text: sourceText, originalTextOffset: sourceText.isEmpty ? nil : 0, entities: [])
     }
 
-    let label = ghostBaseDeletedMediaLabel(source) ?? "Deleted Message"
-    if sourceText.isEmpty {
-        return GhostBaseDeletedQuoteBody(
-            text: label,
-            originalTextOffset: nil
-        )
+    var body = JerkgramDeletedReplyText()
+    var entities: [MessageTextEntity] = []
+    func append(_ text: String, _ sourceEntities: [MessageTextEntity] = [], prefix: String = "") {
+        guard let offset = body.append(text, prefix: prefix) else { return }
+        // Preserve rich text, excluding a nested quote inside the outer quote.
+        let validEntities = messageTextEntitiesInRange(entities: sourceEntities, range: NSRange(location: 0, length: (text as NSString).length), onlyQuoteable: false).filter {
+            if case .BlockQuote = $0.type { return false }
+            return true
+        }
+        entities.append(contentsOf: ghostBaseShiftEntities(validEntities, by: offset))
     }
-    let offset = (label as NSString).length + 1
-    return GhostBaseDeletedQuoteBody(
-        text: label + "\n" + sourceText,
-        originalTextOffset: offset
-    )
+    func label(_ key: JerkgramDeletedReplyLabel) {
+        append(key.text(languageCode: languageCode))
+    }
+
+    if let poll = source.media.first as? TelegramMediaPoll {
+        label(recoveredMedia ? .freshPollSnapshot : .poll)
+        append(poll.text, poll.textEntities)
+        if recoveredMedia {
+            label(poll.isClosed ? .pollClosed : .pollOpen)
+            if let total = poll.results.totalVoters {
+                append("\(JerkgramDeletedReplyLabel.votes.text(languageCode: languageCode)): \(total)")
+            }
+        }
+        for option in poll.options {
+            append(option.text, option.entities, prefix: "• ")
+            if recoveredMedia, let voter = poll.results.voters?.first(where: { $0.opaqueIdentifier == option.opaqueIdentifier }) {
+                if let count = voter.count {
+                    append("\(JerkgramDeletedReplyLabel.votes.text(languageCode: languageCode)): \(count)")
+                }
+                if voter.selected { label(.selected) }
+            }
+        }
+        if let solution = poll.results.solution {
+            append(solution.text, solution.entities)
+        }
+    } else if let todo = source.media.first as? TelegramMediaTodo {
+        label(recoveredMedia ? .freshTodoSnapshot : .todo)
+        append(todo.text, todo.textEntities)
+        let completed = Set(todo.completions.map { $0.id })
+        for item in todo.items {
+            append(item.text, item.entities, prefix: completed.contains(item.id) ? "☑ " : "- ")
+        }
+    } else if let action = source.media.first as? TelegramMediaAction {
+        let reply = source.attributes.first(where: { $0 is ReplyMessageAttribute }) as? ReplyMessageAttribute
+        let originalInteractive = reply.flatMap { source.associatedMessages[$0.messageId] }
+        if let originalPoll = originalInteractive?.media.first as? TelegramMediaPoll {
+            label(.poll)
+            append(originalPoll.text, originalPoll.textEntities)
+        } else if let originalTodo = originalInteractive?.media.first as? TelegramMediaTodo {
+            label(.todo)
+            append(originalTodo.text, originalTodo.textEntities)
+        }
+        switch action.action {
+        case let .todoAppendTasks(items):
+            label(.tasksAdded)
+            for item in items { append(item.text, item.entities, prefix: "+ ") }
+        case let .pollOptionAppended(option):
+            label(.pollOptionAdded)
+            append(option.text, option.entities, prefix: "• ")
+        case let .pollOptionDeleted(option):
+            label(.pollOptionDeleted)
+            append(option.text, option.entities, prefix: "• ")
+        case let .todoCompletions(completed, incompleted):
+            let reply = source.attributes.first(where: { $0 is ReplyMessageAttribute }) as? ReplyMessageAttribute
+            let originalTodo = reply.flatMap { source.associatedMessages[$0.messageId]?.media.first as? TelegramMediaTodo }
+            for (ids, key, prefix) in [(completed, JerkgramDeletedReplyLabel.tasksCompleted, "☑ "), (incompleted, .tasksIncomplete, "- ")] where !ids.isEmpty {
+                if let originalTodo {
+                    label(key)
+                    for id in ids {
+                        if let item = originalTodo.items.first(where: { $0.id == id }) {
+                            append(item.text, item.entities, prefix: prefix)
+                        } else {
+                            append("\(JerkgramDeletedReplyLabel.task.text(languageCode: languageCode)) #\(id)", prefix: prefix)
+                        }
+                    }
+                } else {
+                    // The service action stores IDs only. Never invent missing task names.
+                    append("\(key.text(languageCode: languageCode)): \(ids.count)")
+                }
+            }
+            if completed.isEmpty && incompleted.isEmpty { label(.todo) }
+        default:
+            append(ghostBaseDeletedMediaLabel(source, languageCode: languageCode) ?? JerkgramDeletedReplyLabel.deletedMessage.text(languageCode: languageCode))
+        }
+    } else if let contact = source.media.first as? TelegramMediaContact {
+        label(.contact)
+        append([contact.firstName, contact.lastName].filter { !$0.isEmpty }.joined(separator: " "))
+        append(contact.phoneNumber)
+    } else if let map = source.media.first as? TelegramMediaMap {
+        label(.location)
+        if let venue = map.venue {
+            append(venue.title)
+            append(venue.address ?? "")
+        }
+        append("\(map.latitude), \(map.longitude)")
+    } else if let dice = source.media.first as? TelegramMediaDice {
+        append(dice.emoji)
+        if let value = dice.value {
+            append("\(JerkgramDeletedReplyLabel.dice.text(languageCode: languageCode)): \(value)")
+        }
+    } else if let invoice = source.media.first as? TelegramMediaInvoice {
+        label(.invoice)
+        append(invoice.title)
+        append(invoice.description)
+    } else {
+        append(ghostBaseDeletedMediaLabel(source, languageCode: languageCode) ?? JerkgramDeletedReplyLabel.deletedMessage.text(languageCode: languageCode))
+        if let file = source.media.first as? TelegramMediaFile {
+            append(file.fileName ?? "")
+        }
+    }
+    let originalTextOffset = body.append(sourceText)
+    if body.text.isEmpty {
+        _ = body.append(JerkgramDeletedReplyLabel.deletedMessage.text(languageCode: languageCode))
+    }
+    return GhostBaseDeletedQuoteBody(text: body.text, originalTextOffset: originalTextOffset, entities: entities)
 }
 
 private func ghostBaseShiftEntities(
@@ -1089,6 +1361,8 @@ private func ghostBaseBuildPortableDeletedReply(
     authorUsername: String?,
     mentionPeerId: PeerId?,
     recoveredMedia: AnyMediaReference?,
+    languageCode: String,
+    limits: UserLimitsConfiguration,
     forcedLocalGroupingKey: Int64? = nil
 ) -> EnqueueMessage {
     guard case let .message(
@@ -1107,10 +1381,11 @@ private func ghostBaseBuildPortableDeletedReply(
     }
 
     let effectiveRecoveredMedia: AnyMediaReference? =
-        userMediaReference == nil ? recoveredMedia : nil
+        userMediaReference == nil && (userText as NSString).length <= Int(limits.maxCaptionLength) ? recoveredMedia : nil
     let body = ghostBaseQuoteBody(
         source: source,
-        recoveredMedia: effectiveRecoveredMedia != nil
+        recoveredMedia: effectiveRecoveredMedia != nil,
+        languageCode: languageCode
     )
 
     var quoteText = authorName
@@ -1123,12 +1398,17 @@ private func ghostBaseBuildPortableDeletedReply(
         }
     }
 
-    let separator = userText.isEmpty ? "" : "\n\n"
+    let hasMedia = userMediaReference != nil || effectiveRecoveredMedia != nil
+    let limit = Int(hasMedia ? limits.maxCaptionLength : limits.maxMessageLength)
+    let fittedQuote = JerkgramDeletedReplyText.fittedQuote(quoteText, reply: userText, limit: limit, languageCode: languageCode)
+    quoteText = fittedQuote.text
+    let separator = userText.isEmpty || quoteText.isEmpty ? "" : "\n\n"
     let finalText = quoteText + separator + userText
     let quoteLength = (quoteText as NSString).length
     let userOffset = ((quoteText + separator) as NSString).length
 
     var entities: [MessageTextEntity] = []
+    entities.append(contentsOf: ghostBaseShiftEntities(body.entities, by: authorLength + 1))
     if authorLength > 0 {
         if let authorUsername,
            !authorUsername.isEmpty {
@@ -1159,21 +1439,19 @@ private func ghostBaseBuildPortableDeletedReply(
         )
     }
 
-    let sourceLength = (source.text as NSString).length
-    let collapse = sourceLength > 320
-        || source.text.components(separatedBy: "\n").count > 4
-    if quoteLength > 0 {
-        entities.append(MessageTextEntity(
-            range: 0 ..< quoteLength,
-            type: .BlockQuote(isCollapsed: collapse)
-        ))
-    }
-
     if let originalTextStart {
         entities.append(contentsOf: ghostBaseShiftEntities(
             ghostBaseOriginalPortableEntities(source: source),
             by: originalTextStart
         ))
+    }
+
+    // Only the retained source prefix gets source/author formatting. The notice
+    // must not inherit a truncated URL, custom emoji or source formatting range.
+    entities = messageTextEntitiesInRange(entities: entities, range: NSRange(location: 0, length: fittedQuote.retainedLength), onlyQuoteable: false)
+    let collapse = quoteLength > 320 || quoteText.components(separatedBy: "\n").count > 4
+    if quoteLength > 0 {
+        entities.append(MessageTextEntity(range: 0 ..< quoteLength, type: .BlockQuote(isCollapsed: collapse)))
     }
 
     var attributes: [MessageAttribute] = []
@@ -1256,11 +1534,69 @@ private func ghostBaseBuildRecoveredAlbumTail(
 }
 
 
+// Structured media carries its own payload: no deleted binary cache is needed.
+private func ghostBaseStaticDeletedMedia(media: Media) -> AnyMediaReference? {
+    if let contact = media as? TelegramMediaContact {
+        return .standalone(media: TelegramMediaContact(firstName: contact.firstName, lastName: contact.lastName,
+            phoneNumber: contact.phoneNumber, peerId: contact.peerId, vCardData: contact.vCardData))
+    }
+    if let map = media as? TelegramMediaMap {
+        return .standalone(media: TelegramMediaMap(latitude: map.latitude, longitude: map.longitude,
+            heading: map.heading, accuracyRadius: map.accuracyRadius, venue: map.venue, address: map.address,
+            liveBroadcastingTimeout: nil, liveProximityNotificationRadius: nil))
+    }
+    return nil
+}
+
+// These are new interactive objects. Historical votes/completions remain in the
+// quote snapshot only. Complex polls use the localized text fallback.
+private func ghostBaseFreshDeletedInteractiveMedia(
+    media: Media,
+    randomId: Int64,
+    canSendPolls: Bool,
+    canSendTodos: Bool
+) -> AnyMediaReference? {
+    if let poll = media as? TelegramMediaPoll {
+        guard canSendPolls, !poll.text.isEmpty, (poll.text as NSString).length <= 255,
+              (2 ... 10).contains(poll.options.count),
+              poll.attachedMedia == nil, poll.results.solution?.media == nil,
+              !poll.openAnswers, !poll.restrictToSubscribers, poll.countries.isEmpty,
+              poll.options.allSatisfy({ !$0.text.isEmpty && ($0.text as NSString).length <= 100 && $0.media == nil }) else { return nil }
+        // Unknown correct answers cannot produce a valid quiz. Keep quiz snapshots
+        // textual until the full creation constraints are explicitly supported.
+        if case .quiz = poll.kind { return nil }
+        let options = poll.options.enumerated().map { index, option in
+            return TelegramMediaPollOption(text: option.text, entities: option.entities,
+                opaqueIdentifier: Data("\(randomId):\(index)".utf8), media: nil, date: nil, addedBy: nil)
+        }
+        let freshPoll = TelegramMediaPoll(pollId: MediaId(namespace: Namespaces.Media.LocalPoll, id: randomId),
+            publicity: poll.publicity, kind: poll.kind, text: poll.text, textEntities: poll.textEntities,
+            options: options, correctAnswers: nil,
+            results: TelegramMediaPollResults(voters: nil, totalVoters: nil, recentVoters: [], solution: nil, hasUnseenVotes: nil, canViewStats: false),
+            isClosed: false, deadlineTimeout: nil, deadlineDate: nil, pollHash: 0)
+        return .standalone(media: freshPoll)
+    }
+    if let todo = media as? TelegramMediaTodo {
+        guard canSendTodos, !todo.text.isEmpty, (todo.text as NSString).length <= 255,
+              (1 ... 30).contains(todo.items.count),
+              todo.items.allSatisfy({ !$0.text.isEmpty && ($0.text as NSString).length <= 255 }) else { return nil }
+        let firstId = Int32(truncatingIfNeeded: randomId & 0x3fffffff) + 1
+        let items = todo.items.enumerated().map { index, item in
+            return TelegramMediaTodo.Item(text: item.text, entities: item.entities, id: firstId + Int32(index))
+        }
+        return .standalone(media: TelegramMediaTodo(flags: todo.flags, text: todo.text,
+            textEntities: todo.textEntities, items: items, completions: []))
+    }
+    return nil
+}
+
 private func ghostBaseReconstructedMedia(
     account: Account,
     peerId: PeerId,
     source: Message,
-    outgoing: EnqueueMessage
+    outgoing: EnqueueMessage,
+    canSendPolls: Bool,
+    canSendTodos: Bool
 ) -> AnyMediaReference? {
     guard ghostBaseDeletedBool(
         ghostBasePreserveDeletedMediaKey,
@@ -1293,6 +1629,11 @@ private func ghostBaseReconstructedMedia(
     }
 
     let media = source.media[0]
+    if let structured = ghostBaseStaticDeletedMedia(media: media) { return structured }
+    if media is TelegramMediaPoll || media is TelegramMediaTodo {
+        return nil // Keep the original poll/task contents as text, not a new interactive object.
+    }
+    guard media is TelegramMediaFile || media is TelegramMediaImage else { return nil }
     // Preserve the original TelegramMediaFile mimeType + attributes and
     // let the existing deleted-media reconstruction path rebuild it.
     // The textual Sticker label remains only as the missing-media fallback.
@@ -1377,6 +1718,16 @@ private func ghostBaseResolveDeletedReplies(
     peerId: PeerId,
     messages: [EnqueueMessage]
 ) -> Signal<[EnqueueMessage], NoError> {
+    // Most sends have no reply. Avoid settings I/O, a Postbox transaction and
+    // an extra worker dispatch for those messages.
+    guard messages.contains(where: { outgoing in
+        if case let .message(_, _, _, _, _, replySubject, _, _, _, _) = outgoing {
+            return replySubject != nil
+        }
+        return false
+    }) else {
+        return .single(messages)
+    }
     guard ghostBaseDeletedBool(
         ghostBaseSaveDeletedKey,
         defaultValue: true
@@ -1393,6 +1744,7 @@ private func ghostBaseResolveDeletedReplies(
         || peerId.namespace == Namespaces.Peer.CloudChannel
 
     return account.postbox.transaction { transaction -> [GhostBaseDeletedReplyPlan] in
+        var retainedLimits: UserLimitsConfiguration?
         return messages.map { outgoing in
             guard case let .message(
                 _, _, _, _, _, replySubject, _, _, _, _
@@ -1416,7 +1768,8 @@ private func ghostBaseResolveDeletedReplies(
                     sourceGroup: [],
                     authorName: nil,
                     authorUsername: nil,
-                    mentionPeerId: nil
+                    mentionPeerId: nil,
+                    limits: .defaultValue
                 )
             }
 
@@ -1480,17 +1833,47 @@ private func ghostBaseResolveDeletedReplies(
                 mentionPeerId = authorPeer.id
             }
 
+            if retainedLimits == nil {
+                let appConfiguration = transaction.getPreferencesEntry(key: PreferencesKeys.appConfiguration)?.get(AppConfiguration.self) ?? .defaultValue
+                let isPremium = (transaction.getPeer(account.peerId) as? TelegramUser)?.flags.contains(.isPremium) ?? false
+                retainedLimits = UserLimitsConfiguration(appConfiguration: appConfiguration, isPremium: isPremium)
+            }
+            // Mirror conservative creation gates from the pinned attachment menu.
+            // Resolve only for deleted plans; ordinary sends keep the fast path.
+            let isPremium = (transaction.getPeer(account.peerId) as? TelegramUser)?.flags.contains(.isPremium) ?? false
+            var canSendPolls = false
+            var canSendTodos = false
+            if let peer = transaction.getPeer(peerId) as? TelegramUser {
+                canSendPolls = peer.botInfo != nil || peerId == account.peerId
+                canSendTodos = isPremium
+            } else if let group = transaction.getPeer(peerId) as? TelegramGroup {
+                canSendPolls = !group.hasBannedPermission(.banSendPolls) && !group.hasBannedPermission(.banSendText)
+                canSendTodos = isPremium && !group.hasBannedPermission(.banSendText)
+            } else if let channel = transaction.getPeer(peerId) as? TelegramChannel {
+                canSendPolls = channel.hasBannedPermission(.banSendPolls) == nil && channel.hasBannedPermission(.banSendText) == nil && !channel.isMonoForum
+                if case .group = channel.info {
+                    canSendTodos = isPremium && channel.hasBannedPermission(.banSendText) == nil && !channel.isMonoForum
+                }
+            }
             return GhostBaseDeletedReplyPlan(
                 outgoing: outgoing,
                 source: source,
                 sourceGroup: sourceGroup,
                 authorName: authorName,
                 authorUsername: authorUsername,
-                mentionPeerId: mentionPeerId
+                mentionPeerId: mentionPeerId,
+                limits: retainedLimits!,
+                canSendPolls: canSendPolls,
+                canSendTodos: canSendTodos
             )
         }
     }
     |> mapToSignal { plans -> Signal<[EnqueueMessage], NoError> in
+        guard plans.contains(where: { $0.source != nil }) else {
+            return .single(messages)
+        }
+        return account.jerkgramDeletedReplyLanguageCode()
+        |> mapToSignal { languageCode -> Signal<[EnqueueMessage], NoError> in
         return Signal { subscriber in
             DispatchQueue.global(qos: .utility).async {
                 var result: [EnqueueMessage] = []
@@ -1519,7 +1902,9 @@ private func ghostBaseResolveDeletedReplies(
                                 account: account,
                                 peerId: peerId,
                                 source: groupSource,
-                                outgoing: plan.outgoing
+                                outgoing: plan.outgoing,
+                                canSendPolls: plan.canSendPolls,
+                                canSendTodos: plan.canSendTodos
                             ) {
                             recoveredGroup.append(recovered)
                         }
@@ -1541,13 +1926,15 @@ private func ghostBaseResolveDeletedReplies(
                                 authorUsername: plan.authorUsername,
                                 mentionPeerId: plan.mentionPeerId,
                                 recoveredMedia: recoveredGroup[0],
+                                languageCode: languageCode,
+                                limits: plan.limits,
                                 forcedLocalGroupingKey: localGroupingKey
                             )
 
                         if case let .message(
                             text, _, _, _, _, _, _, _, _, _
                         ) = first,
-                        (text as NSString).length > 1024 {
+                        (text as NSString).length > Int(plan.limits.maxCaptionLength) {
                             first =
                                 ghostBaseBuildPortableDeletedReply(
                                     outgoing: plan.outgoing,
@@ -1555,7 +1942,9 @@ private func ghostBaseResolveDeletedReplies(
                                     authorName: authorName,
                                     authorUsername: plan.authorUsername,
                                     mentionPeerId: plan.mentionPeerId,
-                                    recoveredMedia: nil
+                                    recoveredMedia: nil,
+                                    languageCode: languageCode,
+                                    limits: plan.limits
                                 )
 
                             result.append(first)
@@ -1604,14 +1993,16 @@ private func ghostBaseResolveDeletedReplies(
                             authorName: authorName,
                             authorUsername: plan.authorUsername,
                             mentionPeerId: plan.mentionPeerId,
-                            recoveredMedia: recovered
+                            recoveredMedia: recovered,
+                            languageCode: languageCode,
+                            limits: plan.limits
                         )
 
                     if recovered != nil,
                        case let .message(
                             text, _, _, _, _, _, _, _, _, _
                        ) = candidate,
-                       (text as NSString).length > 1024 {
+                       (text as NSString).length > Int(plan.limits.maxCaptionLength) {
                         candidate =
                             ghostBaseBuildPortableDeletedReply(
                                 outgoing: plan.outgoing,
@@ -1619,7 +2010,9 @@ private func ghostBaseResolveDeletedReplies(
                                 authorName: authorName,
                                 authorUsername: plan.authorUsername,
                                 mentionPeerId: plan.mentionPeerId,
-                                recoveredMedia: nil
+                                recoveredMedia: nil,
+                                languageCode: languageCode,
+                                limits: plan.limits
                             )
                     }
 
@@ -1630,6 +2023,7 @@ private func ghostBaseResolveDeletedReplies(
                 subscriber.putCompletion()
             }
             return EmptyDisposable
+        }
         }
     }
 }
@@ -1717,22 +2111,262 @@ private func ghostBaseEnqueueResolvedMessages(account: Account, peerId: PeerId, 
     }
 }
 
+public func enqueueWelcomeMessages(account: Account, peerId: PeerId, messages: [EnqueueMessage]) -> Signal<[MessageId?], NoError> {
+    let signal: Signal<[(Bool, EnqueueMessage)], NoError>
+    if let transformOutgoingMessageMedia = account.transformOutgoingMessageMedia {
+        signal = opportunisticallyTransformOutgoingMedia(network: account.network, postbox: account.postbox, transformOutgoingMessageMedia: transformOutgoingMessageMedia, messages: messages, userInteractive: true)
+    } else {
+        signal = .single(messages.map { (false, $0) })
+    }
+    return signal
+    |> mapToSignal { messages -> Signal<[MessageId?], NoError> in
+        return account.postbox.transaction { transaction -> ([MessageId?], [MessageId]) in
+            var resultIds = Array<MessageId?>(repeating: nil, count: messages.count)
+            var pendingMessageIds: [MessageId] = []
+            for i in 0 ..< messages.count {
+                let (transformedMedia, message) = messages[i]
+                if let messageId = enqueueEphemeralOutgoingMessage(transaction: transaction, account: account, peerId: peerId, transformedMedia: transformedMedia, message: message, botPeerId: peerId, isWelcomeTemplate: true) {
+                    resultIds[i] = messageId
+                    pendingMessageIds.append(messageId)
+                }
+            }
+            return (resultIds, pendingMessageIds)
+        }
+        |> map { resultIds, pendingMessageIds -> [MessageId?] in
+            for messageId in pendingMessageIds {
+                let _ = _internal_sendEphemeralOutgoingMessage(account: account, messageId: messageId).startStandalone()
+            }
+            return resultIds
+        }
+    }
+}
+
+private func ghostBaseProtectedCopyFailureText(languageCode: String) -> String {
+    let russian = languageCode.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first == "ru"
+    return russian ? "Не удалось скопировать защищённое сообщение. Исходное вложение недоступно или его нельзя отправить в этот чат." : "Could not copy this protected message. Its original attachment is unavailable or cannot be sent here."
+}
+
+private func ghostBaseProtectedForwardAllowsTextFallback(_ media: Media?) -> Bool {
+    return media is TelegramMediaPoll || media is TelegramMediaTodo
+}
+
+private func ghostBaseProtectedSourceMessageLink(username: String?, channelId: Int64?, messageId: Int32) -> String? {
+    guard let channelId else { return nil }
+    if let username, !username.isEmpty { return "https://t.me/\(username)/\(messageId)" }
+    return "https://t.me/c/\(channelId)/\(messageId)"
+}
+
+private func ghostBaseProtectedForwardEnabled(enabled: Bool, chatForward: Bool, messageProtected: Bool, peerProtected: Bool, dmProtected: Bool, myDmProtected: Bool, channelRestricted: Bool = false) -> Bool {
+    return enabled && chatForward && (messageProtected || peerProtected || dmProtected || myDmProtected || channelRestricted)
+}
+
+private func ghostBaseProtectedForwardText(title: String, link: String?, mentionPeerId: PeerId?, body: String, bodyEntities: [MessageTextEntity], hideNames: Bool, limit: Int, languageCode: String) -> (text: String, entities: [MessageTextEntity]) {
+    let header = hideNames ? "" : title
+    let separator = header.isEmpty || body.isEmpty ? "" : "\n"
+    let prefix = header + separator
+    let fitted = JerkgramDeletedReplyText.fittedQuote(prefix + body, reply: "", limit: limit, languageCode: languageCode)
+    var entities = ghostBaseShiftEntities(bodyEntities, by: (prefix as NSString).length)
+    let titleLength = (header as NSString).length
+    if titleLength > 0 {
+        entities.append(MessageTextEntity(range: 0 ..< titleLength, type: .Bold))
+        if let link { entities.append(MessageTextEntity(range: 0 ..< titleLength, type: .TextUrl(url: link))) }
+        else if let mentionPeerId { entities.append(MessageTextEntity(range: 0 ..< titleLength, type: .TextMention(peerId: mentionPeerId))) }
+    }
+    entities = messageTextEntitiesInRange(entities: entities, range: NSRange(location: 0, length: fitted.retainedLength), onlyQuoteable: false)
+    let quoteLength = (fitted.text as NSString).length
+    if quoteLength > 0 {
+        let collapse = quoteLength > 320 || fitted.text.components(separatedBy: "\n").count > 4
+        entities.append(MessageTextEntity(range: 0 ..< quoteLength, type: .BlockQuote(isCollapsed: collapse)))
+    }
+    return (fitted.text, entities)
+}
+
+private func ghostBaseBuildProtectedForward(outgoing: EnqueueMessage, source: Message, mediaReference: AnyMediaReference?, groupingKey: Int64?, limits: UserLimitsConfiguration, languageCode: String, sourcePeer: Peer? = nil) -> EnqueueMessage {
+    guard case let .forward(_, threadId, _, requested, correlationId) = outgoing else { return outgoing }
+    let options = requested.compactMap { $0 as? ForwardOptionsMessageAttribute }.last
+    let hideNames = options?.hideNames == true
+    let hideCaptions = options?.hideCaptions == true && (source.media.first is TelegramMediaFile || source.media.first is TelegramMediaImage)
+    let actualPeer = sourcePeer ?? source.peers[source.id.peerId]
+    let title = actualPeer.map { EnginePeer($0).debugDisplayTitle } ?? ""
+    let username = actualPeer.map { EnginePeer($0).addressName } ?? nil
+    let channelId: Int64? = source.id.peerId.namespace == Namespaces.Peer.CloudChannel ? source.id.peerId.id._internalGetInt64Value() : nil
+    let messageLink = ghostBaseProtectedSourceMessageLink(username: username, channelId: channelId, messageId: source.id.id)
+    // DMs have no portable source-message URL; profile links/mentions identify the chat only.
+    let attributionLink = messageLink ?? (channelId == nil ? username.flatMap { $0.isEmpty ? nil : "https://t.me/\($0)" } : nil)
+    let mentionPeerId = source.id.peerId.namespace == Namespaces.Peer.CloudUser && attributionLink == nil ? source.id.peerId : nil
+    let binaryMedia = source.media.first is TelegramMediaFile || source.media.first is TelegramMediaImage
+    let quoteBody = binaryMedia ? GhostBaseDeletedQuoteBody(text: source.text, originalTextOffset: source.text.isEmpty ? nil : 0, entities: []) : ghostBaseQuoteBody(source: source, recoveredMedia: mediaReference != nil, languageCode: languageCode)
+    var bodyEntities = quoteBody.entities
+    if let offset = quoteBody.originalTextOffset {
+        bodyEntities.append(contentsOf: ghostBaseShiftEntities(ghostBaseOriginalPortableEntities(source: source), by: offset))
+    }
+    let text = ghostBaseProtectedForwardText(title: title, link: attributionLink, mentionPeerId: mentionPeerId,
+        body: hideCaptions ? "" : quoteBody.text, bodyEntities: hideCaptions ? [] : bodyEntities, hideNames: hideNames,
+        limit: Int(mediaReference == nil ? limits.maxMessageLength : limits.maxCaptionLength), languageCode: languageCode)
+    func isCopyTransportAttribute(_ attribute: MessageAttribute) -> Bool {
+        return attribute is ForwardSourceInfoAttribute || attribute is SourceReferenceMessageAttribute || attribute is OutgoingChatContextResultMessageAttribute
+    }
+    var attributes = forwardCopyRequestedAttributes(sourceAttributes: source.attributes, forwardAttributes: requested, hidesCaption: hideCaptions)
+    let requestedKinds = Set(requested.map { ObjectIdentifier(type(of: $0)) })
+    attributes = attributes.filter { attribute in
+        if attribute is TextEntitiesMessageAttribute || attribute is ForwardOptionsMessageAttribute || isCopyTransportAttribute(attribute) { return false }
+        return !requestedKinds.contains(ObjectIdentifier(type(of: attribute)))
+    } + requested.filter { !($0 is TextEntitiesMessageAttribute) && !($0 is ForwardOptionsMessageAttribute) && !isCopyTransportAttribute($0) }
+    if !text.entities.isEmpty { attributes.append(TextEntitiesMessageAttribute(entities: text.entities)) }
+    var stickers: [MediaId: Media] = [:]
+    for entity in text.entities {
+        if case let .CustomEmoji(_, fileId) = entity.type {
+            let id = MediaId(namespace: Namespaces.Media.CloudFile, id: fileId)
+            if let file = source.associatedMedia[id] as? TelegramMediaFile { stickers[id] = file }
+        }
+    }
+    for attribute in attributes {
+        if let embedded = attribute as? EmbeddedMediaStickersMessageAttribute {
+            for file in embedded.files { stickers[file.fileId] = file }
+        }
+    }
+    return .message(text: text.text, attributes: attributes, inlineStickers: stickers, mediaReference: mediaReference,
+        threadId: threadId, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: groupingKey,
+        correlationId: correlationId, bubbleUpEmojiOrStickersets: [])
+}
+
+private func ghostBaseProtectedLocalMedia(account: Account, source: Message, canSendPolls: Bool, canSendTodos: Bool) -> Signal<AnyMediaReference?, NoError> {
+    guard let media = source.media.first, source.media.count == 1 else { return .single(nil) }
+    if let structured = ghostBaseStaticDeletedMedia(media: media) { return .single(structured) }
+    if media is TelegramMediaPoll || media is TelegramMediaTodo {
+        return .single(nil) // Polls and task lists are copied as titled text snapshots.
+    }
+    if media is TelegramMediaWebpage { return .single(.standalone(media: media)) }
+    let resource: TelegramMediaResource
+    let contentType: MediaResourceUserContentType
+    if let file = media as? TelegramMediaFile { resource = file.resource; contentType = MediaResourceUserContentType(file: file) }
+    else if let image = media as? TelegramMediaImage, let largest = largestImageRepresentation(image.representations) { resource = largest.resource; contentType = .image }
+    else { return .single(nil) }
+    let mediaBox = account.postbox.mediaBox
+    let reference = AnyMediaReference.message(message: MessageReference(source), media: media).resourceReference(resource)
+    func localCopy(_ data: MediaResourceData) -> AnyMediaReference? {
+        guard data.complete, data.size > 0 else { return nil }
+        let randomId = Int64.random(in: Int64.min ... Int64.max)
+        let identity = LocalFileReferenceMediaResource(localFilePath: "", randomId: randomId)
+        // Own the bytes under the outgoing resource ID before source fetch paths can disappear.
+        let path = mediaBox.resourcePath(identity)
+        do { try FileManager.default.copyItem(atPath: data.path, toPath: path) } catch { return nil }
+        let local = LocalFileReferenceMediaResource(localFilePath: path, randomId: randomId,
+            isUniquelyReferencedTemporaryFile: false, size: data.size)
+        if let file = media as? TelegramMediaFile {
+            return .standalone(media: TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: randomId),
+                partialReference: nil, resource: local, previewRepresentations: [], videoThumbnails: [], videoCover: nil,
+                immediateThumbnailData: file.immediateThumbnailData, mimeType: file.mimeType, size: data.size,
+                attributes: file.attributes, alternativeRepresentations: []))
+        }
+        if let image = media as? TelegramMediaImage, let largest = largestImageRepresentation(image.representations) {
+            let representation = TelegramMediaImageRepresentation(dimensions: largest.dimensions, resource: local,
+                progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false, typeHint: .generic)
+            return .standalone(media: TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: randomId),
+                representations: [representation], videoRepresentations: [], immediateThumbnailData: image.immediateThumbnailData,
+                emojiMarkup: nil, reference: nil, partialReference: nil, flags: [], video: nil))
+        }
+        return nil
+    }
+    return mediaBox.resourceData(resource, option: .complete(waitUntilFetchStatus: false))
+    |> take(1)
+    |> mapToSignal { cached -> Signal<AnyMediaReference?, NoError> in
+        if cached.complete { return .single(localCopy(cached)) }
+        return Signal { subscriber in
+            let disposables = DisposableSet()
+            disposables.add(mediaBox.resourceData(resource, option: .complete(waitUntilFetchStatus: true)).start(next: { data in
+                if data.complete { subscriber.putNext(localCopy(data)); subscriber.putCompletion() }
+            }))
+            disposables.add(fetchedMediaResource(mediaBox: mediaBox, userLocation: .peer(source.id.peerId),
+                userContentType: contentType, reference: reference).start(error: { _ in
+                    subscriber.putNext(nil); subscriber.putCompletion()
+                }))
+            return disposables
+        }
+        |> take(1)
+        |> timeout(30.0, queue: Queue.concurrentDefaultQueue(), alternate: .single(nil))
+    }
+    |> take(1)
+}
+
+private func ghostBaseResolveProtectedForwards(account: Account, peerId: PeerId, messages: [EnqueueMessage]) -> Signal<[EnqueueMessage]?, NoError> {
+    let enabled = (JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true
+    let chatForward = (JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true
+    guard enabled && chatForward,
+        (peerId.namespace == Namespaces.Peer.CloudUser || peerId.namespace == Namespaces.Peer.CloudGroup || peerId.namespace == Namespaces.Peer.CloudChannel),
+        messages.contains(where: { if case .forward = $0 { return true }; return false }) else { return .single(messages) }
+    return account.postbox.transaction { transaction -> [(EnqueueMessage, Message?, Int64?, UserLimitsConfiguration, Bool, Bool, Peer?)] in
+        let config = transaction.getPreferencesEntry(key: PreferencesKeys.appConfiguration)?.get(AppConfiguration.self) ?? .defaultValue
+        let premium = (transaction.getPeer(account.peerId) as? TelegramUser)?.flags.contains(.isPremium) ?? false
+        let limits = UserLimitsConfiguration(appConfiguration: config, isPremium: premium)
+        var polls = false, todos = false
+        if let user = transaction.getPeer(peerId) as? TelegramUser { polls = user.botInfo != nil || peerId == account.peerId; todos = premium }
+        else if let group = transaction.getPeer(peerId) as? TelegramGroup {
+            polls = !group.hasBannedPermission(.banSendPolls) && !group.hasBannedPermission(.banSendText)
+            todos = premium && !group.hasBannedPermission(.banSendText)
+        } else if let channel = transaction.getPeer(peerId) as? TelegramChannel {
+            polls = channel.hasBannedPermission(.banSendPolls) == nil && channel.hasBannedPermission(.banSendText) == nil && !channel.isMonoForum
+            if case .group = channel.info { todos = premium && channel.hasBannedPermission(.banSendText) == nil && !channel.isMonoForum }
+        }
+        var groupingKeys: [Int64: Int64] = [:]
+        return messages.map { outgoing in
+            guard case let .forward(id, _, grouping, _, _) = outgoing, id.namespace == Namespaces.Message.Cloud,
+                id.peerId.namespace != Namespaces.Peer.SecretChat, let source = transaction.getMessage(id),
+                !source.containsSecretMedia, !source.media.contains(where: { $0 is TelegramMediaPaidContent || $0 is TelegramMediaAction || $0 is TelegramMediaExpiredContent }) else { return (outgoing, nil, nil, limits, polls, todos, nil) }
+            let cached = transaction.getPeerCachedData(peerId: source.id.peerId) as? CachedUserData
+            let dmProtected = cached.map { cached in cached.flags.contains(.copyProtectionEnabled) || cached.flags.contains(.myCopyProtectionEnabled) } ?? false
+            let actualPeer = transaction.getPeer(source.id.peerId) ?? source.peers[source.id.peerId]
+            let sourceChannel = actualPeer as? TelegramChannel
+            let channelRestricted = sourceChannel.map { $0.flags.contains(.isScam) || $0.flags.contains(.isFake) } ?? false
+            let protected = ghostBaseProtectedForwardEnabled(enabled: enabled, chatForward: chatForward,
+                messageProtected: source.isCopyProtected(), peerProtected: actualPeer?.isCopyProtectionEnabled == true,
+                dmProtected: dmProtected, myDmProtected: false, channelRestricted: channelRestricted)
+            guard protected else { return (outgoing, nil, nil, limits, polls, todos, nil) }
+            return (outgoing, source, forwardGroupingKey(grouping: grouping, sourceGroupingKey: source.groupingKey, generatedKeys: &groupingKeys), limits, polls, todos, actualPeer)
+        }
+    }
+    |> mapToSignal { plans -> Signal<[EnqueueMessage]?, NoError> in
+        guard plans.contains(where: { $0.1 != nil }) else { return .single(messages) }
+        return account.jerkgramDeletedReplyLanguageCode()
+        |> mapToSignal { languageCode in
+            let signals: [Signal<EnqueueMessage?, NoError>] = plans.map { outgoing, source, grouping, limits, polls, todos, sourcePeer in
+                guard let source else { return .single(outgoing) }
+                if source.media.isEmpty {
+                    return .single(ghostBaseBuildProtectedForward(outgoing: outgoing, source: source, mediaReference: nil, groupingKey: grouping, limits: limits, languageCode: languageCode, sourcePeer: sourcePeer))
+                }
+                return ghostBaseProtectedLocalMedia(account: account, source: source, canSendPolls: polls, canSendTodos: todos)
+                |> map { media -> EnqueueMessage? in
+                    guard media != nil || ghostBaseProtectedForwardAllowsTextFallback(source.media.first) else { return nil }
+                    return ghostBaseBuildProtectedForward(outgoing: outgoing, source: source, mediaReference: media, groupingKey: grouping, limits: limits, languageCode: languageCode, sourcePeer: sourcePeer)
+                }
+            }
+            return combineLatest(signals) |> map { resolved -> [EnqueueMessage]? in
+                guard resolved.allSatisfy({ $0 != nil }) else { return nil }
+                return resolved.compactMap { $0 }
+            }
+        }
+    }
+}
+
 public func enqueueMessages(
     account: Account,
     peerId: PeerId,
     messages: [EnqueueMessage]
 ) -> Signal<[MessageId?], NoError> {
-    return ghostBaseResolveDeletedReplies(
-        account: account,
-        peerId: peerId,
-        messages: messages
-    )
-    |> mapToSignal { resolvedMessages in
-        return ghostBaseEnqueueResolvedMessages(
-            account: account,
-            peerId: peerId,
-            messages: resolvedMessages
-        )
+    return ghostBaseResolveProtectedForwards(account: account, peerId: peerId, messages: messages)
+    |> mapToSignal { protectedMessages -> Signal<[MessageId?], NoError> in
+        guard let protectedMessages else {
+            return account.jerkgramDeletedReplyLanguageCode()
+            |> take(1)
+            |> map { languageCode in
+                account.stateManager.jerkgramDisplayPortableCopyFailure(text: ghostBaseProtectedCopyFailureText(languageCode: languageCode))
+                return Array<MessageId?>(repeating: nil, count: messages.count)
+            }
+        }
+        return ghostBaseResolveDeletedReplies(account: account, peerId: peerId, messages: protectedMessages)
+        |> mapToSignal { resolvedMessages in
+            return ghostBaseEnqueueResolvedMessages(account: account, peerId: peerId, messages: resolvedMessages)
+        }
     }
 }
 
@@ -1774,11 +2408,8 @@ public func resendMessages(account: Account, messageIds: [MessageId]) -> Signal<
                             continue inner
                         } else if let attribute = attribute as? ForwardSourceInfoAttribute {
                             forwardSource = attribute.messageId
-                        } else {
-                            if attribute is PaidStarsMessageAttribute {
-                            } else {
-                                filteredAttributes.append(attribute)
-                            }
+                        } else if let attribute = resentMessageRequestedAttribute(attribute, isSecretChat: peerId.namespace == Namespaces.Peer.SecretChat) {
+                            filteredAttributes.append(attribute)
                         }
                     }
                     
@@ -1823,6 +2454,8 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
         }
     }
     
+    var localGroupingKeyBySourceKey: [Int64: Int64] = [:]
+    
     var updatedMessages: [(Bool, EnqueueMessage)] = []
     outer: for (transformedMedia, message) in messages {
         var updatedMessage = message
@@ -1853,7 +2486,7 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                         updatedMessages.append((true, .forward(source: replyToMessageId.messageId, threadId: threadId, grouping: .none, attributes: attributes, correlationId: nil)))
                     }
                 }
-            case let .forward(sourceId, threadId, _, _, _):
+            case let .forward(sourceId, threadId, grouping, forwardAttributes, _):
                 if let sourceMessage = forwardedMessageToBeReuploaded(transaction: transaction, id: sourceId) {
                     var mediaReference: AnyMediaReference?
                     if sourceMessage.id.peerId.namespace == Namespaces.Peer.SecretChat {
@@ -1861,7 +2494,13 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                             mediaReference = .standalone(media: media)
                         }
                     }
-                    updatedMessages.append((transformedMedia, .message(text: sourceMessage.text, attributes: sourceMessage.attributes, inlineStickers: [:], mediaReference: mediaReference, threadId: threadId, replyToMessageId: threadId.flatMap { EngineMessageReplySubject(messageId: MessageId(peerId: peerId, namespace: Namespaces.Message.Cloud, id: Int32(clamping: $0)), quote: nil, innerSubject: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])))
+                    var text = sourceMessage.text
+                    var hidesCaption = false
+                    if let media = mediaReference?.media, media is TelegramMediaImage || media is TelegramMediaFile, forwardAttributes.contains(where: { ($0 as? ForwardOptionsMessageAttribute)?.hideCaptions == true }) {
+                        text = ""
+                        hidesCaption = true
+                    }
+                    updatedMessages.append((transformedMedia, .message(text: text, attributes: forwardCopyRequestedAttributes(sourceAttributes: sourceMessage.attributes, forwardAttributes: forwardAttributes, hidesCaption: hidesCaption), inlineStickers: [:], mediaReference: mediaReference, threadId: threadId, replyToMessageId: threadId.flatMap { EngineMessageReplySubject(messageId: MessageId(peerId: peerId, namespace: Namespaces.Message.Cloud, id: Int32(clamping: $0)), quote: nil, innerSubject: nil) }, replyToStoryId: nil, localGroupingKey: forwardGroupingKey(grouping: grouping, sourceGroupingKey: sourceMessage.groupingKey, generatedKeys: &localGroupingKeyBySourceKey), correlationId: nil, bubbleUpEmojiOrStickersets: [])))
                     continue outer
                 }
         }
@@ -1884,8 +2523,6 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
         
         var addedHashtags: [String] = []
         var emojiItems: [RecentEmojiItem] = []
-        
-        var localGroupingKeyBySourceKey: [Int64: Int64] = [:]
         
         var globallyUniqueIds: [Int64] = []
         for (transformedMedia, message) in updatedMessages {
@@ -1974,23 +2611,8 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                         }
                     }
                     
-                    for attribute in filterMessageAttributesForOutgoingMessage(requestedAttributes) {
-                        if let attribute = attribute as? AutoremoveTimeoutMessageAttribute {
-                            if let _ = peer as? TelegramSecretChat {
-                                peerAutoremoveTimeout = nil
-                                attributes.append(attribute)
-                            } else {
-                                attributes.append(AutoclearTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: nil))
-                            }
-                        } else {
-                            attributes.append(attribute)
-                        }
-                    }
-                    
-                    if let peerAutoremoveTimeout = peerAutoremoveTimeout {
-                        attributes.append(AutoremoveTimeoutMessageAttribute(timeout: peerAutoremoveTimeout, countdownBeginTime: nil))
-                    }
-                        
+                    attributes.append(contentsOf: outgoingMessageAttributes(requestedAttributes: requestedAttributes, isSecretChat: peer is TelegramSecretChat, peerAutoremoveTimeout: peerAutoremoveTimeout))
+
                     if let replyToMessageId = replyToMessageId {
                         var threadMessageId: MessageId?
                         var quote = replyToMessageId.quote
@@ -2239,27 +2861,36 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                             }
                         }
                         
+                        var hidesCaption = false
                         if hideCaptions {
                             for media in sourceMessage.media {
                                 if media is TelegramMediaImage || media is TelegramMediaFile {
                                     messageText = ""
+                                    hidesCaption = true
                                     break
                                 }
                             }
                         }
                         
-                        if sourceMessage.id.namespace == Namespaces.Message.Cloud && peerId.namespace != Namespaces.Peer.SecretChat {
+                        if (sourceMessage.id.namespace == Namespaces.Message.Cloud || Namespaces.Message.allEphemeral.contains(sourceMessage.id.namespace)) && peerId.namespace != Namespaces.Peer.SecretChat {
                             attributes.append(ForwardSourceInfoAttribute(messageId: sourceMessage.id))
                         
-                            if peerId == account.peerId {
+                            if sourceMessage.id.namespace == Namespaces.Message.Cloud && peerId == account.peerId {
                                 attributes.append(SourceReferenceMessageAttribute(messageId: sourceMessage.id))
                             }
                             
-                            attributes.append(contentsOf: filterMessageAttributesForForwardedMessage(requestedAttributes))
-                            attributes.append(contentsOf: filterMessageAttributesForForwardedMessage(sourceMessage.attributes, forwardedMessageIds: forwardedMessageIds))
+                            attributes.append(contentsOf: forwardedMessageAttributes(requestedAttributes: requestedAttributes, sourceAttributes: sourceMessage.attributes, forwardedMessageIds: forwardedMessageIds))
+
+                            let ephemeralParams = ephemeralForwardParams(sourceMessage)
+                            let ephemeralBotPeerId = ephemeralParams?.botPeerId
+                            if sourceMessage.id.namespace == Namespaces.Message.EphemeralLocal {
+                                attributes.removeAll(where: { $0 is InlineBotMessageAttribute })
+                            } else if sourceMessage.id.namespace == Namespaces.Message.EphemeralAnchored, let inlineBotPeerId = ephemeralParams?.inlineBotPeerId, !attributes.contains(where: { $0 is InlineBotMessageAttribute }) {
+                                attributes.append(InlineBotMessageAttribute(peerId: inlineBotPeerId, title: nil))
+                            }
                             
                             var sourceReplyMarkup: ReplyMarkupMessageAttribute? = nil
-                            var sourceSentViaBot = false
+                            var sourceSentViaBot = ephemeralBotPeerId != nil
                             for attribute in attributes {
                                 if let attribute = attribute as? ReplyMarkupMessageAttribute {
                                     sourceReplyMarkup = attribute
@@ -2296,13 +2927,15 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                             
                             if hideSendersNames {
                                 
+                            } else if sourceMessage.id.namespace == Namespaces.Message.EphemeralLocal {
+                                forwardInfo = StoreMessageForwardInfo(authorId: ephemeralParams?.authorId ?? author.id, sourceId: nil, sourceMessageId: nil, date: sourceMessage.timestamp, authorSignature: nil, psaType: nil, flags: [])
                             } else if let sourceForwardInfo = sourceMessage.forwardInfo {
                                 forwardInfo = StoreMessageForwardInfo(authorId: sourceForwardInfo.author?.id, sourceId: sourceForwardInfo.source?.id, sourceMessageId: sourceForwardInfo.sourceMessageId, date: sourceForwardInfo.date, authorSignature: sourceForwardInfo.authorSignature, psaType: nil, flags: [])
                             } else {
                                 if sourceMessage.id.peerId != account.peerId {
-                                    var sourceId: PeerId? = nil
-                                    var sourceMessageId: MessageId? = nil
-                                    if case let .channel(peer) = messageMainPeer(EngineMessage(sourceMessage)), case .broadcast = peer.info {
+                                    var sourceId = ephemeralParams?.sourceId
+                                    var sourceMessageId = ephemeralParams?.sourceMessageId
+                                    if ephemeralParams == nil, case let .channel(peer) = messageMainPeer(EngineMessage(sourceMessage)), case .broadcast = peer.info {
                                         sourceId = peer.id
                                         sourceMessageId = sourceMessage.id
                                     }
@@ -2317,7 +2950,8 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
 
                                     let psaType: String? = nil
 
-                                    forwardInfo = StoreMessageForwardInfo(authorId: author.id, sourceId: sourceId, sourceMessageId: sourceMessageId, date: sourceMessage.timestamp, authorSignature: authorSignature, psaType: psaType, flags: [])
+                                    let forwardAuthorId = ephemeralParams?.authorId ?? author.id
+                                    forwardInfo = StoreMessageForwardInfo(authorId: forwardAuthorId, sourceId: sourceId, sourceMessageId: sourceMessageId, date: sourceMessage.timestamp, authorSignature: authorSignature, psaType: psaType, flags: [])
                                 } else {
                                     forwardInfo = nil
                                 }
@@ -2329,7 +2963,10 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                                 }
                             }
                         } else {
-                            attributes.append(contentsOf: filterMessageAttributesForOutgoingMessage(sourceMessage.attributes))
+                            // A copy into a secret chat, whose own timer is already in `attributes`. The requested
+                            // attributes are not necessarily the forward's own: a reply that quotes another chat's
+                            // message becomes a forward carrying the reply's attributes.
+                            attributes.append(contentsOf: filterMessageAttributesForOutgoingMessage(forwardCopyRequestedAttributes(sourceAttributes: sourceMessage.attributes, forwardAttributes: [], hidesCaption: hidesCaption)))
                         }
                                                 
                         var messageNamespace = Namespaces.Message.Local
@@ -2384,23 +3021,7 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                         
                         let (tags, globalTags) = tagsForStoreMessage(incoming: false, attributes: attributes, media: sourceMessage.media, textEntities: entitiesAttribute?.entities, isPinned: false)
                         
-                        let localGroupingKey: Int64?
-                        switch grouping {
-                            case .none:
-                                localGroupingKey = nil
-                            case .auto:
-                                if let groupingKey = sourceMessage.groupingKey {
-                                    if let generatedKey = localGroupingKeyBySourceKey[groupingKey] {
-                                        localGroupingKey = generatedKey
-                                    } else {
-                                        let generatedKey = Int64.random(in: Int64.min ... Int64.max)
-                                        localGroupingKeyBySourceKey[groupingKey] = generatedKey
-                                        localGroupingKey = generatedKey
-                                    }
-                                } else {
-                                    localGroupingKey = nil
-                                }
-                        }
+                        let localGroupingKey = forwardGroupingKey(grouping: grouping, sourceGroupingKey: sourceMessage.groupingKey, generatedKeys: &localGroupingKeyBySourceKey)
                         
                         var augmentedMediaList = sourceMessage.media.map { media -> Media in
                             return augmentMediaWithReference(.message(message: MessageReference(sourceMessage), media: media))

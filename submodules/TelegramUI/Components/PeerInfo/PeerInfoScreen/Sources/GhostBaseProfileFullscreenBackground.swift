@@ -12,6 +12,79 @@ import PhotoResources
 import PeerInfoAvatarListNode
 
 
+// Temporary P0 diagnostics: fixed counters, main-thread timings, lifecycle summaries.
+// No timer, observer, extra renderer, per-frame logging or peer/resource identifiers.
+final class JerkgramProfilePerformanceProbe {
+    enum Stage: String, CaseIterable {
+        case layout, data, background, transition, play, attach, detach, preferences, alpha
+        case bgPreferences, bgResolve, bgApply, header, sections, panesAndTail, navigation, scrollHeader, scrollPanes
+        case headerPhonePreference, headerAvatar, headerCover
+
+        var settingsDetail: Bool {
+            switch self {
+            case .bgPreferences, .bgResolve, .bgApply, .header, .sections, .panesAndTail, .navigation, .scrollHeader, .scrollPanes: return true
+            case .headerPhonePreference, .headerAvatar, .headerCover: return true
+            default: return false
+            }
+        }
+    }
+    private struct Sample {
+        var count = 0
+        var maxMs = 0.0
+        var slow = 0
+    }
+    private static var created = 0
+    private static var destroyed = 0
+    private static var liveInstances = 0
+    private let instance: Int
+    private var samples: [Stage: Sample] = [:]
+    var context = "pending"
+    var outputIdentity = "pending"
+    var subscriptions = 0
+    var disposals = 0
+    var ready = 0
+    var updateRequests = 0
+    var ramHits = 0
+    var readyMaxWallMs = 0.0
+
+    init() {
+        Self.created += 1
+        Self.liveInstances += 1
+        self.instance = Self.created
+    }
+
+    deinit {
+        Self.destroyed += 1
+        Self.liveInstances -= 1
+    }
+
+    func begin(_ stage: Stage) -> TimeInterval {
+        self.samples[stage, default: Sample()].count += 1
+        return ProcessInfo.processInfo.systemUptime
+    }
+
+    func end(_ stage: Stage, _ started: TimeInterval) {
+        let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1000.0
+        var sample = self.samples[stage] ?? Sample()
+        sample.maxMs = max(sample.maxMs, elapsed)
+        if elapsed >= 16.7 { sample.slow += 1 }
+        self.samples[stage] = sample
+        // Settings-only detail keys keep both contexts plus workers under32.
+        if !stage.settingsDetail || self.context == "settings" {
+            JerkgramPerformanceDiagnostics.shared.measure(self.context + "." + stage.rawValue, milliseconds: elapsed, startedAt: started, owner: self.instance)
+        }
+    }
+
+    func summary(_ boundary: String, sourceRetained: Bool, outputRetained: Bool) {
+        JerkgramPerformanceDiagnostics.shared.record("profile id=\(self.instance) output=\(self.outputIdentity) context=\(self.context) \(boundary) live=\(Self.liveInstances) created=\(Self.created) destroyed=\(Self.destroyed) sub=\(self.subscriptions) dispose=\(self.disposals) ready=\(self.ready) readyWallMs=\(Int(self.readyMaxWallMs)) ram=\(self.ramHits) requests=\(self.updateRequests) sourceSlot=\(sourceRetained) outputSlot=\(outputRetained)")
+        let timings = Stage.allCases.map { stage -> String in
+            let sample = self.samples[stage] ?? Sample()
+            return "\(stage.rawValue)=\(sample.count)/\(Int(sample.maxMs))/\(sample.slow)"
+        }.joined(separator: " ")
+        Logger.shared.log("JerkgramProfilePerf", "v1 id=\(self.instance) output=\(self.outputIdentity) context=\(self.context) boundary=\(boundary) created=\(Self.created) destroyed=\(Self.destroyed) live=\(Self.liveInstances) sub=\(self.subscriptions) dispose=\(self.disposals) ready=\(self.ready) readyWallMs=\(Int(self.readyMaxWallMs)) requests=\(self.updateRequests) ram=\(self.ramHits) sourceSlot=\(sourceRetained) outputSlot=\(outputRetained) count/maxMs/slow: \(timings)")
+    }
+}
+
 enum GhostBaseProfileGlassRuntime {
     static func loadSettings() -> GhostBaseProfileBlurSettings? {
         return GhostBaseProfileBlurSettings.loadEnabled()
@@ -188,6 +261,8 @@ final class GhostBaseProfileBackgroundView: UIView {
     private static func ghostBaseLoadAvatarDiskCache(
         identity: String
     ) -> UIImage? {
+        let perfStart = JerkgramPerformanceDiagnostics.shared.isRecording ? ProcessInfo.processInfo.systemUptime : nil
+        defer { if let perfStart { JerkgramPerformanceDiagnostics.shared.measure((Thread.isMainThread ? "main." : "worker.") + "avatarDiskLoad", milliseconds: (ProcessInfo.processInfo.systemUptime - perfStart) * 1000.0) } }
         self.ghostBaseAvatarDiskCacheLock.lock()
         defer { self.ghostBaseAvatarDiskCacheLock.unlock() }
 
@@ -207,14 +282,31 @@ final class GhostBaseProfileBackgroundView: UIView {
         _ image: UIImage,
         identity: String
     ) {
-        guard let url = self.ghostBaseAvatarDiskCacheURL(identity: identity),
-              let data = image.jpegData(compressionQuality: 0.88) else {
+        let perfStart = JerkgramPerformanceDiagnostics.shared.isRecording ? ProcessInfo.processInfo.systemUptime : nil
+        defer { if let perfStart { JerkgramPerformanceDiagnostics.shared.measure((Thread.isMainThread ? "main." : "worker.") + "avatarDiskStore", milliseconds: (ProcessInfo.processInfo.systemUptime - perfStart) * 1000.0) } }
+        guard let url = self.ghostBaseAvatarDiskCacheURL(identity: identity) else {
             return
         }
 
         self.ghostBaseAvatarDiskCacheLock.lock()
+        // This identity includes the immutable resource id and final-v2 cache namespace.
+        // Only an image-readable, equally sized final entry may suppress a write; missing or
+        // corrupt files must still be repaired. Keep the existing LRU access timestamp.
+        let alreadyCached = self.ghostBaseTouchMatchingAvatarDiskCache(url: url, image: image)
+        self.ghostBaseAvatarDiskCacheLock.unlock()
+        if alreadyCached {
+            return
+        }
+        // JPEG encoding must stay outside the lock also used by main-thread cache loads.
+        guard let data = image.jpegData(compressionQuality: 0.88) else {
+            return
+        }
+        self.ghostBaseAvatarDiskCacheLock.lock()
         defer { self.ghostBaseAvatarDiskCacheLock.unlock() }
-
+        // Another final emission may have filled the same identity while we encoded.
+        if self.ghostBaseTouchMatchingAvatarDiskCache(url: url, image: image) {
+            return
+        }
         let fm = FileManager.default
         try? fm.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -232,21 +324,32 @@ final class GhostBaseProfileBackgroundView: UIView {
             return
         }
 
-        let sorted = urls.sorted { lhs, rhs in
-            let ld = (try? lhs.resourceValues(
+        let sorted = urls.map { url in
+            let date = (try? url.resourceValues(
                 forKeys: [.contentModificationDateKey]
             ).contentModificationDate) ?? .distantPast
-            let rd = (try? rhs.resourceValues(
-                forKeys: [.contentModificationDateKey]
-            ).contentModificationDate) ?? .distantPast
-            return ld < rd
+            return (url: url, date: date)
+        }.sorted { lhs, rhs in
+            return lhs.date < rhs.date
         }
 
         for old in sorted.prefix(
             max(0, sorted.count - self.ghostBaseAvatarDiskCacheLimit)
         ) {
-            try? fm.removeItem(at: old)
+            try? fm.removeItem(at: old.url)
         }
+    }
+
+    // Caller owns ghostBaseAvatarDiskCacheLock.
+    private static func ghostBaseTouchMatchingAvatarDiskCache(url: URL, image: UIImage) -> Bool {
+        guard let cached = UIImage(contentsOfFile: url.path),
+              cached.cgImage != nil, image.cgImage != nil,
+              cached.cgImage?.width == image.cgImage?.width,
+              cached.cgImage?.height == image.cgImage?.height else {
+            return false
+        }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+        return true
     }
 
     //
@@ -412,6 +515,13 @@ final class GhostBaseProfileBackgroundView: UIView {
 
 
     private let sourceDisposable = MetaDisposable()
+    let performanceProbe = JerkgramProfilePerformanceProbe()
+    private var sourceSubscriptionRetained = false
+    private var sourceSubscribedAt: TimeInterval?
+    private var isSceneActive = false
+    private var isControllerVisible = false
+    private var isApplicationActive = UIApplication.shared.applicationState == .active
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private var currentStateKey: GhostBaseProfileBackgroundStateKey?
     private var currentLoadKey: String?
 
@@ -442,6 +552,7 @@ final class GhostBaseProfileBackgroundView: UIView {
         self.addSubview(self.mirrorVideoView)
         self.addSubview(self.blurView)
         self.addSubview(self.tintView)
+        self.performanceProbe.outputIdentity = String(describing: ObjectIdentifier(self.mirrorVideoView.videoLayer))
 
         self.visualSettingsObserver =
             NotificationCenter.default.addObserver(
@@ -453,6 +564,16 @@ final class GhostBaseProfileBackgroundView: UIView {
                     self?.refreshLiveSettings()
                 }
             )
+        for name in [UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
+            self.lifecycleObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main,
+                using: { [weak self] _ in
+                    guard let self else { return }
+                    self.isApplicationActive = name == UIApplication.didBecomeActiveNotification
+                    self.setSceneActive(self.isControllerVisible)
+                }
+            ))
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -460,6 +581,9 @@ final class GhostBaseProfileBackgroundView: UIView {
     }
 
     deinit {
+        for observer in self.lifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
         if let visualSettingsObserver =
             self.visualSettingsObserver {
 
@@ -470,11 +594,43 @@ final class GhostBaseProfileBackgroundView: UIView {
 
         self.secondaryVideoDisposable?.dispose()
         self.secondaryVideoDisposable = nil
+        self.setSourceSubscription(nil)
         self.sourceDisposable.dispose()
+        self.performanceProbe.summary("deinit", sourceRetained: self.sourceSubscriptionRetained, outputRetained: self.secondaryVideoDisposable != nil)
+    }
+
+    func beginPerformanceSpan(_ stage: JerkgramProfilePerformanceProbe.Stage) -> TimeInterval {
+        return self.performanceProbe.begin(stage)
+    }
+
+    func endPerformanceSpan(_ stage: JerkgramProfilePerformanceProbe.Stage, _ started: TimeInterval) {
+        self.performanceProbe.end(stage, started)
+    }
+
+    private func setSourceSubscription(_ value: Disposable?) {
+        if self.sourceSubscriptionRetained { self.performanceProbe.disposals += 1 }
+        self.sourceDisposable.set(value)
+        self.sourceSubscriptionRetained = value != nil
+        self.sourceSubscribedAt = value == nil ? nil : ProcessInfo.processInfo.systemUptime
+        if value != nil { self.performanceProbe.subscriptions += 1 }
+    }
+
+    private func recordSourceReady() {
+        self.performanceProbe.ready += 1
+        if let started = self.sourceSubscribedAt {
+            JerkgramPerformanceDiagnostics.shared.measure(self.performanceProbe.context + ".sourceReadyWall", milliseconds: (ProcessInfo.processInfo.systemUptime - started) * 1000.0)
+            self.performanceProbe.readyMaxWallMs = max(self.performanceProbe.readyMaxWallMs, (ProcessInfo.processInfo.systemUptime - started) * 1000.0)
+            self.sourceSubscribedAt = nil
+        }
+    }
+
+    private func requestSceneUpdate() {
+        self.performanceProbe.updateRequests += 1
+        self.requestUpdate?()
     }
 
     private func tearDownForDisabledSettings() {
-        self.sourceDisposable.set(nil)
+        self.setSourceSubscription(nil)
 
         self.currentLoadKey = nil
         self.currentStateKey = nil
@@ -493,6 +649,29 @@ final class GhostBaseProfileBackgroundView: UIView {
             false
 
         self.isHidden = true
+    }
+
+    func setSceneActive(_ active: Bool) {
+        self.isControllerVisible = active
+        let active = active && self.isApplicationActive
+        guard self.isSceneActive != active else {
+            return
+        }
+        self.isSceneActive = active
+        self.currentStateKey = nil
+        self.currentLoadKey = nil
+        if active {
+            self.requestSceneUpdate()
+        } else {
+            let detach = self.beginPerformanceSpan(.detach)
+            self.setSourceSubscription(nil)
+            self.secondaryVideoDisposable?.dispose()
+            self.secondaryVideoDisposable = nil
+            self.mirrorVideoView.isHidden = true
+            self.mirrorVideoView.videoLayer.flushAndRemoveImage()
+            self.endPerformanceSpan(.detach, detach)
+            self.performanceProbe.summary("inactive", sourceRetained: self.sourceSubscriptionRetained, outputRetained: self.secondaryVideoDisposable != nil)
+        }
     }
 
     private func refreshLiveSettings() {
@@ -514,7 +693,10 @@ final class GhostBaseProfileBackgroundView: UIView {
         }
 
         self.currentStateKey = nil
-        self.requestUpdate?()
+        guard self.isSceneActive else {
+            return
+        }
+        self.requestSceneUpdate()
     }
 
     override func layoutSubviews() {
@@ -547,10 +729,16 @@ final class GhostBaseProfileBackgroundView: UIView {
         isSettings: Bool,
         avatarItem: PeerInfoAvatarListItem?
     ) {
-        guard let liveSettings =
-            GhostBaseProfileBlurSettings
-                .loadEnabled()
-        else {
+        self.performanceProbe.context = isSettings ? "settings" : "peer"
+        let timing = self.beginPerformanceSpan(.background)
+        defer { self.endPerformanceSpan(.background, timing) }
+        guard self.isSceneActive else {
+            return
+        }
+        let preferencesTiming = self.beginPerformanceSpan(.bgPreferences)
+        let loadedSettings = GhostBaseProfileBlurSettings.loadEnabled()
+        self.endPerformanceSpan(.bgPreferences, preferencesTiming)
+        guard let liveSettings = loadedSettings else {
             self.tearDownForDisabledSettings()
             return
         }
@@ -558,6 +746,7 @@ final class GhostBaseProfileBackgroundView: UIView {
         self.settings = liveSettings
         self.isHidden = false
 
+        let resolveTiming = self.beginPerformanceSpan(.bgResolve)
         let source = self.resolveSource(
             peer: peer,
             cachedData: cachedData,
@@ -570,10 +759,13 @@ final class GhostBaseProfileBackgroundView: UIView {
             peer: peer,
             presentationData: presentationData
         )
+        self.endPerformanceSpan(.bgResolve, resolveTiming)
         guard self.currentStateKey != stateKey else {
             return
         }
         self.currentStateKey = stateKey
+        let applyTiming = self.beginPerformanceSpan(.bgApply)
+        defer { self.endPerformanceSpan(.bgApply, applyTiming) }
         self.apply(
             source: source,
             stateKey: stateKey,
@@ -947,6 +1139,7 @@ final class GhostBaseProfileBackgroundView: UIView {
         self.lastAvatarVideoNode = videoNode
 
         guard
+            self.isSceneActive,
             self.window != nil,
             self.desiredVideoIdentity != nil,
             let videoNode
@@ -955,6 +1148,8 @@ final class GhostBaseProfileBackgroundView: UIView {
         }
 
         if self.secondaryVideoDisposable == nil {
+            let timing = self.beginPerformanceSpan(.attach)
+            defer { self.endPerformanceSpan(.attach, timing) }
             self.secondaryVideoDisposable =
                 videoNode.registerSecondaryVideoLayer(
                     self.mirrorVideoView.videoLayer
@@ -970,7 +1165,7 @@ final class GhostBaseProfileBackgroundView: UIView {
         stateKey: GhostBaseProfileBackgroundStateKey,
         presentationData: PresentationData
     ) {
-        self.sourceDisposable.set(nil)
+        self.setSourceSubscription(nil)
         self.currentLoadKey = nil
 
         let isDark = presentationData.theme.overallDarkAppearance
@@ -1008,7 +1203,7 @@ final class GhostBaseProfileBackgroundView: UIView {
             self.imageView.image = nil
             let loadKey = cacheKey as String
             self.currentLoadKey = loadKey
-            self.sourceDisposable.set((self.wallpaperEntrySignal(
+            self.setSourceSubscription((self.wallpaperEntrySignal(
                 wallpaper: wallpaper,
                 fallback: metadataTint,
                 identity: loadKey
@@ -1017,10 +1212,11 @@ final class GhostBaseProfileBackgroundView: UIView {
                 guard let self, self.currentLoadKey == loadKey, let entry else {
                     return
                 }
+                self.recordSourceReady()
                 Self.imageCache.setObject(entry, forKey: cacheKey)
                 self.imageView.image = entry.image
                 self.applyTint(entry.tint, fallback: metadataTint, isDark: isDark, reduced: reduced)
-                self.requestUpdate?()
+                self.requestSceneUpdate()
             }))
 
         case let .premium(main, secondary, identity):
@@ -1039,7 +1235,7 @@ final class GhostBaseProfileBackgroundView: UIView {
             self.imageView.image = nil
             let loadKey = cacheKey as String
             self.currentLoadKey = loadKey
-            self.sourceDisposable.set((deferred { () -> Signal<GhostBaseProfileBackgroundCacheEntry?, NoError> in
+            self.setSourceSubscription((deferred { () -> Signal<GhostBaseProfileBackgroundCacheEntry?, NoError> in
                 guard let image = Self.generatedGradientImage(
                     colors: [main, secondary]
                 ) else {
@@ -1057,10 +1253,11 @@ final class GhostBaseProfileBackgroundView: UIView {
                 guard let self, self.currentLoadKey == loadKey, let entry else {
                     return
                 }
+                self.recordSourceReady()
                 Self.imageCache.setObject(entry, forKey: cacheKey)
                 self.imageView.image = entry.image
                 self.applyTint(entry.tint, fallback: main, isDark: isDark, reduced: reduced)
-                self.requestUpdate?()
+                self.requestSceneUpdate()
             }))
 
         case let .avatar(
@@ -1113,9 +1310,9 @@ final class GhostBaseProfileBackgroundView: UIView {
                 animatedSource
             )
 
-            // RAM cache first, then the small decoded-avatar disk cache.
-            // Only if neither exists do we briefly expose the neutral fallback.
+            // Final avatar RAM hit: immutable resource identity, no new subscription.
             if let cached = Self.imageCache.object(forKey: cacheKey) {
+                self.performanceProbe.ramHits += 1
                 self.imageView.image = cached.image
                 self.applyTint(
                     cached.tint,
@@ -1123,25 +1320,7 @@ final class GhostBaseProfileBackgroundView: UIView {
                     isDark: isDark,
                     reduced: reduced
                 )
-            } else if let diskImage = Self.ghostBaseLoadAvatarDiskCache(
-                identity: loadKey
-            ) {
-                let diskTint = Self.sampledTint(
-                    from: diskImage,
-                    fallback: fallback
-                )
-                let diskEntry = GhostBaseProfileBackgroundCacheEntry(
-                    image: diskImage,
-                    tint: diskTint
-                )
-                Self.imageCache.setObject(diskEntry, forKey: cacheKey)
-                self.imageView.image = diskImage
-                self.applyTint(
-                    diskTint,
-                    fallback: fallback,
-                    isDark: isDark,
-                    reduced: reduced
-                )
+                return
             } else {
                 self.imageView.image = nil
             }
@@ -1161,11 +1340,12 @@ final class GhostBaseProfileBackgroundView: UIView {
                 return
             }
 
-            self.sourceDisposable.set((signal
+            self.setSourceSubscription((signal
             |> deliverOnMainQueue).start(next: { [weak self] entry in
                 guard let self, self.currentLoadKey == loadKey, let entry else {
                     return
                 }
+                self.recordSourceReady()
                 Self.imageCache.setObject(
                     entry,
                     forKey: cacheKey
@@ -1177,7 +1357,7 @@ final class GhostBaseProfileBackgroundView: UIView {
                     isDark: isDark,
                     reduced: reduced
                 )
-                self.requestUpdate?()
+                self.requestSceneUpdate()
             }))
 
         case let .placeholder(
@@ -1187,7 +1367,7 @@ final class GhostBaseProfileBackgroundView: UIView {
             identity
         ):
             self.clearAnimatedMedia()
-            self.sourceDisposable.set(nil)
+            self.setSourceSubscription(nil)
             self.currentLoadKey = nil
 
             self.usesCustomBackground =
@@ -1445,47 +1625,58 @@ final class GhostBaseProfileBackgroundView: UIView {
         identity: String,
         fallback: UIColor
     ) -> Signal<GhostBaseProfileBackgroundCacheEntry?, NoError>? {
-        // produces a 360x360 unclipped presentation. Do not decode the raw
-        // MediaBox resource as UIImage and do not request the 720px V11S path.
-        guard let signal = peerAvatarImage(
-            account: self.context.account,
-            peerReference: PeerReference(peer),
-            authorOfMessage: nil,
-            representation: representation,
-            displayDimensions: CGSize(width: 360.0, height: 360.0),
-            clipStyle: .none,
-            blurred: false,
-            inset: 0.0,
-            emptyColor: nil,
-            synchronousLoad: true,
-            completeOnly: true
-        ) else {
-            return nil
-        }
-
-        return signal
-        |> deliverOn(Queue.concurrentDefaultQueue())
-        |> map { versions -> GhostBaseProfileBackgroundCacheEntry? in
-            // AvatarNode has already rejected every .blurred typed emission.
-            guard let image = versions?.0 else {
-                return nil
+        let context = self.context
+        return deferred { () -> Signal<GhostBaseProfileBackgroundCacheEntry?, NoError> in
+            // Disk read/decode/tint and AvatarNode subscription all start off main.
+            if let image = Self.ghostBaseLoadAvatarDiskCache(identity: identity) {
+                return .single(GhostBaseProfileBackgroundCacheEntry(
+                    image: image,
+                    tint: Self.sampledTint(from: image, fallback: fallback)
+                ))
+            }
+            // produces a 360x360 unclipped presentation. Do not decode the raw
+            // MediaBox resource as UIImage and do not request the 720px V11S path.
+            guard let signal = peerAvatarImage(
+                account: context.account,
+                peerReference: PeerReference(peer),
+                authorOfMessage: nil,
+                representation: representation,
+                displayDimensions: CGSize(width: 360.0, height: 360.0),
+                clipStyle: .none,
+                blurred: false,
+                inset: 0.0,
+                emptyColor: nil,
+                synchronousLoad: false,
+                completeOnly: true
+            ) else {
+                return .single(nil)
             }
 
-            let tint = Self.sampledTint(
-                from: image,
-                fallback: fallback
-            )
+            return signal
+            |> deliverOn(Queue.concurrentDefaultQueue())
+            |> map { versions -> GhostBaseProfileBackgroundCacheEntry? in
+                // AvatarNode has already rejected every .blurred typed emission.
+                guard let image = versions?.0 else {
+                    return nil
+                }
 
-            Self.ghostBaseStoreAvatarDiskCache(
-                image,
-                identity: identity
-            )
+                let tint = Self.sampledTint(
+                    from: image,
+                    fallback: fallback
+                )
 
-            return GhostBaseProfileBackgroundCacheEntry(
-                image: image,
-                tint: tint
-            )
+                Self.ghostBaseStoreAvatarDiskCache(
+                    image,
+                    identity: identity
+                )
+
+                return GhostBaseProfileBackgroundCacheEntry(
+                    image: image,
+                    tint: tint
+                )
+            }
         }
+        |> runOn(Queue.concurrentDefaultQueue())
     }
 
     private func resourceEntrySignal(
@@ -1625,6 +1816,8 @@ final class GhostBaseProfileBackgroundView: UIView {
     }
 
     private static func generatedWallpaperImage(colors: [UInt32], fallback: UIColor) -> UIImage? {
+        let perfStart = JerkgramPerformanceDiagnostics.shared.isRecording ? ProcessInfo.processInfo.systemUptime : nil
+        defer { if let perfStart { JerkgramPerformanceDiagnostics.shared.measure((Thread.isMainThread ? "main." : "worker.") + "wallpaperImage", milliseconds: (ProcessInfo.processInfo.systemUptime - perfStart) * 1000.0) } }
         let resolvedColors: [UIColor]
         if colors.isEmpty {
             resolvedColors = [fallback, fallback]
@@ -1667,6 +1860,8 @@ final class GhostBaseProfileBackgroundView: UIView {
     }
 
     private static func generatedGradientImage(colors: [UIColor]) -> UIImage? {
+        let perfStart = JerkgramPerformanceDiagnostics.shared.isRecording ? ProcessInfo.processInfo.systemUptime : nil
+        defer { if let perfStart { JerkgramPerformanceDiagnostics.shared.measure((Thread.isMainThread ? "main." : "worker.") + "gradientImage", milliseconds: (ProcessInfo.processInfo.systemUptime - perfStart) * 1000.0) } }
         let resolved = colors.isEmpty ? [UIColor.black, UIColor.black] : colors
         return generateImage(
             CGSize(width: 64.0, height: 64.0),
@@ -1700,6 +1895,8 @@ final class GhostBaseProfileBackgroundView: UIView {
     }
 
     private static func sampledTint(from image: UIImage, fallback: UIColor) -> UIColor {
+        let perfStart = JerkgramPerformanceDiagnostics.shared.isRecording ? ProcessInfo.processInfo.systemUptime : nil
+        defer { if let perfStart { JerkgramPerformanceDiagnostics.shared.measure((Thread.isMainThread ? "main." : "worker.") + "sampledTint", milliseconds: (ProcessInfo.processInfo.systemUptime - perfStart) * 1000.0) } }
         guard let cgImage = image.cgImage else {
             return fallback
         }

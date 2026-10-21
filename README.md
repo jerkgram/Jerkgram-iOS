@@ -12,7 +12,7 @@
 
 <p align="center">
   <img alt="iOS" src="https://img.shields.io/badge/iOS-client-111820?style=flat-square">
-  <img alt="Telegram iOS 12.9.2" src="https://img.shields.io/badge/Telegram%20iOS-12.9.2-111820?style=flat-square">
+  <img alt="Telegram iOS 13.0" src="https://img.shields.io/badge/Telegram%20iOS-13.0-111820?style=flat-square">
   <img alt="GPL-2.0-or-later" src="https://img.shields.io/badge/license-GPL--2.0--or--later-111820?style=flat-square">
 </p>
 
@@ -23,7 +23,7 @@
 It keeps Telegram's native iOS experience as the foundation, then adds the missing layer: **what changed, what disappeared, and what still belongs to the conversation.**
 
 > [!NOTE]
-> Jerkgram 1.0.2 is the current Stable public-source release. The canonical source tag is `v1.0.2`; release artifact hashes are recorded in `JERKGRAM_RELEASE.json`.
+> Jerkgram 1.1.0 is the current Stable public-source release. The canonical source tag is `v1.1.0`; release artifact hashes are recorded in `JERKGRAM_RELEASE.json`.
 
 ## Context survives
 
@@ -43,8 +43,8 @@ Feature availability is release-specific. The source tag and release notes for a
 
 ```text
 Upstream repository   TelegramMessenger/Telegram-iOS
-Upstream tag          release-12.9.2
-Upstream commit       6ad963e5b62d354da79040f388ae2b9132fb17b8
+Upstream tag          release-13.0.0
+Upstream commit       f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838
 ```
 
 Jerkgram is independent and is **not an official Telegram application**. It is intended to use its own Telegram API credentials and its own application/signing identity.

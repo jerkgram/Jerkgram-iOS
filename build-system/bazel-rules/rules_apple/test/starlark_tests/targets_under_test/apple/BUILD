@@ -1,11 +1,11 @@
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load(
-    "@build_bazel_rules_swift//swift:swift.bzl",
-    "swift_library",
-)
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load(
+    "@rules_swift//swift:swift.bzl",
+    "swift_library",
+)
 load(
     "//apple:apple.bzl",
     "apple_dynamic_xcframework_import",
@@ -28,7 +28,9 @@ load(
     "apple_core_data_model",
     "apple_core_ml_library",
     "apple_metal_library",
+    "objc_intent_library",
     "swift_apple_core_ml_library",
+    "swift_intent_library",
 )
 load(
     "//apple:versioning.bzl",
@@ -216,9 +218,22 @@ macos_bundle(
 )
 
 sh_binary(
+    name = "ipa_post_processor_insert_file",
+    srcs = ["ipa_post_processor_insert_file.sh"],
+)
+
+sh_binary(
     name = "ipa_post_processor_verify_codesigning",
     srcs = [
         "ipa_post_processor_verify_codesigning.sh",
+    ],
+    tags = ["requires-darwin"],
+)
+
+sh_binary(
+    name = "ipa_post_processor_remove_signature",
+    srcs = [
+        "ipa_post_processor_remove_signature.sh",
     ],
     tags = ["requires-darwin"],
 )
@@ -314,16 +329,12 @@ swift_library(
     tags = common.fixture_tags,
 )
 
-# TODO: Use `library_evolution = True` and remove `features` once rules_swift 3+ is required.
 swift_library(
     name = "swift_fmwk_lib",
     srcs = [
         "DummyFmwk.swift",
     ],
-    features = [
-        "swift.emit_swiftinterface",
-        "swift.enable_library_evolution",
-    ],
+    library_evolution = True,
     module_name = "ios_dynamic_lipoed_swift_xcframework",
     tags = common.fixture_tags,
 )
@@ -1404,17 +1415,51 @@ swift_library(
 
 # Reserved as an input for import_dynamic_(xc)framework rules; referenced by an apple_xcframework
 # rule treated as a List of Files that properly declares a bundle_name matching this module_name.
-# TODO: Use `library_evolution = True` and remove `features` once rules_swift 3+ is required.
 swift_library(
     name = "Swift3PFmwkWithGenHeader",
     srcs = ["DummyFmwk.swift"],
-    features = [
-        "swift.emit_swiftinterface",
-        "swift.enable_library_evolution",
-    ],
     generates_header = True,
+    library_evolution = True,
     module_name = "Swift3PFmwkWithGenHeader",
     tags = common.fixture_tags,
+)
+
+# No swiftinterface, import swiftmodule directly
+swift_library(
+    name = "Swift3PFmwkBinarySwiftmodule",
+    srcs = ["DummyFmwk.swift"],
+    generates_header = True,
+    module_name = "Swift3PFmwkBinarySwiftmodule",
+    tags = common.fixture_tags,
+)
+
+# An xcframework whose Swift module artifacts are binary `.swiftmodule` files
+# rather than textual `.swiftinterface`.
+apple_xcframework(
+    name = "ios_swift_3p_xcframework_binary_swiftmodule",
+    bundle_id = "com.google.example",
+    bundle_name = "Swift3PFmwkBinarySwiftmodule",
+    features = ["swift.emit_c_module"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    ios = {
+        "simulator": [
+            "arm64",
+            "x86_64",
+        ],
+        "device": [
+            "arm64",
+        ],
+    },
+    minimum_os_versions = {
+        "ios": common.min_os_ios.baseline,
+    },
+    public_hdrs = [
+        "//test/starlark_tests/resources:shared.h",
+    ],
+    tags = common.fixture_tags,
+    deps = [":Swift3PFmwkBinarySwiftmodule"],
 )
 
 apple_universal_binary(
@@ -1488,6 +1533,53 @@ generate_dynamic_xcframework(
         ],
         "ios": ["arm64"],
     },
+    tags = common.fixture_tags,
+)
+
+genrule(
+    name = "swift_3p_xcframework_with_generated_header_and_private_swiftinterface",
+    testonly = True,
+    srcs = ["//test/starlark_tests/targets_under_test/ios:ios_swift_dynamic_xcframework"],
+    outs = [
+        "Swift3PFmwkWithGenHeader.xcframework/Info.plist",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Info.plist",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Swift3PFmwkWithGenHeader",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftdoc",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftinterface",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.private.swiftinterface",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Swift3PFmwkWithGenHeader",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Info.plist",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftdoc",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftinterface",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.private.swiftinterface",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftdoc",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftinterface",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.private.swiftinterface",
+        "Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+    ],
+    cmd = """
+set -eu
+
+for src in $(SRCS); do
+  rel_path="$${src#*Swift3PFmwkWithGenHeader.xcframework/}"
+  output_path="$(RULEDIR)/Swift3PFmwkWithGenHeader.xcframework/$$rel_path"
+  mkdir -p "$$(dirname "$$output_path")"
+  cp "$$src" "$$output_path"
+done
+
+cp \
+  "$(RULEDIR)/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftinterface" \
+  "$(RULEDIR)/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.private.swiftinterface"
+cp \
+  "$(RULEDIR)/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftinterface" \
+  "$(RULEDIR)/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.private.swiftinterface"
+cp \
+  "$(RULEDIR)/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftinterface" \
+  "$(RULEDIR)/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.private.swiftinterface"
+""",
     tags = common.fixture_tags,
 )
 
@@ -1575,6 +1667,180 @@ swift_apple_core_ml_library(
     tags = common.fixture_tags,
 )
 
+ios_application(
+    name = "app_with_core_ml_package_library",
+    bundle_id = "my.bundle.id",
+    families = ["iphone"],
+    infoplists = ["//test/starlark_tests/resources:Info.plist"],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [":core_ml_package_library_depending_lib"],
+)
+
+objc_library(
+    name = "core_ml_package_library_depending_lib",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    tags = common.fixture_tags,
+    deps = [
+        ":core_ml_package_objc_lib",
+        ":core_ml_package_swift_lib",
+    ],
+)
+
+objc_library(
+    name = "core_ml_package_objc_lib",
+    srcs = [":core_ml_package_objc_lib_src"],
+    tags = common.fixture_tags,
+    deps = [":SamplePackageCoreML"],
+)
+
+write_file(
+    name = "core_ml_package_objc_lib_src",
+    out = "core_ml_package_objc_lib.m",
+    content = ["""
+#import <Foundation/Foundation.h>
+#import "test/starlark_tests/targets_under_test/apple/SamplePackageCoreML.h"
+
+@interface ObjcPackageLib: NSObject
+@end
+
+@implementation ObjcPackageLib
+- (void)test:(sample *)sample {
+  NSLog(@"%@", sample);
+}
+@end
+"""],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "core_ml_package_swift_lib",
+    srcs = [":core_ml_package_swift_lib_src"],
+    tags = common.fixture_tags,
+    deps = [
+        ":SampleSwiftPackageCoreML",
+    ],
+)
+
+write_file(
+    name = "core_ml_package_swift_lib_src",
+    out = "core_ml_package_swift_lib.swift",
+    content = ["""
+import Foundation
+import test_starlark_tests_targets_under_test_apple_SampleSwiftPackageCoreML
+
+public struct SwiftPackageLib {
+  public var mySample = try! sample(configuration: .init())
+}
+"""],
+    tags = common.fixture_tags,
+)
+
+apple_core_ml_library(
+    name = "SamplePackageCoreML",
+    mlmodel = "//test/testdata/resources:sample.mlpackage",
+    tags = common.fixture_tags,
+)
+
+swift_apple_core_ml_library(
+    name = "SampleSwiftPackageCoreML",
+    mlmodel = "//test/testdata/resources:sample.mlpackage",
+    tags = common.fixture_tags,
+)
+
+# ---------------------------------------------------------------------------------------
+# Targets for Apple intent library tests.
+
+ios_application(
+    name = "app_with_objc_intent_library",
+    bundle_id = "my.bundle.id",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["//test/starlark_tests/resources:Info.plist"],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [":objc_intent_library_depending_lib"],
+)
+
+objc_library(
+    name = "objc_intent_library_depending_lib",
+    srcs = [":objc_intent_library_depending_lib_src"],
+    tags = common.fixture_tags,
+    deps = [":SampleIntentObjc"],
+)
+
+write_file(
+    name = "objc_intent_library_depending_lib_src",
+    out = "objc_intent_library_depending_lib.m",
+    content = ["""
+#import <Foundation/Foundation.h>
+#import "test/starlark_tests/targets_under_test/apple/SampleIntentObjc.h"
+
+@interface ObjcIntentLib: NSObject
+@end
+
+@implementation ObjcIntentLib
+- (void)test:(SampleIntentIntent *)intent {
+  NSLog(@"%@", intent);
+}
+@end
+
+int main(int argc, char **argv) {
+  return 0;
+}
+"""],
+    tags = common.fixture_tags,
+)
+
+objc_intent_library(
+    name = "SampleIntentObjc",
+    src = "//test/testdata/resources:intent.intentdefinition",
+    tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "app_with_swift_intent_library",
+    bundle_id = "my.bundle.id",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["//test/starlark_tests/resources:Info.plist"],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [":swift_intent_library_depending_lib"],
+)
+
+swift_library(
+    name = "swift_intent_library_depending_lib",
+    srcs = [":swift_intent_library_depending_lib_src"],
+    tags = common.fixture_tags,
+    deps = [":SampleIntentSwift"],
+)
+
+write_file(
+    name = "swift_intent_library_depending_lib_src",
+    out = "swift_intent_library_depending_lib.swift",
+    content = ["""
+import UIKit
+import test_starlark_tests_targets_under_test_apple_SampleIntentSwift
+
+@UIApplicationMain
+class AppDelegate: UIResponder, UIApplicationDelegate {
+  public var mySample = SampleIntentIntent()
+}
+"""],
+    tags = common.fixture_tags,
+)
+
+swift_intent_library(
+    name = "SampleIntentSwift",
+    src = "//test/testdata/resources:intent.intentdefinition",
+    tags = common.fixture_tags,
+)
+
 # ---------------------------------------------------------------------------------------
 # Targets for header map rule tests.
 
@@ -1626,22 +1892,31 @@ header_map(
 # Targets for Apple Metal library tests.
 
 ios_application(
-    name = "app_with_metal_library",
+    name = "app_with_objc_metal_library",
     bundle_id = "my.bundle.id",
-    families = ["iphone"],
+    families = [
+        "iphone",
+        "ipad",
+    ],
     infoplists = ["//test/starlark_tests/resources:Info.plist"],
     minimum_os_version = common.min_os_ios.baseline,
     tags = common.fixture_tags,
-    deps = [":metal_library_depending_lib"],
+    deps = [":metal_objc_lib"],
 )
 
-objc_library(
-    name = "metal_library_depending_lib",
-    srcs = ["//test/starlark_tests/resources:main.m"],
+ios_application(
+    name = "app_with_swift_metal_library",
+    bundle_id = "my.bundle.id",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["//test/starlark_tests/resources:Info.plist"],
+    minimum_os_version = common.min_os_ios.baseline,
     tags = common.fixture_tags,
     deps = [
-        ":metal_objc_lib",
         ":metal_swift_lib",
+        "//test/starlark_tests/resources:swift_main_lib",
     ],
 )
 
@@ -1667,6 +1942,10 @@ write_file(
   NSLog(@"Hello, world");
 }
 @end
+
+int main(int argc, char **argv) {
+  return 0;
+}
 """],
     tags = common.fixture_tags,
 )
@@ -1695,6 +1974,7 @@ apple_metal_library(
     name = "SampleMetal",
     srcs = ["//test/testdata/resources:metal_srcs"],
     hdrs = ["//test/testdata/resources:metal_hdrs"],
+    copts = ["-frecord-sources"],
     tags = common.fixture_tags,
 )
 

@@ -1,4 +1,4 @@
-load("@build_bazel_apple_support//rules:apple_genrule.bzl", "apple_genrule")
+load("//rules:apple_genrule.bzl", "apple_genrule")
 load(":universal_exec_tool.bzl", "force_exec", "universal_exec_tool")
 
 package(default_visibility = ["//visibility:public"])
@@ -40,22 +40,39 @@ universal_exec_tool(
     out = "libtool",
 )
 
+# TODO: Attempt to remove need for wrapper
 genrule(
-    name = "exec_cc_wrapper.target_config",
-    srcs = ["osx_cc_wrapper.sh.tpl"],
-    outs = ["cc_wrapper.sh"],
-    cmd = "cp $(SRCS) $(OUTS)",  # Make sure this script is always beside wrapped_clang
+    name = "exec_strip.target_config",
+    srcs = ["strip.sh"],
+    outs = ["strip"],
+    cmd = "cp $(SRCS) $(OUTS)",
 )
 
 force_exec(
-    name = "exec_cc_wrapper",
-    target = ":exec_cc_wrapper.target_config",
+    name = "exec_strip",
+    target = ":exec_strip.target_config",
 )
 
-# Consumed by bazel tests.
-filegroup(
-    name = "for_bazel_tests",
-    testonly = True,
-    srcs = glob(["**"]),
-    visibility = ["//:__pkg__"],
+genrule(
+    name = "exec_llvm_profdata.target_config",
+    srcs = ["llvm-profdata.sh"],
+    outs = ["llvm-profdata"],
+    cmd = "cp $(SRCS) $(OUTS)",
+)
+
+force_exec(
+    name = "exec_llvm_profdata",
+    target = ":exec_llvm_profdata.target_config",
+)
+
+genrule(
+    name = "exec_llvm_cov.target_config",
+    srcs = ["llvm-cov.sh"],
+    outs = ["llvm-cov"],
+    cmd = "cp $(SRCS) $(OUTS)",
+)
+
+force_exec(
+    name = "exec_llvm_cov",
+    target = ":exec_llvm_cov.target_config",
 )

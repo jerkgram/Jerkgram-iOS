@@ -1,0 +1,10 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+
+disallowed-methods = [
+  { path = "std::fs::canonicalize", reason = "use dunce::canonicalize" },
+  { path = "std::path::Path::canonicalize", reason = "use dunce::canonicalize" },
+]

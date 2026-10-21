@@ -12,8 +12,8 @@ Git tag             v<VERSION>
 IPA                  Jerkgram-<VERSION>.ipa
 Source archive       Jerkgram-<VERSION>-source.tar.xz
 Manifest             public-source-manifest.json
-Upstream tag         release-12.9.2
-Upstream commit      6ad963e5b62d354da79040f388ae2b9132fb17b8
+Upstream tag         release-13.0.0
+Upstream commit      f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838
 ```
 
 The public source tag, `JERKGRAM_RELEASE.json`, uploaded artifacts and hashes must all describe the same Stable build.
@@ -52,8 +52,8 @@ See the source tag and release-specific notes for the authoritative contents of 
 | Jerkgram version | `<VERSION>` |
 | Build number | `<BUILD_NUMBER>` |
 | Public source tag | `v<VERSION>` |
-| Telegram iOS upstream tag | `release-12.9.2` |
-| Telegram iOS upstream commit | `6ad963e5b62d354da79040f388ae2b9132fb17b8` |
+| Telegram iOS upstream tag | `release-13.0.0` |
+| Telegram iOS upstream commit | `f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838` |
 | IPA SHA-256 | `<IPA_SHA256>` |
 | Source archive SHA-256 | `<SOURCE_ARCHIVE_SHA256>` |
 | Source manifest SHA-256 | `<SOURCE_MANIFEST_SHA256>` |
@@ -88,7 +88,7 @@ See [`LICENSE`](https://github.com/jerkgram/Jerkgram-iOS/blob/v<VERSION>/LICENSE
 - [ ] Final IPA was produced from that exact release tree.
 - [ ] No release-blocking runtime issue remains.
 - [ ] Jerkgram version and build number are final.
-- [ ] Telegram upstream tag and commit are still `release-12.9.2` / `6ad963e5b62d354da79040f388ae2b9132fb17b8`.
+- [ ] Telegram upstream tag and commit are still `release-13.0.0` / `f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838`.
 
 ### 2. Verify public source
 

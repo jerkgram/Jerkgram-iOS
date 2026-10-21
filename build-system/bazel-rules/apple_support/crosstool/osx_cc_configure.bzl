@@ -18,7 +18,7 @@ load(
     "@bazel_tools//tools/cpp:lib_cc_configure.bzl",
     "escape_string",
 )
-load("@bazel_tools//tools/osx:xcode_configure.bzl", "run_xcode_locator")
+load("//xcode:xcode_configure.bzl", "run_xcode_locator")
 
 def _get_copts_env_var(repository_ctx, name, default = ""):
     """Get an environment variable and split it on ":" to be used as copts.
@@ -162,8 +162,8 @@ def configure_osx_toolchain(repository_ctx):
     # https://github.com/bazelbuild/bazel/blob/ab71a1002c9c53a8061336e40f91204a2a32c38e/tools/cpp/lib_cc_configure.bzl#L17-L38
     # for more info
     xcode_locator = Label("@bazel_tools//tools/osx:xcode_locator.m")
-    cc_toolchain_config = Label("@build_bazel_apple_support//crosstool:cc_toolchain_config.bzl")
-    build_template = Label("@build_bazel_apple_support//crosstool:BUILD.tpl")
+    cc_toolchain_config = Label("@apple_support//crosstool:cc_toolchain_config.bzl")
+    build_template = Label("@apple_support//crosstool:BUILD.tpl")
 
     xcode_toolchains = []
     xcodeloc_err = ""
@@ -187,6 +187,8 @@ def configure_osx_toolchain(repository_ctx):
     features = []
     if _succeeds(repository_ctx, "ld", "-no_warn_duplicate_libraries", "-v"):
         features.append("no_warn_duplicate_libraries")
+    if _succeeds(repository_ctx, "ld", "-reproducible", "-v"):
+        features.append("reproducible_linker_flag")
 
     escaped_include_paths = _get_escaped_xcode_cxx_inc_directories(repository_ctx, xcode_toolchains)
     escaped_cxx_include_directories = []
@@ -208,10 +210,10 @@ def configure_osx_toolchain(repository_ctx):
             "%{conly_flags}": _get_starlark_list(conly_opts),
             "%{cxx_builtin_include_directories}": "\n".join(escaped_cxx_include_directories),
             "%{cxx_flags}": _get_starlark_list(cxx_opts),
-            "%{features}": "\n".join(['"{}"'.format(x) for x in features]),
-            "%{layering_check_modulemap}": "\"@build_bazel_apple_support//crosstool:exec_layering_check_modulemap\"," if enable_layering_check else "",
+            "%{features}": "\n".join(['            "{}",'.format(x) for x in features]),
+            "%{layering_check_modulemap}": "\"@apple_support//crosstool:exec_layering_check_modulemap\"," if enable_layering_check else "",
             "%{link_flags}": _get_starlark_list(link_opts),
-            "%{placeholder_modulemap}": "\"@build_bazel_apple_support//crosstool:module.modulemap\"" if enable_layering_check else "None",
+            "%{placeholder_modulemap}": "\"@apple_support//crosstool:module.modulemap\"" if enable_layering_check else "None",
             "%{tool_paths_overrides}": ",\n            ".join(
                 ['"%s": "%s"' % (k, v) for k, v in tool_paths.items()],
             ),

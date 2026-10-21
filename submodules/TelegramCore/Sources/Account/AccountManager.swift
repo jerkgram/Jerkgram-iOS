@@ -132,7 +132,9 @@ private var declaredEncodables: Void = {
     declareEncodable(StickerPackItem.self, f: { StickerPackItem(decoder: $0) })
     declareEncodable(LocalFileReferenceMediaResource.self, f: { LocalFileReferenceMediaResource(decoder: $0) })
     declareEncodable(OutgoingMessageInfoAttribute.self, f: { OutgoingMessageInfoAttribute(decoder: $0) })
+    declareEncodable(PendingWalletTransferMessageAttribute.self, f: { PendingWalletTransferMessageAttribute(decoder: $0) })
     declareEncodable(EphemeralMessageAttribute.self, f: { EphemeralMessageAttribute(decoder: $0) })
+    declareEncodable(EphemeralReplacementMessageAttribute.self, f: { EphemeralReplacementMessageAttribute(decoder: $0) })
     declareEncodable(EphemeralOutgoingMessageAttribute.self, f: { EphemeralOutgoingMessageAttribute(decoder: $0) })
     declareEncodable(ForwardSourceInfoAttribute.self, f: { ForwardSourceInfoAttribute(decoder: $0) })
     declareEncodable(SourceReferenceMessageAttribute.self, f: { SourceReferenceMessageAttribute(decoder: $0) })
@@ -282,7 +284,7 @@ public func performAppGroupUpgrades(appGroupPath: String, rootPath: String) {
             }
         }
     }
-
+    
     do {
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true
@@ -346,10 +348,10 @@ public func currentAccount(allocateIfNotExists: Bool, networkArguments: NetworkI
                         }
                     }
                     |> distinctUntilChanged
-
+                    
                     return Signal { subscriber in
                         subscriber.putNext(accountResult)
-
+                        
                         return updatedKind.start(next: { value in
                             if value {
                                 reload.set(true)
@@ -416,19 +418,19 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
                         }
                     }
                 }
-
+                
                 var disposables = disposables
-
+                
                 for id in disposables.keys {
                     if validIds[id] == nil {
                         disposeList.append((id, disposables[id]!))
                     }
                 }
-
+                
                 for (id, _) in disposeList {
                     disposables.removeValue(forKey: id)
                 }
-
+                
                 for (id, attributes) in validIds {
                     if disposables[id] == nil {
                         let disposable = MetaDisposable()
@@ -436,7 +438,7 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
                         disposables[id] = disposable
                     }
                 }
-
+                
                 return disposables
             }
             for (_, disposable) in disposeList {
@@ -446,7 +448,7 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
                 Logger.shared.log("managedCleanupAccounts", "cleanup \(id), current is \(String(describing: view.currentRecord?.id))")
                 disposable.set(cleanupAccount(networkArguments: networkArguments, accountManager: accountManager, id: id, encryptionParameters: encryptionParameters, attributes: attributes, rootPath: rootPath, auxiliaryMethods: auxiliaryMethods).start())
             }
-
+            
             var validPaths = Set<String>()
             for record in view.records {
                 if let temporarySessionId = record.temporarySessionId, temporarySessionId != currentTemporarySessionId {
@@ -457,7 +459,7 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
             if let record = view.currentAuthAccount {
                 validPaths.insert("\(accountRecordIdPathName(record.id))")
             }
-
+            
             DispatchQueue.global(qos: .utility).async {
                 if let files = try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: rootPath), includingPropertiesForKeys: [], options: []) {
                     for url in files {
@@ -470,7 +472,7 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
                 }
             }
         })
-
+        
         return ActionDisposable {
             disposable.dispose()
         }

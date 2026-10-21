@@ -17,9 +17,10 @@
 load("//swift:providers.bzl", "SwiftInfo")
 load(":action_names.bzl", "SWIFT_ACTION_SYMBOL_GRAPH_EXTRACT")
 load(":actions.bzl", "run_toolchain_action")
+load(":compiling.bzl", "transitive_swift_dependency_inputs")
 load(":features.bzl", "gather_toolchains")
 load(":toolchain_utils.bzl", "SWIFT_TOOLCHAIN_TYPE")
-load(":utils.bzl", "merge_compilation_contexts")
+load(":utils.bzl", "get_swift_implicit_deps", "merge_compilation_contexts")
 
 def extract_symbol_graph(
         *,
@@ -80,16 +81,18 @@ def extract_symbol_graph(
         toolchains = toolchains,
     )
 
+    implicit_swift_infos, implicit_cc_infos = get_swift_implicit_deps(
+        feature_configuration = feature_configuration,
+        swift_toolchain = toolchains.swift,
+    )
     merged_compilation_context = merge_compilation_contexts(
         transitive_compilation_contexts = compilation_contexts + [
             cc_info.compilation_context
-            for cc_info in toolchains.swift.implicit_deps_providers.cc_infos
+            for cc_info in implicit_cc_infos
         ],
     )
     merged_swift_info = SwiftInfo(
-        swift_infos = (
-            swift_infos + toolchains.swift.implicit_deps_providers.swift_infos
-        ),
+        swift_infos = swift_infos + implicit_swift_infos,
     )
 
     # Flattening this `depset` is necessary because we need to extract the
@@ -98,15 +101,17 @@ def extract_symbol_graph(
     transitive_modules = merged_swift_info.transitive_modules.to_list()
 
     direct_swiftdocs = []
-    transitive_swiftmodules = []
     for module in transitive_modules:
         swift_module = module.swift
         if swift_module:
-            transitive_swiftmodules.append(swift_module.swiftmodule)
             if module.name == module_name and swift_module.swiftdoc:
                 direct_swiftdocs.append(swift_module.swiftdoc)
+    transitive_swift_dependency_inputs_list = transitive_swift_dependency_inputs(
+        transitive_modules,
+    )
 
     prerequisites = struct(
+        additional_inputs = toolchains.cc.all_files.to_list(),
         bin_dir = feature_configuration._bin_dir,
         cc_compilation_context = merged_compilation_context,
         developer_dirs = toolchains.swift.developer_dirs,
@@ -120,7 +125,7 @@ def extract_symbol_graph(
         output_dir = output_dir,
         target_label = feature_configuration._label,
         transitive_modules = transitive_modules,
-        transitive_swiftmodules = transitive_swiftmodules,
+        transitive_swift_dependency_inputs = transitive_swift_dependency_inputs_list,
     )
 
     run_toolchain_action(

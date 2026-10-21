@@ -15,6 +15,11 @@
 """Partial implementation for debug symbol file processing."""
 
 load(
+    "@apple_support//lib:apple_support.bzl",
+    "apple_support",
+)
+load("@apple_support//lib:lipo.bzl", "lipo")
+load(
     "@bazel_skylib//lib:partial.bzl",
     "partial",
 )
@@ -22,11 +27,6 @@ load(
     "@bazel_skylib//lib:paths.bzl",
     "paths",
 )
-load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
-    "apple_support",
-)
-load("@build_bazel_apple_support//lib:lipo.bzl", "lipo")
 load(
     "//apple:providers.bzl",
     "AppleBundleVersionInfo",
@@ -44,6 +44,10 @@ load(
 load(
     "//apple/internal:resource_actions.bzl",
     "resource_actions",
+)
+load(
+    "//apple/internal:shared_environment.bzl",
+    "shared_environment",
 )
 load(
     "//apple/internal/providers:apple_debug_info.bzl",
@@ -347,7 +351,7 @@ def _bundle_dsym_files(
             inputs = generated_dsym_binaries + [dsym_plist] + found_binaries_by_arch.values(),
             outputs = [dsym_bundle_dir],
             command = ("mkdir -p \"${OUTPUT_DIR}/Contents/Resources/DWARF\" && " + dsyms_command + " && " + plist_command),
-            env = {
+            env = shared_environment.default_env | {
                 "OUTPUT_DIR": dsym_bundle_dir.path,
             },
             mnemonic = "DSYMBundleCopy",

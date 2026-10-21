@@ -1,0 +1,14 @@
+[package]
+name = "wallet-engine-apple-bindgen"
+version = "0.1.0"
+authors = ["TON Core"]
+edition = "2024"
+rust-version = "1.96.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+uniffi = { version = "=0.32.0", features = ["cli"] }
+
+[lints.clippy]
+expect_used = "deny"

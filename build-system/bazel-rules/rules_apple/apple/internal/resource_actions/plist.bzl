@@ -15,16 +15,16 @@
 """Plist related actions."""
 
 load(
+    "@apple_support//lib:apple_support.bzl",
+    "apple_support",
+)
+load(
     "@bazel_skylib//lib:paths.bzl",
     "paths",
 )
 load(
     "@bazel_skylib//lib:shell.bzl",
     "shell",
-)
-load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
-    "apple_support",
 )
 load(
     "//apple:providers.bzl",
@@ -37,6 +37,10 @@ load(
 load(
     "//apple/internal:platform_support.bzl",
     "platform_support",
+)
+load(
+    "//apple/internal:shared_environment.bzl",
+    "shared_environment",
 )
 
 def plisttool_action(
@@ -67,6 +71,7 @@ def plisttool_action(
         actions = actions,
         apple_fragment = platform_prerequisites.apple_fragment,
         arguments = [control_file.path],
+        env = shared_environment.default_env,
         executable = plisttool,
         inputs = inputs + [control_file],
         mnemonic = mnemonic,
@@ -104,6 +109,7 @@ def compile_plist(*, actions, input_file, output_file, platform_prerequisites):
         actions = actions,
         apple_fragment = platform_prerequisites.apple_fragment,
         command = complete_command,
+        env = shared_environment.default_env,
         inputs = [input_file],
         mnemonic = mnemonic,
         outputs = [output_file],

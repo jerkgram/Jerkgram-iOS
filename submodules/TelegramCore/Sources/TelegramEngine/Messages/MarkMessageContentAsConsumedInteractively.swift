@@ -8,13 +8,13 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
         if let message = transaction.getMessage(messageId), message.flags.contains(.Incoming) {
             var updateMessage = false
             var updatedAttributes = message.attributes
-
+            
             for i in 0 ..< updatedAttributes.count {
                 if let attribute = updatedAttributes[i] as? ConsumableContentMessageAttribute {
                     if !attribute.consumed {
                         updatedAttributes[i] = ConsumableContentMessageAttribute(consumed: true)
                         updateMessage = true
-
+                        
                         if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                             if let state = transaction.getPeerChatState(message.id.peerId) as? SecretChatState {
                                 var layer: SecretChatLayer?
@@ -50,7 +50,7 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                     updatedAttributes[i] = ConsumablePersonalMentionMessageAttribute(consumed: attribute.consumed, pending: true)
                 }
             }
-
+            
             let timestamp = Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970)
             for i in 0 ..< updatedAttributes.count {
                 if let attribute = updatedAttributes[i] as? AutoremoveTimeoutMessageAttribute {
@@ -61,7 +61,7 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                         }
                         updatedAttributes[i] = AutoremoveTimeoutMessageAttribute(timeout: timeout, countdownBeginTime: timestamp)
                         updateMessage = true
-
+                        
                         if messageId.peerId.namespace == Namespaces.Peer.SecretChat {
                             var layer: SecretChatLayer?
                             let state = transaction.getPeerChatState(message.id.peerId) as? SecretChatState
@@ -75,7 +75,7 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                                         layer = sequenceState.layerNegotiationState.activeLayer.secretChatLayer
                                 }
                             }
-
+                            
                             if let state = state, let layer = layer, let globallyUniqueId = message.globallyUniqueId {
                                 let updatedState = addSecretChatOutgoingOperation(transaction: transaction, peerId: messageId.peerId, operation: .readMessagesContent(layer: layer, actionGloballyUniqueId: Int64.random(in: Int64.min ... Int64.max), globallyUniqueIds: [globallyUniqueId]), state: state)
                                 if updatedState != state {
@@ -92,7 +92,7 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                         }
                         updatedAttributes[i] = AutoclearTimeoutMessageAttribute(timeout: timeout, countdownBeginTime: timestamp)
                         updateMessage = true
-
+                        
                         if messageId.peerId.namespace == Namespaces.Peer.SecretChat {
                             var layer: SecretChatLayer?
                             let state = transaction.getPeerChatState(message.id.peerId) as? SecretChatState
@@ -106,7 +106,7 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                                         layer = sequenceState.layerNegotiationState.activeLayer.secretChatLayer
                                 }
                             }
-
+                            
                             if let state = state, let layer = layer, let globallyUniqueId = message.globallyUniqueId {
                                 let updatedState = addSecretChatOutgoingOperation(transaction: transaction, peerId: messageId.peerId, operation: .readMessagesContent(layer: layer, actionGloballyUniqueId: Int64.random(in: Int64.min ... Int64.max), globallyUniqueIds: [globallyUniqueId]), state: state)
                                 if updatedState != state {
@@ -117,7 +117,7 @@ func _internal_markMessageContentAsConsumedInteractively(postbox: Postbox, messa
                     }
                 }
             }
-
+            
             if updateMessage {
                 transaction.updateMessage(message.id, update: { currentMessage in
                     var storeForwardInfo: StoreMessageForwardInfo?
@@ -137,12 +137,12 @@ func _internal_markReactionsOrPollVotesAsSeenInteractively(postbox: Postbox, mes
             var updateMessage = false
             var updatedAttributes = message.attributes
             var updatedMedia = message.media
-
+            
             for i in 0 ..< updatedAttributes.count {
                 if let attribute = updatedAttributes[i] as? ReactionsMessageAttribute, attribute.hasUnseen {
                     updatedAttributes[i] = attribute.withAllSeen()
                     updateMessage = true
-
+                    
                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                     } else {
                         transaction.setPendingMessageAction(type: .readReactionOrPollVote, id: messageId, action: ReadReactionAction())
@@ -153,14 +153,14 @@ func _internal_markReactionsOrPollVotesAsSeenInteractively(postbox: Postbox, mes
                 if let poll = updatedMedia[i] as? TelegramMediaPoll {
                     updatedMedia[i] = poll.withoutUnreadResults()
                     updateMessage = true
-
+                    
                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                     } else {
                         transaction.setPendingMessageAction(type: .readReactionOrPollVote, id: messageId, action: ReadReactionAction())
                     }
                 }
             }
-
+            
             if updateMessage {
                 transaction.updateMessage(message.id, update: { currentMessage in
                     var storeForwardInfo: StoreMessageForwardInfo?
@@ -183,7 +183,7 @@ func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: M
         var updatedAttributes = message.attributes
         var updatedMedia = message.media
         var updatedTags = message.tags
-
+        
         for i in 0 ..< updatedAttributes.count {
             if let attribute = updatedAttributes[i] as? ConsumableContentMessageAttribute {
                 if !attribute.consumed {
@@ -199,7 +199,7 @@ func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: M
                 updateMessage = true
             }
         }
-
+        
         let timestamp = Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970)
         let countdownBeginTime = consumeDate ?? timestamp
         
@@ -224,10 +224,10 @@ func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: M
                         updatedAttributes[i] = AutoremoveTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: countdownBeginTime)
                     }
                     updateMessage = true
-
+                                 
                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                     } else {
-                        if !jerkgramKeepOneTimeRemoteMedia && (attribute.timeout == viewOnceTimeout || timestamp >= countdownBeginTime + attribute.timeout) {
+                        if !jerkgramKeepOneTimeRemoteMedia && (attribute.timeout == viewOnceTimeout || timestamp >= autoremoveExpiryTimestamp(countdownBeginTime: countdownBeginTime, timeout: attribute.timeout)) {
                             for i in 0 ..< updatedMedia.count {
                                 if let _ = updatedMedia[i] as? TelegramMediaImage {
                                     let ghostBaseOT1KeepOutgoingTimerLocal = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
@@ -268,11 +268,11 @@ func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: M
                         updatedAttributes[i] = AutoclearTimeoutMessageAttribute(timeout: attribute.timeout, countdownBeginTime: countdownBeginTime)
                     }
                     updateMessage = true
-
+                    
                     if message.id.peerId.namespace == Namespaces.Peer.SecretChat {
                     } else {
                         for i in 0 ..< updatedMedia.count {
-                            if !jerkgramKeepOneTimeRemoteMedia && (attribute.timeout == viewOnceTimeout || timestamp >= countdownBeginTime + attribute.timeout) {
+                            if !jerkgramKeepOneTimeRemoteMedia && (attribute.timeout == viewOnceTimeout || timestamp >= autoremoveExpiryTimestamp(countdownBeginTime: countdownBeginTime, timeout: attribute.timeout)) {
                                 if let _ = updatedMedia[i] as? TelegramMediaImage {
                                     updatedMedia[i] = TelegramMediaExpiredContent(data: .image)
                                 } else if let file = updatedMedia[i] as? TelegramMediaFile {
@@ -295,7 +295,7 @@ func markMessageContentAsConsumedRemotely(transaction: Transaction, messageId: M
                 }
             }
         }
-
+        
         if updateMessage {
             transaction.updateMessage(message.id, update: { currentMessage in
                 var storeForwardInfo: StoreMessageForwardInfo?

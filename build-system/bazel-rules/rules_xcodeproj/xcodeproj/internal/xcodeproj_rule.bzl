@@ -203,34 +203,12 @@ https://github.com/MobileNativeFoundation/rules_xcodeproj/issues/new?template=bu
 
 # Actions
 
-def _write_autogeneration_config_file(
-        actions,
-        config,
-        name):
-    autogeneration_config_file = actions.declare_file(
-        "{}-autogeneration-config-file".format(name),
-    )
-
-    args = actions.args()
-    args.set_param_file_format("multiline")
-
-    args.add_all(config.get("test_options", ["", "", False]))
-    args.add_all(
-        config.get("scheme_name_exclude_patterns", []),
-        omit_if_empty = False,
-        terminate_with = "",
-    )
-    actions.write(autogeneration_config_file, args)
-
-    return autogeneration_config_file
-
 def _write_bazel_integration_files(
         *,
         actions,
         bazel_build_script_template,
         bazel_dependencies_script_template,
         bazel_path,
-        bazel_env,
         colorize,
         infos_per_xcode_configuration,
         install_path,
@@ -241,7 +219,6 @@ def _write_bazel_integration_files(
         target_ids_list):
     bazel_build_script = write_bazel_build_script(
         actions = actions,
-        bazel_env = bazel_env,
         bazel_path = bazel_path,
         generator_label = label,
         target_ids_list = target_ids_list,
@@ -280,6 +257,7 @@ def _write_installer(
         install_path,
         name,
         project_pbxproj,
+        rsync,
         template,
         xcschememanagement,
         xcschemes):
@@ -303,6 +281,7 @@ def _write_installer(
             "%generated_xcfilelist%": generated_xcfilelist.short_path,
             "%output_path%": install_path,
             "%project_pbxproj%": project_pbxproj.short_path,
+            "%rsync%": rsync.short_path,
             "%xcschememanagement%": xcschememanagement.short_path,
             "%xcschemes%": xcschemes.short_path,
         },
@@ -549,16 +528,10 @@ def _write_schemes(
         top_level_deps = top_level_deps,
     )
 
-    autogeneration_config_file = _write_autogeneration_config_file(
-        actions = actions,
-        config = autogeneration_config,
-        name = name,
-    )
-
     return xcschemes_execution.write_schemes(
         actions = actions,
         autogeneration_mode = autogeneration_mode,
-        autogeneration_config_file = autogeneration_config_file,
+        autogeneration_config = autogeneration_config,
         default_xcode_configuration = default_xcode_configuration,
         colorize = colorize,
         consolidation_maps = consolidation_maps,
@@ -751,7 +724,6 @@ Are you using an `alias`? `xcodeproj.focused_targets` and \
             ctx.file._generate_bazel_dependencies_script_template
         ),
         bazel_path = ctx.attr.bazel_path,
-        bazel_env = ctx.attr.bazel_env,
         colorize = colorize,
         infos_per_xcode_configuration = infos_per_xcode_configuration,
         install_path = install_path,
@@ -776,6 +748,7 @@ Are you using an `alias`? `xcodeproj.focused_targets` and \
         install_path = install_path,
         name = name,
         project_pbxproj = project_pbxproj,
+        rsync = ctx.file._rsync,
         template = ctx.file._installer_template,
         xcschememanagement = xcschememanagement,
         xcschemes = xcschemes,
@@ -934,6 +907,11 @@ A dict mapping of Labels for StoreKit Testing configuration files to their File 
                 "//tools/generators/pbxtargetdependencies:universal_pbxtargetdependencies",
             ),
             executable = True,
+        ),
+        "_rsync": attr.label(
+            allow_single_file = True,
+            cfg = "exec",
+            default = Label("//xcodeproj/internal/bazel_integration_files:renamed_rsync"),
         ),
         "_selected_model_versions_generator": attr.label(
             cfg = "exec",

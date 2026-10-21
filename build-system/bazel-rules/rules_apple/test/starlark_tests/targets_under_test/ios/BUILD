@@ -1,9 +1,9 @@
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load(
-    "@build_bazel_rules_swift//swift:swift.bzl",
+    "@rules_swift//swift:swift.bzl",
     "swift_library",
 )
-load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load(
     "//apple:apple.bzl",
     "apple_dynamic_framework_import",
@@ -24,8 +24,10 @@ load(
     "ios_framework",
     "ios_imessage_application",
     "ios_imessage_extension",
+    "ios_kernel_extension",
     "ios_static_framework",
     "ios_sticker_pack_extension",
+    "ios_test_runner",
     "ios_ui_test",
     "ios_unit_test",
 )
@@ -36,6 +38,10 @@ load(
 load(
     "//apple:resources.bzl",
     "apple_resource_group",
+)
+load(
+    "//apple:versioning.bzl",
+    "apple_bundle_version",
 )
 load(
     "//apple:xcarchive.bzl",
@@ -124,6 +130,101 @@ ios_application(
 )
 
 ios_application(
+    name = "app_minimal_no_infoplist",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_missing_version",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-version.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_missing_short_version",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-short-version.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_bogus_provisioning_profile",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/starlark_tests/resources:bogus.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+apple_bundle_version(
+    name = "app_version_overrides_plist_contents_version",
+    build_version = "9.8.7",
+    short_version_string = "6.5",
+    tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "app_version_overrides_plist_contents",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    version = ":app_version_overrides_plist_contents_version",
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_minimal_order_file",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_order_file_main_lib",
+    ],
+)
+
+ios_application(
     name = "app_minimal_with_space_and_post_processor",
     bundle_id = "com.google.example",
     bundle_name = "app minimal",
@@ -140,10 +241,123 @@ ios_application(
     ],
 )
 
+ios_application(
+    name = "app_with_ipa_post_processor",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    ipa_post_processor = "//test/starlark_tests/targets_under_test/apple:ipa_post_processor_insert_file",
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_special_linkopts",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    linkopts = [
+        "-alias",
+        "_main",
+        "_linkopts_test_main",
+        "-u",
+        "_linkopts_test_main",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+write_file(
+    name = "app_additional_linker_input",
+    out = "app_additional_linker_input.lds",
+    content = [
+        "_main",
+    ],
+    tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "app_with_additional_linker_inputs",
+    additional_linker_inputs = [":app_additional_linker_input"],
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    linkopts = [
+        "-order_file",
+        "$(location :app_additional_linker_input)",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app-with-hyphen",
+    bundle_id = "com.google.example",
+    entitlements = "//test/starlark_tests/resources:entitlements.plist",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
 xcarchive(
     name = "app_minimal.xcarchive",
     bundle = ":app_minimal",
     tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "swift_app_using_span_pre_26",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.stable_swift_abi,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_span_main_lib",
+    ],
+)
+
+ios_application(
+    name = "swift_app_using_span_post_26",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.span_in_os,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_span_main_lib",
+    ],
 )
 
 ios_application(
@@ -270,6 +484,54 @@ ios_application(
 )
 
 ios_application(
+    name = "app_with_bundle_library_dependency",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:bundle_library_dependency_lib",
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_debugger_entitlements",
+    bundle_id = "com.google.example",
+    entitlements = "//test/starlark_tests/resources:debugger_entitlements.plist",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_debugger_entitlements_without_get_task_allow",
+    bundle_id = "com.google.example",
+    entitlements = "//test/starlark_tests/resources:debugger_entitlements.plist",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/starlark_tests/resources:integration_testing_ios_without_get_task_allow.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
     name = "app_precompiled_resource_bundle",
     app_icons = ["//test/testdata/resources:app_icons_ios"],
     bundle_id = "com.google.example",
@@ -306,6 +568,21 @@ ios_application(
 )
 
 ios_application(
+    name = "app_with_core_ml_precompiled_resource_bundle",
+    bundle_id = "my.bundle.id",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["//test/starlark_tests/resources:Info.plist"],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_uikit_appdelegate_with_core_ml_precompiled_resource_bundle",
+    ],
+)
+
+ios_application(
     name = "app_multiple_infoplists",
     bundle_id = "com.google.example",
     families = ["iphone"],
@@ -316,6 +593,122 @@ ios_application(
     minimum_os_version = common.min_os_ios.baseline,
     tags = common.fixture_tags,
     deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+objc_library(
+    name = "localized_unprocessed_resources_lib",
+    data = [
+        "//test/starlark_tests/resources:localized_generic_resources",
+    ],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "localized_unprocessed_resources_without_fr_lib",
+    data = [
+        "//test/starlark_tests/resources:localized_generic_resources_without_fr",
+    ],
+    tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "app_with_localized_unprocessed_resources",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":localized_unprocessed_resources_lib",
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_localized_unprocessed_resources_without_fr",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":localized_unprocessed_resources_without_fr_lib",
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_localized_unprocessed_resources_filtered_by_attribute",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    locales_to_include = ["it"],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":localized_unprocessed_resources_lib",
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_fr_and_it_localized_strings",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    resources = [
+        "//test/starlark_tests/resources:fr.lproj/localized.strings",
+        "//test/starlark_tests/resources:it.lproj/localized.strings",
+    ],
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_settings_bundle_only",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    settings_bundle = "//test/starlark_tests/resources:settings_bundle_ios",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_texture_atlas",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:ios_texture_atlas_lib",
         "//test/starlark_tests/resources:objc_main_lib",
     ],
 )
@@ -743,6 +1136,65 @@ ios_application(
     ],
 )
 
+objc_library(
+    name = "nested_private_resource_dep_1",
+    data = [
+        "//test/starlark_tests/resources:sample.png",
+    ],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "nested_private_resource_dep_2",
+    data = [
+        "//test/starlark_tests/resources:view_ios.xib",
+    ],
+    tags = common.fixture_tags,
+    deps = [
+        ":nested_private_resource_dep_1",
+    ],
+)
+
+write_file(
+    name = "nested_private_swift_src",
+    out = "NestedPrivate.swift",
+    content = ["public struct NestedPrivate {}"],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "nested_private_swift_lib",
+    srcs = [":nested_private_swift_src"],
+    private_deps = [
+        ":nested_private_resource_dep_2",
+    ],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "objc_lib_with_implementation_dep_resources",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    implementation_deps = [
+        ":nested_private_swift_lib",
+    ],
+    tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "app_with_nested_private_and_implementation_dep_resources",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":objc_lib_with_implementation_dep_resources",
+    ],
+)
+
 ios_application(
     name = "app_with_transitive_swift_libraries_with_storyboards",
     bundle_id = "com.google.example",
@@ -785,6 +1237,43 @@ ios_application(
     tags = common.fixture_tags,
     deps = [
         "//test/starlark_tests/resources:swift_lib_with_storyboard_copy",
+    ],
+)
+
+# ---------------------------------------------------------------------------------------
+
+objc_library(
+    name = "duplicate_resource_shared_lib",
+    data = [
+        "duplicate_shared_res/foo.txt",
+    ],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "duplicate_resource_app_lib",
+    data = [
+        "duplicate_app_res/foo.txt",
+    ],
+    tags = common.fixture_tags,
+    deps = [
+        ":duplicate_resource_shared_lib",
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_resources_mapped_to_same_path",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":duplicate_resource_app_lib",
     ],
 )
 
@@ -929,6 +1418,117 @@ ios_application(
     ],
     minimum_os_version = common.min_os_ios.baseline,
     provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_indirect_swift_dep",
+    bundle_id = "com.google.example",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":objc_lib_with_indirect_swift_dep",
+    ],
+)
+
+objc_library(
+    name = "objc_lib_with_indirect_swift_dep",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_swift_dep_and_asan_linkopt",
+    bundle_id = "com.google.example",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":objc_lib_with_swift_dep_and_asan_linkopt",
+    ],
+)
+
+objc_library(
+    name = "objc_lib_with_swift_dep_and_asan_linkopt",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    linkopts = ["-fsanitize=address"],
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_swift_dep_and_tsan_linkopt",
+    bundle_id = "com.google.example",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":objc_lib_with_swift_dep_and_tsan_linkopt",
+    ],
+)
+
+objc_library(
+    name = "objc_lib_with_swift_dep_and_tsan_linkopt",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    linkopts = ["-fsanitize=thread"],
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_swift_dep_and_ubsan_linkopt",
+    bundle_id = "com.google.example",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":objc_lib_with_swift_dep_and_ubsan_linkopt",
+    ],
+)
+
+objc_library(
+    name = "objc_lib_with_swift_dep_and_ubsan_linkopt",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    linkopts = ["-fsanitize=undefined"],
     tags = common.fixture_tags,
     deps = [
         "//test/starlark_tests/resources:swift_main_lib",
@@ -1565,6 +2165,25 @@ ios_application(
     ],
 )
 
+ios_application(
+    name = "app_min_os_nplus1_with_ext_min_os_baseline",
+    bundle_id = "com.google.example",
+    extensions = [":ext"],
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.nplus1,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
 xcarchive(
     name = "app_with_ext.xcarchive",
     bundle = ":app_with_ext",
@@ -1715,6 +2334,103 @@ ios_extension(
     deps = [
         "//test/starlark_tests/resources:objc_main_lib",
     ],
+)
+
+ios_extension(
+    name = "ext_missing_version",
+    bundle_id = "com.google.example.ext",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-version.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_extension(
+    name = "ext_missing_short_version",
+    bundle_id = "com.google.example.ext",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-missing-short-version.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_extension(
+    name = "ext_mismatched_bundle_id",
+    bundle_id = "com.google.other",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_extension(
+    name = "ext_mismatched_short_version",
+    bundle_id = "com.google.example.ext",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-short-version-1.1.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_extension(
+    name = "ext_mismatched_version",
+    bundle_id = "com.google.example.ext",
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info-extension-version-1.1.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+objc_library(
+    name = "objc_library_with_ios_extension_dep",
+    srcs = ["//test/starlark_tests/resources:common.m"],
+    tags = common.fixture_tags,
+    deps = [":ext"],
 )
 
 ios_extension(
@@ -2852,6 +3568,64 @@ generate_dynamic_xcframework(
     tags = common.fixture_tags,
 )
 
+genrule(
+    name = "renamed_bundle_dynamic_xcframework",
+    srcs = [":generated_dynamic_xcframework_with_headers"],
+    outs = ["RenamedDynamicXcframework.xcframework/Info.plist"] + [
+        "{0}/{1}/{2}/{3}".format(
+            "RenamedDynamicXcframework.xcframework",
+            platform_id,
+            "generated_dynamic_xcframework_with_headers.framework",
+            file,
+        )
+        for file in [
+            "Headers/generated_dynamic_xcframework_with_headers.h",
+            "Headers/SharedClass.h",
+            "Modules/module.modulemap",
+            "generated_dynamic_xcframework_with_headers",
+            "Info.plist",
+        ]
+        for platform_id in [
+            "ios-arm64_arm64e",
+            "ios-arm64_x86_64-simulator",
+        ]
+    ],
+    cmd = """
+mkdir -p $(RULEDIR)/RenamedDynamicXcframework.xcframework
+rm -rf $(RULEDIR)/RenamedDynamicXcframework.xcframework/*
+cp -Rp $(RULEDIR)/generated_dynamic_xcframework_with_headers.xcframework/. $(RULEDIR)/RenamedDynamicXcframework.xcframework/
+""",
+    tags = common.fixture_tags,
+)
+
+apple_dynamic_xcframework_import(
+    name = "ios_imported_dynamic_xcframework_with_renamed_bundle",
+    features = ["-swift.layering_check"],
+    tags = common.fixture_tags,
+    xcframework_imports = [":renamed_bundle_dynamic_xcframework"],
+)
+
+write_file(
+    name = "swift_with_renamed_bundle_objc_xcframework_src",
+    out = "SwiftWithRenamedBundleObjcFramework.swift",
+    content = ["""
+import generated_dynamic_xcframework_with_headers
+
+func renamed_bundle_dynamic_xcframework_function() {
+  let sc = generated_dynamic_xcframework_with_headers.SharedClass()
+  sc.doSomethingShared()
+}
+"""],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "renamed_bundle_dynamic_xcframework_depending_swift_lib",
+    srcs = [":swift_with_renamed_bundle_objc_xcframework_src"],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_dynamic_xcframework_with_renamed_bundle"],
+)
+
 # Objective-C app with imported Swift XCFramework.
 ios_application(
     name = "app_with_imported_swift_xcframework",
@@ -2942,6 +3716,17 @@ apple_dynamic_xcframework_import(
     xcframework_imports = [":ios_swift_dynamic_xcframework"],
 )
 
+apple_dynamic_xcframework_import(
+    name = "ios_imported_swift_dynamic_xcframework_with_private_swiftinterface",
+    features = [
+        "-swift.layering_check",
+    ],
+    tags = common.fixture_tags,
+    xcframework_imports = [
+        "//test/starlark_tests/targets_under_test/apple:swift_3p_xcframework_with_generated_header_and_private_swiftinterface",
+    ],
+)
+
 genrule(
     name = "ios_swift_dynamic_xcframework",
     srcs = ["//test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_with_generated_header"],
@@ -2964,6 +3749,391 @@ genrule(
     ],
     cmd = "unzip -qq $(execpath //test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_with_generated_header) -d $(RULEDIR)",
     tags = common.fixture_tags,
+)
+
+genrule(
+    name = "ios_swift_dynamic_xcframework_with_private_modulemap",
+    srcs = [":ios_swift_dynamic_xcframework"],
+    outs = [
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/Info.plist",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Info.plist",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Swift3PFmwkWithGenHeader",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftdoc",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftinterface",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/module.private.modulemap",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Swift3PFmwkWithGenHeader",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Info.plist",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftdoc",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/arm64.swiftinterface",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftdoc",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/Swift3PFmwkWithGenHeader.swiftmodule/x86_64.swiftinterface",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+        "private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/module.private.modulemap",
+    ],
+    cmd = """
+set -eu
+
+for src in $(SRCS); do
+  rel_path="$${src#*Swift3PFmwkWithGenHeader.xcframework/}"
+  output_path="$(RULEDIR)/private_modulemap/Swift3PFmwkWithGenHeader.xcframework/$$rel_path"
+  mkdir -p "$$(dirname "$$output_path")"
+  cp "$$src" "$$output_path"
+done
+
+for framework in \
+  "$(RULEDIR)/private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework" \
+  "$(RULEDIR)/private_modulemap/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework"; do
+  mkdir -p "$$framework/PrivateHeaders"
+  cat > "$$framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h" <<'EOF'
+#pragma once
+
+int Swift3PFmwkWithGenHeaderPrivateValue(void);
+EOF
+  cat > "$$framework/Modules/module.private.modulemap" <<'EOF'
+framework module Swift3PFmwkWithGenHeader_Private {
+  header "Swift3PFmwkWithGenHeader_Private.h"
+  export *
+}
+EOF
+  for swiftinterface in "$$framework"/Modules/Swift3PFmwkWithGenHeader.swiftmodule/*.swiftinterface; do
+    perl -0pi -e 's/import Foundation\\n/import Swift3PFmwkWithGenHeader_Private\\nimport Foundation\\n/' "$$swiftinterface"
+  done
+done
+""",
+    tags = common.fixture_tags,
+)
+
+genrule(
+    name = "ios_dynamic_xcframework_with_private_modulemap_no_swiftmodule",
+    srcs = [":ios_swift_dynamic_xcframework"],
+    outs = [
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/Info.plist",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Info.plist",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Swift3PFmwkWithGenHeader",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework/Modules/module.private.modulemap",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Swift3PFmwkWithGenHeader",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Headers/Swift3PFmwkWithGenHeader.h",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Info.plist",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/module.modulemap",
+        "private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework/Modules/module.private.modulemap",
+    ],
+    cmd = """
+set -eu
+
+for src in $(SRCS); do
+  rel_path="$${src#*Swift3PFmwkWithGenHeader.xcframework/}"
+  case "$$rel_path" in
+    */Modules/Swift3PFmwkWithGenHeader.swiftmodule/*) continue ;;
+  esac
+
+  output_path="$(RULEDIR)/private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/$$rel_path"
+  mkdir -p "$$(dirname "$$output_path")"
+  cp "$$src" "$$output_path"
+done
+
+for framework in \
+  "$(RULEDIR)/private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64/Swift3PFmwkWithGenHeader.framework" \
+  "$(RULEDIR)/private_modulemap_no_swiftmodule/Swift3PFmwkWithGenHeader.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkWithGenHeader.framework"; do
+  mkdir -p "$$framework/PrivateHeaders"
+  cat > "$$framework/PrivateHeaders/Swift3PFmwkWithGenHeader_Private.h" <<'EOF'
+#pragma once
+
+int Swift3PFmwkWithGenHeaderPrivateValue(void);
+EOF
+  cat > "$$framework/Modules/module.private.modulemap" <<'EOF'
+framework module Swift3PFmwkWithGenHeader_Private {
+  header "Swift3PFmwkWithGenHeader_Private.h"
+  export *
+}
+EOF
+done
+""",
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "dynamic_swift_xcframework_with_private_swiftinterface_depending_swift_lib",
+    srcs = [":swift_with_dynamic_swift_framework_src"],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_swift_dynamic_xcframework_with_private_swiftinterface"],
+)
+
+apple_dynamic_xcframework_import(
+    name = "ios_imported_swift_dynamic_xcframework_with_private_modulemap",
+    features = ["-swift.layering_check"],
+    tags = common.fixture_tags,
+    xcframework_imports = [":ios_swift_dynamic_xcframework_with_private_modulemap"],
+)
+
+apple_dynamic_xcframework_import(
+    name = "ios_imported_swift_dynamic_xcframework_with_private_modulemap_explicit_modules",
+    features = [
+        "-swift.layering_check",
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    xcframework_imports = [":ios_swift_dynamic_xcframework_with_private_modulemap"],
+)
+
+apple_dynamic_xcframework_import(
+    name = "ios_imported_dynamic_xcframework_with_private_modulemap_no_swiftmodule",
+    features = ["-swift.layering_check"],
+    tags = common.fixture_tags,
+    xcframework_imports = [":ios_dynamic_xcframework_with_private_modulemap_no_swiftmodule"],
+)
+
+apple_dynamic_xcframework_import(
+    name = "ios_imported_dynamic_xcframework_with_private_modulemap_no_swiftmodule_explicit_modules",
+    features = [
+        "-swift.layering_check",
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    xcframework_imports = [":ios_dynamic_xcframework_with_private_modulemap_no_swiftmodule"],
+)
+
+swift_library(
+    name = "dynamic_swift_xcframework_with_private_modulemap_depending_swift_lib",
+    srcs = [":swift_with_dynamic_swift_framework_src"],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_swift_dynamic_xcframework_with_private_modulemap"],
+)
+
+swift_library(
+    name = "dynamic_swift_xcframework_with_private_modulemap_explicit_modules_depending_swift_lib",
+    srcs = [":swift_with_dynamic_swift_framework_src"],
+    features = [
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_swift_dynamic_xcframework_with_private_modulemap_explicit_modules"],
+)
+
+write_file(
+    name = "swift_with_dynamic_swift_framework_private_module_src",
+    out = "SwiftWithDynamicSwiftFrameworkPrivateModule.swift",
+    content = ["""
+import Swift3PFmwkWithGenHeader
+@_implementationOnly import Swift3PFmwkWithGenHeader_Private
+
+func swift_with_dynamic_swift_framework_private_module_function() {
+  let sc = Swift3PFmwkWithGenHeader.SharedClass()
+  sc.doSomethingShared()
+}
+"""],
+    tags = common.fixture_tags,
+)
+
+write_file(
+    name = "swift_with_dynamic_framework_private_clang_module_src",
+    out = "SwiftWithDynamicFrameworkPrivateClangModule.swift",
+    content = ["""
+import Swift3PFmwkWithGenHeader
+@_implementationOnly import Swift3PFmwkWithGenHeader_Private
+
+func swift_with_dynamic_framework_private_clang_module_function() {
+  _ = Swift3PFmwkWithGenHeaderPrivateValue()
+}
+"""],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "dynamic_swift_xcframework_with_private_modulemap_direct_private_import_depending_swift_lib",
+    srcs = [":swift_with_dynamic_swift_framework_private_module_src"],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_swift_dynamic_xcframework_with_private_modulemap"],
+)
+
+swift_library(
+    name = "dynamic_swift_xcframework_with_private_modulemap_direct_private_import_explicit_modules_depending_swift_lib",
+    srcs = [":swift_with_dynamic_swift_framework_private_module_src"],
+    features = [
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_swift_dynamic_xcframework_with_private_modulemap_explicit_modules"],
+)
+
+swift_library(
+    name = "dynamic_xcframework_with_private_modulemap_no_swiftmodule_direct_private_import_depending_swift_lib",
+    srcs = [":swift_with_dynamic_framework_private_clang_module_src"],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_dynamic_xcframework_with_private_modulemap_no_swiftmodule"],
+)
+
+swift_library(
+    name = "dynamic_xcframework_with_private_modulemap_no_swiftmodule_direct_private_import_explicit_modules_depending_swift_lib",
+    srcs = [":swift_with_dynamic_framework_private_clang_module_src"],
+    features = [
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_dynamic_xcframework_with_private_modulemap_no_swiftmodule_explicit_modules"],
+)
+
+genrule(
+    name = "swiftmodule_xcframework",
+    srcs = ["//test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_binary_swiftmodule"],
+    outs = [
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/Info.plist",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Info.plist",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Swift3PFmwkBinarySwiftmodule",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Headers/Swift3PFmwkBinarySwiftmodule.h",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftdoc",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftmodule",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Swift3PFmwkBinarySwiftmodule",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Headers/Swift3PFmwkBinarySwiftmodule.h",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Info.plist",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftdoc",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftmodule",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/x86_64.swiftdoc",
+        "no_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/x86_64.swiftmodule",
+    ],
+    cmd = "unzip -qq $(execpath //test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_binary_swiftmodule) -d $(RULEDIR)/no_modulemap && find $(RULEDIR)/no_modulemap -name module.modulemap -delete",
+    tags = common.fixture_tags,
+)
+
+genrule(
+    name = "swiftmodule_xcframework_with_modulemap",
+    srcs = ["//test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_binary_swiftmodule"],
+    outs = [
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/Info.plist",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Info.plist",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Swift3PFmwkBinarySwiftmodule",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Headers/Swift3PFmwkBinarySwiftmodule.h",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftdoc",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftmodule",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64/Swift3PFmwkBinarySwiftmodule.framework/Modules/module.modulemap",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Swift3PFmwkBinarySwiftmodule",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Headers/Swift3PFmwkBinarySwiftmodule.h",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Info.plist",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftdoc",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftmodule",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/x86_64.swiftdoc",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/x86_64.swiftmodule",
+        "with_modulemap/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework/Modules/module.modulemap",
+    ],
+    cmd = "unzip -qq $(execpath //test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_binary_swiftmodule) -d $(RULEDIR)/with_modulemap",
+    tags = common.fixture_tags,
+)
+
+genrule(
+    name = "swiftmodule_static_framework_with_modulemap",
+    srcs = ["//test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_binary_swiftmodule"],
+    outs = [
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Swift3PFmwkBinarySwiftmodule",
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Headers/Swift3PFmwkBinarySwiftmodule.h",
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Info.plist",
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftdoc",
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/arm64.swiftmodule",
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/x86_64.swiftdoc",
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Modules/Swift3PFmwkBinarySwiftmodule.swiftmodule/x86_64.swiftmodule",
+        "binary_swiftmodule_static_framework/Swift3PFmwkBinarySwiftmodule.framework/Modules/module.modulemap",
+    ],
+    cmd = "tmp=$$(mktemp -d) && unzip -qq $(execpath //test/starlark_tests/targets_under_test/apple:ios_swift_3p_xcframework_binary_swiftmodule) -d $$tmp && rm -rf $(RULEDIR)/binary_swiftmodule_static_framework && mkdir -p $(RULEDIR)/binary_swiftmodule_static_framework && cp -R $$tmp/Swift3PFmwkBinarySwiftmodule.xcframework/ios-arm64_x86_64-simulator/Swift3PFmwkBinarySwiftmodule.framework $(RULEDIR)/binary_swiftmodule_static_framework/",
+    tags = common.fixture_tags,
+)
+
+apple_static_framework_import(
+    name = "ios_imported_static_framework_binary_swiftmodule",
+    features = ["-swift.layering_check"],
+    framework_imports = [":swiftmodule_static_framework_with_modulemap"],
+    tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "app_with_imported_static_framework_binary_swiftmodule",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [
+        ":ios_imported_static_framework_binary_swiftmodule",
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+apple_dynamic_xcframework_import(
+    name = "ios_imported_xcframework_swiftmodule_no_modulemap",
+    features = [
+        "-swift.layering_check",
+        "swift.emit_c_module",
+        "swift.use_c_modules",  # TODO: Enable to test explicit modules
+    ],
+    tags = common.fixture_tags,
+    xcframework_imports = [":swiftmodule_xcframework"],
+)
+
+apple_dynamic_xcframework_import(
+    name = "ios_imported_xcframework_swiftmodule_with_modulemap",
+    features = [
+        "-swift.layering_check",
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    xcframework_imports = [":swiftmodule_xcframework_with_modulemap"],
+)
+
+write_file(
+    name = "import_swiftmodule_framework",
+    out = "SwiftWithBinarySwiftmoduleFramework.swift",
+    content = ["import Swift3PFmwkBinarySwiftmodule"],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "swiftmodule_xcframework_consumer",
+    srcs = [":import_swiftmodule_framework"],
+    features = [
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_xcframework_swiftmodule_no_modulemap"],
+)
+
+write_file(
+    name = "use_swiftmodule_framework_with_modulemap",
+    out = "SwiftWithBinarySwiftmoduleAndModulemapFramework.swift",
+    content = ["""
+import Swift3PFmwkBinarySwiftmodule
+
+func swift_with_binary_swiftmodule_and_modulemap_framework_function() {
+  let sc = Swift3PFmwkBinarySwiftmodule.SharedClass()
+  sc.doSomethingShared()
+}
+"""],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "swiftmodule_xcframework_with_modulemap_consumer",
+    srcs = [":use_swiftmodule_framework_with_modulemap"],
+    features = [
+        "swift.emit_c_module",
+        "swift.use_c_modules",
+    ],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_xcframework_swiftmodule_with_modulemap"],
 )
 
 # Swift app with imported Objective-C static framework.
@@ -3220,6 +4390,27 @@ func static_xcframework_depending_swift_lib_function_function() {
     tags = common.fixture_tags,
 )
 
+swift_library(
+    name = "static_xcframework_without_modulemap_depending_swift_lib",
+    srcs = [":static_xcframework_without_modulemap_depending_swift_lib_src"],
+    tags = common.fixture_tags,
+    deps = [":ios_imported_static_xcframework_without_modulemap"],
+)
+
+write_file(
+    name = "static_xcframework_without_modulemap_depending_swift_lib_src",
+    out = "SwiftWithStaticFrameworkWithoutModulemap.swift",
+    content = ["""
+import generated_static_xcframework_with_headers_and_no_modulemap
+
+func static_xcframework_without_modulemap_depending_swift_lib_function() {
+  let sc = generated_static_xcframework_with_headers_and_no_modulemap.SharedClass()
+  sc.doSomethingShared()
+}
+"""],
+    tags = common.fixture_tags,
+)
+
 apple_static_xcframework_import(
     name = "ios_imported_static_xcframework",
     features = ["-swift.layering_check"],
@@ -3247,6 +4438,14 @@ generate_static_xcframework(
         ],
     },
     tags = common.fixture_tags,
+)
+
+apple_static_xcframework_import(
+    name = "ios_imported_static_xcframework_without_modulemap",
+    features = ["-swift.layering_check"],
+    tags = common.fixture_tags,
+    visibility = ["//visibility:public"],
+    xcframework_imports = [":generated_static_xcframework_with_headers_and_no_modulemap"],
 )
 
 # Swift app with imported Swift XCFramework
@@ -3529,7 +4728,239 @@ ios_sticker_pack_extension(
     tags = common.fixture_tags,
 )
 
+ios_application(
+    name = "app_with_sticker_ext",
+    bundle_id = "com.google.example",
+    extensions = [":sticker_ext"],
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_application(
+    name = "app_with_sticker_ext_with_wrong_appicons",
+    bundle_id = "com.google.example",
+    extensions = [":sticker_ext_with_wrong_appicons"],
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
 # ---------------------------------------------------------------------------------------
+
+objc_library(
+    name = "coverage_app_lib",
+    srcs = ["CoverageMain.m"],
+    hdrs = ["CoverageMain.h"],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "coverage_swift_app_lib",
+    srcs = ["CoverageApp.swift"],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "coverage_shared_logic",
+    srcs = ["CoverageSharedLogic.m"],
+    hdrs = ["CoverageSharedLogic.h"],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "coverage_hosted_test_lib",
+    srcs = ["CoverageHostedTest.m"],
+    tags = common.fixture_tags,
+    deps = [
+        ":coverage_app_lib",
+        ":coverage_shared_logic",
+    ],
+)
+
+objc_library(
+    name = "coverage_standalone_test_lib",
+    srcs = ["CoverageStandaloneTest.m"],
+    tags = common.fixture_tags,
+    deps = [
+        ":coverage_shared_logic",
+    ],
+)
+
+swift_library(
+    name = "coverage_ui_test_lib",
+    testonly = True,
+    srcs = ["CoveragePassingUITest.swift"],
+    tags = common.fixture_tags,
+)
+
+ios_application(
+    name = "coverage_app",
+    bundle_id = "my.bundle.id",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [":coverage_app_lib"],
+)
+
+ios_application(
+    name = "coverage_swift_app",
+    bundle_id = "my.bundle.id",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = "15.0",
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [":coverage_swift_app_lib"],
+)
+
+ios_unit_test(
+    name = "coverage_hosted_test",
+    size = "large",
+    env = {"STARTUP_TIMEOUT_SEC": "300"},
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    test_host = ":coverage_app",
+    deps = [":coverage_hosted_test_lib"],
+)
+
+ios_unit_test(
+    name = "coverage_standalone_test",
+    size = "large",
+    env = {"STARTUP_TIMEOUT_SEC": "300"},
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [":coverage_standalone_test_lib"],
+)
+
+ios_unit_test(
+    name = "coverage_standalone_test_new_runner",
+    size = "large",
+    minimum_os_version = common.min_os_ios.baseline,
+    runner = "//apple/testing/default_runner:ios_xctestrun_random_runner",
+    tags = common.fixture_tags,
+    deps = [":coverage_standalone_test_lib"],
+)
+
+ios_unit_test(
+    name = "coverage_manifest_test",
+    size = "large",
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    test_coverage_manifest = "coverage_manifest.txt",
+    deps = [":coverage_standalone_test_lib"],
+)
+
+ios_unit_test(
+    name = "coverage_manifest_test_new_runner",
+    size = "large",
+    minimum_os_version = common.min_os_ios.baseline,
+    runner = "//apple/testing/default_runner:ios_xctestrun_ordered_runner",
+    tags = common.fixture_tags,
+    test_coverage_manifest = "coverage_manifest.txt",
+    deps = [":coverage_standalone_test_lib"],
+)
+
+ios_ui_test(
+    name = "coverage_ui_test_new_runner",
+    size = "large",
+    minimum_os_version = "15.0",
+    runner = "//apple/testing/default_runner:ios_xctestrun_random_runner",
+    tags = common.fixture_tags,
+    test_host = ":coverage_swift_app",
+    deps = [":coverage_ui_test_lib"],
+)
+
+# ---------------------------------------------------------------------------------------
+
+ios_test_runner(
+    name = "ios_test_runner_ui_test_runner",
+    device_type = "iPhone 12",
+)
+
+ios_application(
+    name = "ios_test_runner_ui_test_app",
+    bundle_id = "my.bundle.id",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.nplus1,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources:swift_uikit_appdelegate",
+    ],
+)
+
+swift_library(
+    name = "ios_test_runner_ui_test_pass_lib",
+    srcs = ["ios_test_runner_ui_test_pass.swift"],
+)
+
+ios_ui_test(
+    name = "ios_test_runner_ui_test_pass",
+    size = "large",
+    env = {
+        "ENV_KEY1": "ENV_VALUE2",
+        "EXPECTED_UI_TEST_NAMES": "testPass;testPass2;testEnv",
+    },
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.nplus1,
+    runner = ":ios_test_runner_ui_test_runner",
+    tags = [
+        "exclusive",
+        "ios_test_runner_ui_test",
+    ],
+    test_host = ":ios_test_runner_ui_test_app",
+    deps = [
+        ":ios_test_runner_ui_test_pass_lib",
+    ],
+)
+
+ios_ui_test(
+    name = "ios_test_runner_ui_test_with_filter",
+    size = "large",
+    env = {
+        "EXPECTED_UI_TEST_NAMES": "testPass2",
+        "TESTBRIDGE_TEST_ONLY": "PassingUiTest/testPass2",
+    },
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.nplus1,
+    runner = ":ios_test_runner_ui_test_runner",
+    tags = [
+        "exclusive",
+        "ios_test_runner_ui_test",
+    ],
+    test_host = ":ios_test_runner_ui_test_app",
+    deps = [
+        ":ios_test_runner_ui_test_pass_lib",
+    ],
+)
 
 ios_ui_test(
     name = "ui_test",
@@ -3986,6 +5417,162 @@ ios_unit_test(
     test_host = ":dedupe_test_app",
     deps = [
         ":test_lib",
+    ],
+)
+
+# ---------------------------------------------------------------------------------------
+# Targets for the smart resource deduplication tests.
+
+genrule(
+    name = "smart_resource_dedupe_gen_file",
+    outs = ["smart_resource_dedupe_gen_file.txt"],
+    cmd = "echo 'this is generated' > \"$@\"",
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "smart_resource_dedupe_resource_only_lib",
+    data = ["smart_resource_dedupe_resource_only.txt"],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "smart_resource_dedupe_shared_lib",
+    data = [
+        ":smart_resource_dedupe_gen_file",
+        "//test/starlark_tests/resources:assets",
+        "//test/starlark_tests/resources:basic_bundle",
+        "//test/starlark_tests/resources:nonlocalized.plist",
+        "//test/starlark_tests/resources:nonlocalized.strings",
+        "//test/starlark_tests/resources:sample.png",
+    ],
+    tags = common.fixture_tags,
+    deps = [":smart_resource_dedupe_resource_only_lib"],
+)
+
+objc_library(
+    name = "smart_resource_dedupe_shared_lib_with_no_direct_resources",
+    tags = common.fixture_tags,
+    deps = [":smart_resource_dedupe_resource_only_lib"],
+)
+
+objc_library(
+    name = "smart_resource_dedupe_app_lib",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    data = [
+        "//test/starlark_tests/resources:assets",
+        "//test/starlark_tests/resources:basic_bundle",
+        "//test/starlark_tests/resources:sample.png",
+    ],
+    tags = common.fixture_tags,
+    deps = [
+        ":smart_resource_dedupe_resource_only_lib",
+        ":smart_resource_dedupe_shared_lib",
+    ],
+)
+
+objc_library(
+    name = "smart_resource_dedupe_app_lib_with_no_direct_resources",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    tags = common.fixture_tags,
+    deps = [":smart_resource_dedupe_shared_lib_with_no_direct_resources"],
+)
+
+objc_library(
+    name = "smart_resource_dedupe_only_main_lib",
+    srcs = ["//test/starlark_tests/resources:main.m"],
+    tags = common.fixture_tags,
+)
+
+ios_framework(
+    name = "smart_resource_dedupe_fmwk",
+    bundle_id = "com.framework",
+    families = [
+        "iphone",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [":smart_resource_dedupe_shared_lib"],
+)
+
+ios_framework(
+    name = "smart_resource_dedupe_no_direct_resources_fmwk",
+    bundle_id = "com.framework",
+    families = [
+        "iphone",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [":smart_resource_dedupe_shared_lib_with_no_direct_resources"],
+)
+
+ios_application(
+    name = "app_with_smart_resource_dedupe",
+    bundle_id = "com.app",
+    families = [
+        "iphone",
+    ],
+    frameworks = [
+        ":smart_resource_dedupe_fmwk",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.nplus1,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    strings = [
+        "//test/starlark_tests/resources:smart_resource_dedupe_app.strings",
+    ],
+    tags = common.fixture_tags,
+    deps = [":smart_resource_dedupe_app_lib"],
+)
+
+ios_application(
+    name = "app_with_smart_resource_dedupe_no_direct_resources",
+    bundle_id = "com.app",
+    families = [
+        "iphone",
+    ],
+    frameworks = [
+        ":smart_resource_dedupe_no_direct_resources_fmwk",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.nplus1,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    strings = [
+        "//test/starlark_tests/resources:smart_resource_dedupe_app.strings",
+    ],
+    tags = common.fixture_tags,
+    deps = [":smart_resource_dedupe_app_lib_with_no_direct_resources"],
+)
+
+ios_application(
+    name = "app_with_smart_resource_dedupe_direct_resources",
+    bundle_id = "com.app",
+    families = [
+        "iphone",
+    ],
+    frameworks = [
+        ":smart_resource_dedupe_fmwk",
+    ],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":smart_resource_dedupe_only_main_lib",
+        ":smart_resource_dedupe_resource_only_lib",
+        ":smart_resource_dedupe_shared_lib",
     ],
 )
 
@@ -5516,6 +7103,22 @@ ios_application(
 )
 
 ios_application(
+    name = "app_with_order_file_symbols",
+    bundle_id = "com.google.example",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        ":app_order_file",
+        "//test/starlark_tests/resources:objc_order_file_main_lib",
+    ],
+)
+
+ios_application(
     name = "app_with_duplicate_bundle",
     bundle_id = "com.google.example",
     bundle_name = "app_with_duplicate_bundle",
@@ -5575,6 +7178,14 @@ docc_archive(
     fallback_bundle_identifier = "com.google.example.objc.lib",
     fallback_bundle_version = "1.0",
     fallback_display_name = "BasicLib",
+)
+
+docc_archive(
+    name = "basic_swift_library_with_docc_bundle.doccarchive",
+    dep = ":basic_framework_lib_with_docc_bundle",
+    fallback_bundle_identifier = "com.google.example.swift.lib",
+    fallback_bundle_version = "1.0",
+    fallback_display_name = "BasicFramework",
 )
 
 ios_dynamic_framework(
@@ -5642,5 +7253,50 @@ ios_extension(
     tags = common.fixture_tags,
     deps = [
         "//test/starlark_tests/resources:objc_main_lib",
+    ],
+)
+
+ios_kernel_extension(
+    name = "kext",
+    bundle_id = "com.google.kext",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources/kext_resources:Info-IOKit.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources/kext_resources:kext_lib",
+    ],
+)
+
+ios_kernel_extension(
+    name = "kext_with_entitlements",
+    bundle_id = "com.google.kext",
+    entitlements = "//test/starlark_tests/resources:entitlements.plist",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources:Info.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    provisioning_profile = "//test/testdata/provisioning:integration_testing_ios.mobileprovision",
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources/kext_resources:kext_lib",
+    ],
+)
+
+ios_kernel_extension(
+    name = "kext_no_provisioning_profile",
+    bundle_id = "com.google.kext",
+    families = ["iphone"],
+    infoplists = [
+        "//test/starlark_tests/resources/kext_resources:Info-IOKit.plist",
+    ],
+    minimum_os_version = common.min_os_ios.baseline,
+    tags = common.fixture_tags,
+    deps = [
+        "//test/starlark_tests/resources/kext_resources:kext_lib",
     ],
 )

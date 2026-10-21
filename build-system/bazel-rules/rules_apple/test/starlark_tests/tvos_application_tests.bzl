@@ -28,6 +28,10 @@ load(
     "make_analysis_target_actions_test",
 )
 load(
+    "//test/starlark_tests/rules:analysis_target_outputs_test.bzl",
+    "analysis_target_tree_artifacts_outputs_test",
+)
+load(
     "//test/starlark_tests/rules:apple_dsym_bundle_info_test.bzl",
     "apple_dsym_bundle_info_test",
 )
@@ -48,9 +52,27 @@ load(
     "linkmap_test",
 )
 load(
+    "//test/starlark_tests/rules:plisttool_error_test.bzl",
+    "plisttool_error_test",
+)
+load(
+    "//test/starlark_tests/rules:provisioning_profile_tool_error_test.bzl",
+    "provisioning_profile_tool_error_test",
+)
+load(
     ":common.bzl",
     "common",
 )
+
+_APPLICATION_PLIST_SUBSTITUTIONS = {
+    "BUNDLE_NAME": "app.app",
+    "DEVELOPMENT_LANGUAGE": "en",
+    "EXECUTABLE_NAME": "app",
+    "PRODUCT_BUNDLE_IDENTIFIER": "com.google.example",
+    "PRODUCT_BUNDLE_PACKAGE_TYPE": "APPL",
+    "PRODUCT_NAME": "app",
+    "TARGET_NAME": "app",
+}
 
 _analysis_tvos_strip_enabled_opt_test = make_analysis_target_actions_test(
     config_settings = {
@@ -119,6 +141,20 @@ def tvos_application_test_suite(name):
         build_type = "simulator",
         target_under_test = "//test/starlark_tests/targets_under_test/tvos:app_with_imported_fmwk",
         verifier_script = "verifier_scripts/codesign_verifier.sh",
+        tags = [name],
+    )
+
+    # Tests that a framework whose signature was invalidated by a post-processor
+    # (via codesign --remove-signature) is properly re-signed.
+    archive_contents_test(
+        name = "{}_fmwk_post_processor_removes_signature_codesign_test".format(name),
+        build_type = "simulator",
+        target_under_test = "//test/starlark_tests/targets_under_test/tvos:app_with_fmwk_post_processor_removes_signature",
+        binary_test_file = "$BUNDLE_ROOT/Frameworks/fmwk.framework/fmwk",
+        codesign_info_contains = [
+            "Identifier=com.google.example.framework",
+        ],
+        target_features = ["apple.codesign_frameworks_without_provisioning_profile"],
         tags = [name],
     )
 
@@ -311,6 +347,39 @@ def tvos_application_test_suite(name):
         tags = [name],
     )
 
+    plisttool_error_test(
+        name = "{}_missing_version_fails_test".format(name),
+        target_label = "//test/starlark_tests/targets_under_test/tvos:app_missing_version",
+        plists = ["//test/starlark_tests/resources:Info-extension-missing-version.plist"],
+        plist_values = {
+            "CFBundleIdentifier": "com.google.example",
+        },
+        expected_error = (
+            'Target "//test/starlark_tests/targets_under_test/tvos:app_missing_version" ' +
+            "is missing CFBundleVersion."
+        ),
+        variable_substitutions = _APPLICATION_PLIST_SUBSTITUTIONS,
+        version_keys_required = True,
+        tags = [name],
+    )
+
+    # Test missing the CFBundleShortVersionString fails the build.
+    plisttool_error_test(
+        name = "{}_missing_short_version_fails_test".format(name),
+        target_label = "//test/starlark_tests/targets_under_test/tvos:app_missing_short_version",
+        plists = ["//test/starlark_tests/resources:Info-extension-missing-short-version.plist"],
+        plist_values = {
+            "CFBundleIdentifier": "com.google.example",
+        },
+        expected_error = (
+            'Target "//test/starlark_tests/targets_under_test/tvos:app_missing_short_version" ' +
+            "is missing CFBundleShortVersionString."
+        ),
+        variable_substitutions = _APPLICATION_PLIST_SUBSTITUTIONS,
+        version_keys_required = True,
+        tags = [name],
+    )
+
     # Tests that the linkmap outputs are produced when `--objc_generate_linkmap`
     # is present.
     linkmap_test(
@@ -337,6 +406,17 @@ def tvos_application_test_suite(name):
         contains = [
             "$BUNDLE_ROOT/embedded.mobileprovision",
         ],
+        tags = [name],
+    )
+
+    # Tests that failures to extract from a provisioning profile are properly
+    # reported. The fact that multiple things are tried is left as an impl
+    # detail and only the final message is looked for.
+    provisioning_profile_tool_error_test(
+        name = "{}_provisioning_profile_extraction_failure_test".format(name),
+        target_label = "//test/starlark_tests/targets_under_test/tvos:app_with_bogus_provisioning_profile",
+        provisioning_profile = "//test/starlark_tests/resources:bogus.mobileprovision",
+        expected_error = 'While processing target "//test/starlark_tests/targets_under_test/tvos:app_with_bogus_provisioning_profile", failed to extract from the provisioning profile "test/starlark_tests/resources/bogus.mobileprovision".',
         tags = [name],
     )
 
@@ -662,30 +742,6 @@ def tvos_application_test_suite(name):
         tags = [name],
     )
 
-    # Test app with App Intents from multiple modules includes both intents.
-    archive_contents_test(
-        name = "{}_two_app_intents_modules_metadata_bundle_contents_for_simulator_test".format(name),
-        build_type = "simulator",
-        target_under_test = "//test/starlark_tests/targets_under_test/tvos:app_with_app_intent_and_extra_app_intent",
-        text_test_file = "$BUNDLE_ROOT/Metadata.appintents/extract.actionsdata",
-        text_test_values = [
-            ".*HelloWorldIntent.*",
-            ".*ExtraIntent.*",
-        ],
-        tags = [name],
-    )
-    archive_contents_test(
-        name = "{}_two_app_intents_modules_metadata_bundle_contents_for_device_test".format(name),
-        build_type = "device",
-        target_under_test = "//test/starlark_tests/targets_under_test/tvos:app_with_app_intent_and_extra_app_intent",
-        text_test_file = "$BUNDLE_ROOT/Metadata.appintents/extract.actionsdata",
-        text_test_values = [
-            ".*HelloWorldIntent.*",
-            ".*ExtraIntent.*",
-        ],
-        tags = [name],
-    )
-
     apple_verification_test(
         name = "{}_app_intents_metadata_json_keys_sorted_test".format(name),
         build_type = "simulator",
@@ -768,6 +824,25 @@ def tvos_application_test_suite(name):
         target_under_test = "//test/starlark_tests/targets_under_test/tvos:app",
         target_mnemonic = "AssetCatalogCompile",
         expected_argv = ["--app-icon TVBrandAssets"],
+        tags = [name],
+    )
+
+    # Test that tvos_application works without explicit infoplists
+    analysis_target_tree_artifacts_outputs_test(
+        name = "{}_no_infoplist_builds_test".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/tvos:app_minimal_no_infoplist",
+        expected_outputs = ["app_minimal_no_infoplist.app"],
+        tags = [name],
+    )
+
+    infoplist_contents_test(
+        name = "{}_no_infoplist_has_default_values_test".format(name),
+        target_under_test = "//test/starlark_tests/targets_under_test/tvos:app_minimal_no_infoplist",
+        expected_values = {
+            "CFBundleIdentifier": "com.google.example",
+            "CFBundleName": "app_minimal_no_infoplist",
+            "CFBundlePackageType": "APPL",
+        },
         tags = [name],
     )
 

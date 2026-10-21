@@ -15,12 +15,12 @@
 """Partial implementation for Clang runtime libraries processing."""
 
 load(
-    "@bazel_skylib//lib:partial.bzl",
-    "partial",
+    "@apple_support//lib:apple_support.bzl",
+    "apple_support",
 )
 load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
-    "apple_support",
+    "@bazel_skylib//lib:partial.bzl",
+    "partial",
 )
 load(
     "//apple/internal:intermediates.bzl",
@@ -29,6 +29,10 @@ load(
 load(
     "//apple/internal:processor.bzl",
     "processor",
+)
+load(
+    "//apple/internal:shared_environment.bzl",
+    "shared_environment",
 )
 load(
     "//apple/internal/utils:clang_rt_dylibs.bzl",
@@ -63,6 +67,7 @@ def _clang_rt_dylibs_partial_impl(
                 binary_artifact.path,
                 clang_rt_zip.path,
             ],
+            env = shared_environment.default_env,
             executable = clangrttool,
             # This action needs to read the contents of the Xcode bundle.
             execution_requirements = {"no-sandbox": "1"},

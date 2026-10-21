@@ -49,7 +49,7 @@
 #
 # A test suite may redefine functions "set_up" and/or "tear_down";
 # these functions are executed before and after each test function,
-# respectively.  Similarly, "cleanup" and "timeout" may be redefined,
+# respectively.  Similarly "timeout" may be redefined,
 # and these function are called upon exit (of any kind) or a timeout.
 #
 # The user can pass --test_arg to blaze test to select specific tests
@@ -183,6 +183,22 @@ function init_test() {
     :
 }
 
+function bazel_cmd() {
+    local bazel="${BAZEL:-bazel}"
+    local command="$1"
+    shift
+
+    local bazel_extra_args=()
+    if [[ -n "${BAZEL_EXTRA_ARGS:-}" ]]; then
+      read -r -a bazel_extra_args <<< "${BAZEL_EXTRA_ARGS}"
+    fi
+
+    if (( ${#bazel_extra_args[@]} )); then
+      "$bazel" "$command" "${bazel_extra_args[@]}" "$@"
+    else
+      "$bazel" "$command" "$@"
+    fi
+}
 
 # Usage: set_up
 # Called before every test function.  May be redefined by the test suite.
@@ -193,13 +209,6 @@ function set_up() {
 # Usage: tear_down
 # Called after every test function.  May be redefined by the test suite.
 function tear_down() {
-    :
-}
-
-# Usage: cleanup
-# Called upon eventual exit of the test suite.  May be redefined by
-# the test suite.
-function cleanup() {
     :
 }
 
@@ -662,8 +671,6 @@ function run_suite() {
   local total=0
   local passed=0
 
-  atexit "cleanup"
-
   # If the user didn't specify an explicit list of tests (e.g. a
   # working set), use them all.
   if (( ${#TESTS[@]} == 0 )); then
@@ -721,10 +728,6 @@ function run_suite() {
       rm -f "${TEST_TMPDIR}"/{__ts_start,__ts_end}
 
       if [[ "$(type -t "$TEST_name")" == function ]]; then
-        # Save exit handlers eventually set.
-        local SAVED_ATEXIT="$ATEXIT";
-        ATEXIT=
-
         # Run test in a subshell.
         rm -f "${TEST_TMPDIR}"/__err_handled
         __trap_with_arg __test_terminated INT KILL PIPE TERM ABRT FPE ILL QUIT SEGV
@@ -771,12 +774,6 @@ function run_suite() {
         local ts_end
         ts_end=$(<"${TEST_TMPDIR}"/__ts_end)
         run_time=$(get_run_time $ts_start $ts_end)
-
-        # Eventually restore exit handlers.
-        if [[ -n "$SAVED_ATEXIT" ]]; then
-          ATEXIT="$SAVED_ATEXIT"
-          trap "$ATEXIT" EXIT
-        fi
       else # Bad test explicitly specified in $TESTS.
         fail "Not a function: '$TEST_name'"
       fi

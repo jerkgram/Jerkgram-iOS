@@ -6,11 +6,27 @@ package(default_visibility = ["//visibility:public"])
 
 licenses(["notice"])
 
+exports_files(
+    [
+        "apple.bzl",
+        "docc.bzl",
+        "dtrace.bzl",
+        "header_map.bzl",
+        "linker.bzl",
+        "providers.bzl",
+        "resources.bzl",
+        "versioning.bzl",
+        "xcarchive.bzl",
+        "xctrunner.bzl",
+    ],
+    visibility = ["//doc:__pkg__"],
+)
+
 # Create a set of public config_settings that can be used in select()s.
 [
     alias(
         name = arch,
-        actual = "@build_bazel_apple_support//configs:{}".format(arch),
+        actual = "@apple_support//configs:{}".format(arch),
     )
     for arch in [
         "darwin_x86_64",
@@ -24,7 +40,6 @@ licenses(["notice"])
         "tvos_arm64",
         "tvos_sim_arm64",
         "watchos_arm64",
-        "watchos_armv7k",
         "watchos_arm64_32",
         "watchos_x86_64",
         "watchos_device_arm64",
@@ -42,7 +57,6 @@ bzl_library(
         "//apple/internal:apple_xcframework_import",
         "//apple/internal:local_provisioning_profiles",
         "//apple/internal:xcframework_rules",
-        "@bazel_features//:features",
         "@rules_cc//cc:find_cc_toolchain_bzl",
         "@rules_cc//cc/common",
     ],
@@ -56,6 +70,7 @@ bzl_library(
         "//apple/internal:rule_attrs",
         "//apple/internal:rule_factory",
         "//apple/internal:transition_support",
+        "@apple_support//lib:apple_support",
     ],
 )
 
@@ -95,8 +110,8 @@ bzl_library(
         ":providers",
         "//apple/internal:platform_support",
         "//apple/internal:providers",
+        "@apple_support//lib:apple_support",
         "@bazel_skylib//lib:dicts",
-        "@build_bazel_apple_support//lib:apple_support",
         "@rules_cc//cc:find_cc_toolchain_bzl",
     ],
 )
@@ -111,9 +126,9 @@ bzl_library(
     srcs = ["dtrace.bzl"],
     deps = [
         "//apple/internal/utils:bundle_paths",
+        "@apple_support//lib:apple_support",
         "@bazel_skylib//lib:dicts",
         "@bazel_skylib//lib:paths",
-        "@build_bazel_apple_support//lib:apple_support",
         "@rules_cc//cc/common",
     ],
 )
@@ -124,21 +139,14 @@ bzl_library(
     deps = [
         "//apple/internal:apple_product_type",
         "//apple/internal:ios_rules",
+        "//apple/internal:macro_factory",
         "//apple/internal/testing:apple_test_assembler",
         "//apple/internal/testing:build_test_rules",
         "//apple/internal/testing:ios_rules",
-        "@rules_cc//cc:find_cc_toolchain_bzl",
-        "@rules_cc//cc/common",
-    ],
-)
-
-bzl_library(
-    name = "ios.doc",
-    srcs = ["ios.doc.bzl"],
-    deps = [
-        ":ios",
         "//apple/testing/default_runner:ios_test_runner",
         "//apple/testing/default_runner:ios_xctestrun_runner",
+        "@rules_cc//cc:find_cc_toolchain_bzl",
+        "@rules_cc//cc/common",
     ],
 )
 
@@ -155,8 +163,8 @@ bzl_library(
     srcs = ["macos.bzl"],
     deps = [
         "//apple/internal:capabilities_rules",
-        "//apple/internal:macos_binary_support",
         "//apple/internal:macos_rules",
+        "//apple/internal:macro_factory",
         "//apple/internal/testing:apple_test_assembler",
         "//apple/internal/testing:build_test_rules",
         "//apple/internal/testing:macos_rules",
@@ -166,22 +174,11 @@ bzl_library(
 )
 
 bzl_library(
-    name = "macos.doc",
-    srcs = ["macos.doc.bzl"],
-    deps = ["macos"],
-)
-
-bzl_library(
     name = "providers",
     srcs = ["providers.bzl"],
     deps = [
         "//apple/internal:providers",
     ],
-)
-
-bzl_library(
-    name = "repositories",
-    srcs = ["repositories.bzl"],
 )
 
 bzl_library(
@@ -207,6 +204,7 @@ bzl_library(
     name = "tvos",
     srcs = ["tvos.bzl"],
     deps = [
+        "//apple/internal:macro_factory",
         "//apple/internal:tvos_rules",
         "//apple/internal/testing:apple_test_assembler",
         "//apple/internal/testing:build_test_rules",
@@ -214,12 +212,6 @@ bzl_library(
         "@rules_cc//cc:find_cc_toolchain_bzl",
         "@rules_cc//cc/common",
     ],
-)
-
-bzl_library(
-    name = "tvos.doc",
-    srcs = ["tvos.doc.bzl"],
-    deps = ["tvos"],
 )
 
 bzl_library(
@@ -233,6 +225,7 @@ bzl_library(
     deps = [
         "//apple/internal:apple_toolchains",
         "//apple/internal:providers",
+        "//apple/internal:shared_environment",
         "@bazel_skylib//lib:dicts",
     ],
 )
@@ -241,6 +234,7 @@ bzl_library(
     name = "visionos",
     srcs = ["visionos.bzl"],
     deps = [
+        "//apple/internal:macro_factory",
         "//apple/internal:visionos_rules",
         "//apple/internal/testing:apple_test_assembler",
         "//apple/internal/testing:build_test_rules",
@@ -251,15 +245,10 @@ bzl_library(
 )
 
 bzl_library(
-    name = "visionos.doc",
-    srcs = ["visionos.doc.bzl"],
-    deps = ["visionos"],
-)
-
-bzl_library(
     name = "watchos",
     srcs = ["watchos.bzl"],
     deps = [
+        "//apple/internal:macro_factory",
         "//apple/internal:watchos_rules",
         "//apple/internal/testing:apple_test_assembler",
         "//apple/internal/testing:build_test_rules",
@@ -267,12 +256,6 @@ bzl_library(
         "@rules_cc//cc:find_cc_toolchain_bzl",
         "@rules_cc//cc/common",
     ],
-)
-
-bzl_library(
-    name = "watchos.doc",
-    srcs = ["watchos.doc.bzl"],
-    deps = ["watchos"],
 )
 
 bzl_library(

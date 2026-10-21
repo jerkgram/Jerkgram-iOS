@@ -15,6 +15,10 @@
 """Actions related to codesigning."""
 
 load(
+    "@apple_support//lib:apple_support.bzl",
+    "apple_support",
+)
+load(
     "@bazel_skylib//lib:paths.bzl",
     "paths",
 )
@@ -23,16 +27,16 @@ load(
     "shell",
 )
 load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
-    "apple_support",
-)
-load(
     "//apple/internal:intermediates.bzl",
     "intermediates",
 )
 load(
     "//apple/internal:rule_support.bzl",
     "rule_support",
+)
+load(
+    "//apple/internal:shared_environment.bzl",
+    "shared_environment",
 )
 load(
     "//apple/internal/utils:defines.bzl",
@@ -82,7 +86,8 @@ def _preferred_codesigning_identity(platform_prerequisites):
             # TODO(b/252873771): Remove this fallback when the native Bazel flag
             # ios_signing_cert_name is removed.
             return (build_settings.signing_certificate_name or
-                    objc_fragment.signing_certificate_name)
+                    # TODO: Remove when we drop bazel 9.x support
+                    getattr(objc_fragment, "signing_certificate_name", None))
         else:
             return build_settings.signing_certificate_name
     return None
@@ -561,6 +566,7 @@ def _generate_codesigning_dossier_action(
         actions = actions,
         apple_fragment = platform_prerequisites.apple_fragment,
         arguments = args,
+        env = shared_environment.default_env,
         executable = dossier_codesigningtool,
         inputs = input_files,
         mnemonic = mnemonic,
@@ -720,6 +726,7 @@ def _post_process_and_sign_archive_action(
             actions = actions,
             apple_fragment = platform_prerequisites.apple_fragment,
             arguments = arguments,
+            env = shared_environment.default_env,
             executable = process_and_sign_expanded_template,
             execution_requirements = execution_requirements,
             inputs = input_files + codesign_inputs,
@@ -732,6 +739,7 @@ def _post_process_and_sign_archive_action(
     else:
         actions.run(
             arguments = arguments,
+            env = shared_environment.default_env,
             executable = process_and_sign_expanded_template,
             inputs = input_files,
             mnemonic = mnemonic,
@@ -800,6 +808,7 @@ def _sign_binary_action(
             input_binary = input_binary.path,
             output_binary = output_binary.path,
         ) + "\n" + signing_commands,
+        env = shared_environment.default_env,
         execution_requirements = execution_requirements,
         inputs = [input_binary] + codesign_inputs,
         mnemonic = "SignBinary",

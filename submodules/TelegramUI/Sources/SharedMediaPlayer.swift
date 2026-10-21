@@ -13,7 +13,7 @@ import PeerMessagesMediaPlaylist
 private enum SharedMediaPlaybackItem: Equatable {
     case audio(MediaPlayer)
     case instantVideo(OverlayInstantVideoNode)
-
+    
     var playbackStatus: Signal<MediaPlayerStatus, NoError> {
         switch self {
             case let .audio(player):
@@ -28,7 +28,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 }
         }
     }
-
+    
     static func ==(lhs: SharedMediaPlaybackItem, rhs: SharedMediaPlaybackItem) -> Bool {
         switch lhs {
             case let .audio(lhsPlayer):
@@ -45,7 +45,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 }
         }
     }
-
+    
     func setActionAtEnd(_ f: @escaping () -> Void) {
         switch self {
             case let .audio(player):
@@ -54,7 +54,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 node.playbackEnded = f
         }
     }
-
+    
     func play() {
         switch self {
             case let .audio(player):
@@ -63,7 +63,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 node.play()
         }
     }
-
+    
     func pause() {
         switch self {
             case let .audio(player):
@@ -72,7 +72,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 node.pause()
         }
     }
-
+    
     func togglePlayPause() {
         switch self {
             case let .audio(player):
@@ -81,7 +81,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 node.togglePlayPause()
         }
     }
-
+    
     func seek(_ timestamp: Double) {
         switch self {
             case let .audio(player):
@@ -90,7 +90,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 node.seek(timestamp)
         }
     }
-
+    
     func setSoundEnabled(_ value: Bool) {
         switch self {
             case .audio:
@@ -99,7 +99,7 @@ private enum SharedMediaPlaybackItem: Equatable {
                 node.setSoundEnabled(value)
         }
     }
-
+    
     func setForceAudioToSpeaker(_ value: Bool) {
         switch self {
             case let .audio(player):
@@ -118,15 +118,15 @@ final class SharedMediaPlayer {
     private let overlayMediaManager: OverlayMediaManager
     private let playerIndex: Int32
     let playlist: SharedMediaPlaylist
-
+    
     private var playbackRate: AudioPlaybackRate
-
+    
     private var proximityManagerIndex: Int?
     private let controlPlaybackWithProximity: Bool
     private var forceAudioToSpeaker = false
-
+    
     private var stateDisposable: Disposable?
-
+    
     private var stateValue: SharedMediaPlaylistState? {
         didSet {
             if self.stateValue != oldValue {
@@ -135,20 +135,20 @@ final class SharedMediaPlayer {
         }
     }
     private let state = Promise<SharedMediaPlaylistState?>(nil)
-
+    
     private var playbackStateValueDisposable: Disposable?
     private var _playbackStateValue: SharedMediaPlayerState?
     private let playbackStateValue = Promise<SharedMediaPlayerState?>()
     var playbackState: Signal<SharedMediaPlayerState?, NoError> {
         return self.playbackStateValue.get()
     }
-
+    
     private let audioLevelPipe = ValuePipe<Float>()
     var audioLevel: Signal<Float, NoError> {
         return self.audioLevelPipe.signal()
     }
     private let audioLevelDisposable = MetaDisposable()
-
+    
     private var playbackItem: SharedMediaPlaybackItem? {
         didSet {
             if playbackItem != oldValue {
@@ -167,19 +167,19 @@ final class SharedMediaPlayer {
     private var currentPlayedToEnd = false
     private var scheduledPlaybackAction: SharedMediaPlayerPlaybackControlAction?
     private var scheduledStartTime: Double?
-
+    
     private let markItemAsPlayedDisposable = MetaDisposable()
-
+    
     var playedToEnd: (() -> Void)?
     var cancelled: (() -> Void)?
-
+    
     private var inForegroundDisposable: Disposable?
-
+    
     private var currentPrefetchItems: (SharedMediaPlaybackDataSource, SharedMediaPlaybackDataSource)?
     private let prefetchDisposable = MetaDisposable()
-
+    
     let type: MediaManagerPlayerType
-
+    
     init(context: AccountContext, mediaManager: MediaManager, inForeground: Signal<Bool, NoError>, engine: TelegramEngine, audioSession: ManagedAudioSession, overlayMediaManager: OverlayMediaManager, playlist: SharedMediaPlaylist, initialOrder: MusicPlaybackSettingsOrder, initialLooping: MusicPlaybackSettingsLooping, initialPlaybackRate: AudioPlaybackRate, playerIndex: Int32, controlPlaybackWithProximity: Bool, type: MediaManagerPlayerType, continueInstantVideoLoopAfterFinish: Bool) {
         self.context = context
         self.mediaManager = mediaManager
@@ -193,17 +193,17 @@ final class SharedMediaPlayer {
         self.playbackRate = initialPlaybackRate
         self.controlPlaybackWithProximity = controlPlaybackWithProximity
         self.type = type
-
+        
         if controlPlaybackWithProximity {
             self.forceAudioToSpeaker = !DeviceProximityManager.shared().currentValue()
         } else {
             self.forceAudioToSpeaker = true
         }
-
+        
         playlist.currentItemDisappeared = { [weak self] in
             self?.cancelled?()
         }
-
+        
         self.stateDisposable = (playlist.state
         |> deliverOnMainQueue).startStrict(next: { [weak self] state in
             if let strongSelf = self {
@@ -227,7 +227,7 @@ final class SharedMediaPlayer {
                         } else {
                             rateValue = strongSelf.playbackRate.doubleValue
                         }
-
+                        
                         switch playbackData.type {
                             case .voice, .music:
                                 switch playbackData.source {
@@ -270,12 +270,12 @@ final class SharedMediaPlayer {
                             case let .instantVideo(node):
                                 strongSelf.overlayMediaManager.controller?.addNode(node, customTransition: false)
                         }
-
+                        
                         if let scheduledPlaybackAction = strongSelf.scheduledPlaybackAction {
                             strongSelf.scheduledPlaybackAction = nil
                             let scheduledStartTime = strongSelf.scheduledStartTime
                             strongSelf.scheduledStartTime = nil
-
+                            
                             switch scheduledPlaybackAction {
                                 case .play:
                                     switch playbackItem {
@@ -302,7 +302,7 @@ final class SharedMediaPlayer {
                         }
                     }
                 }
-
+                
                 if strongSelf.currentPlayedToEnd != state.playedToEnd {
                     strongSelf.currentPlayedToEnd = state.playedToEnd
                     if state.playedToEnd {
@@ -321,10 +321,10 @@ final class SharedMediaPlayer {
                         strongSelf.playedToEnd?()
                     }
                 }
-
+                
                 let updatePlaybackState = strongSelf.stateValue != state || strongSelf.playbackItem != previousPlaybackItem
                 strongSelf.stateValue = state
-
+                
                 if updatePlaybackState {
                     let playlistId = strongSelf.playlist.id
                     let playlistLocation = strongSelf.playlist.location
@@ -363,12 +363,12 @@ final class SharedMediaPlayer {
                 }
             }
         })
-
+        
         self.playbackStateValueDisposable = (self.playbackState
         |> deliverOnMainQueue).startStrict(next: { [weak self] value in
             self?._playbackStateValue = value
         })
-
+        
         if controlPlaybackWithProximity {
             self.proximityManagerIndex = DeviceProximityManager.shared().add { [weak self] value in
                 let forceAudioToSpeaker = !value
@@ -376,6 +376,21 @@ final class SharedMediaPlayer {
                     strongSelf.forceAudioToSpeaker = forceAudioToSpeaker
                     strongSelf.playbackItem?.setForceAudioToSpeaker(forceAudioToSpeaker)
                     if !forceAudioToSpeaker {
+                        // A voice or video message is being recorded: the sensor is covered by the user's face
+                        // while speaking, not to ask for playback on the ear speaker. Resuming would push a
+                        // playback audio session on top of the recorder's, and the recorder stops as soon as
+                        // its session is deactivated.
+                        //
+                        // Only the resume is skipped, and the state above is tracked either way. This block is
+                        // edge-triggered on forceAudioToSpeaker, so returning before the assignment would
+                        // strand it at its old value for good: the sensor and the stored value would disagree
+                        // from then on, and the next playback would take the wrong route - the ear speaker
+                        // with the phone in hand, i.e. inaudible. The assignment is safe here because the
+                        // playback holder is inactive while a recorder holds the session, so setOutputMode
+                        // only records the intended mode instead of touching the live session.
+                        if strongSelf.audioSession.getIsRecordingActive() {
+                            return
+                        }
                         if let playbackStateValue = strongSelf._playbackStateValue, case let .item(item) = playbackStateValue, item.status.timestamp < 1.5 {
                             strongSelf.control(.seek(0.0))
                         }
@@ -387,7 +402,7 @@ final class SharedMediaPlayer {
             }
         }
     }
-
+    
     deinit {
         self.stateDisposable?.dispose()
         self.markItemAsPlayedDisposable.dispose()
@@ -395,11 +410,11 @@ final class SharedMediaPlayer {
         self.playbackStateValueDisposable?.dispose()
         self.prefetchDisposable.dispose()
         self.audioLevelDisposable.dispose()
-
+        
         if let proximityManagerIndex = self.proximityManagerIndex {
             DeviceProximityManager.shared().remove(proximityManagerIndex)
         }
-
+        
         if let playbackItem = self.playbackItem {
             switch playbackItem {
                 case .audio:
@@ -410,7 +425,7 @@ final class SharedMediaPlayer {
             }
         }
     }
-
+    
     func control(_ action: SharedMediaPlayerControlAction) {
         switch action {
             case .next:
@@ -461,7 +476,7 @@ final class SharedMediaPlayer {
                 }
         }
     }
-
+    
     func stop() {
         if let playbackItem = self.playbackItem {
             switch playbackItem {
@@ -472,7 +487,7 @@ final class SharedMediaPlayer {
             }
         }
     }
-
+    
     private func updatePrefetchItems(item: SharedMediaPlaylistItem?, previousItem: SharedMediaPlaylistItem?, nextItem: SharedMediaPlaylistItem?, ordering: MusicPlaybackSettingsOrder) {
         var prefetchItems: (SharedMediaPlaybackDataSource, SharedMediaPlaybackDataSource)?
         if let playbackData = item?.playbackData {

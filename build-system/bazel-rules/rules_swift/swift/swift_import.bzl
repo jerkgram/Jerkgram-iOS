@@ -98,7 +98,7 @@ def _swift_import_impl(ctx):
     swift_infos = get_providers(deps, SwiftInfo)
 
     if swiftinterface:
-        module_context = compile_module_interface(
+        compile_result = compile_module_interface(
             actions = ctx.actions,
             compilation_contexts = get_compilation_contexts(ctx.attr.deps),
             feature_configuration = feature_configuration,
@@ -108,6 +108,7 @@ def _swift_import_impl(ctx):
             target_name = ctx.attr.name,
             toolchains = toolchains,
         )
+        module_context = compile_result.module_context
         swift_outputs = [
             module_context.swift.swiftmodule,
         ] + compact([module_context.swift.swiftdoc])
@@ -118,6 +119,7 @@ def _swift_import_impl(ctx):
                 compilation_context = cc_info.compilation_context,
                 module_map = None,
             ),
+            label = ctx.label,
             swift = create_swift_module_inputs(
                 plugins = [
                     plugin[SwiftCompilerPluginInfo]
@@ -170,7 +172,9 @@ target.
                 cfg = "exec",
                 doc = """\
 A list of `swift_compiler_plugin` targets that should be loaded by the compiler
-when compiling any modules that directly depend on this target.
+when compiling any modules that depend on this target. Enable the
+`swift.load_plugins_from_direct_dependencies` feature to load them only for
+modules that directly depend on this target.
 """,
                 providers = [[SwiftCompilerPluginInfo]],
             ),

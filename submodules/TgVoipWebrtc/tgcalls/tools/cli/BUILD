@@ -1,3 +1,5 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+
 cc_binary(
     name = "tgcalls_cli",
     srcs = [
@@ -33,5 +35,9 @@ cc_binary(
     deps = [
         "//submodules/TgVoipWebrtc:tgcalls_core",
         "//submodules/TgVoipWebrtc/tgcalls/tools/go_sfu",
+    ],
+    data = [
+        "//submodules/TgVoipWebrtc:reference_core_wasm",
+        "//submodules/TgVoipWebrtc:variant_core_wasm",
     ],
 )

@@ -34,6 +34,7 @@ bzl_library(
     visibility = ["//apple:__pkg__"],
     deps = [
         "//apple:providers",
+        "@bazel_skylib//rules:common_settings",
     ],
 )
 
@@ -43,7 +44,8 @@ bzl_library(
     visibility = ["//apple:__pkg__"],
     deps = [
         "//apple:providers",
-        "@build_bazel_apple_support//xcode:providers",
+        "@apple_support//xcode:providers",
+        "@bazel_skylib//rules:common_settings",
     ],
 )
 
@@ -52,7 +54,7 @@ bzl_library(
     srcs = ["macos_test_runner.bzl"],
     deps = [
         "//apple:providers",
-        "@build_bazel_apple_support//lib:xcode_support",
+        "@apple_support//lib:xcode_support",
     ],
 )
 
@@ -110,6 +112,11 @@ sh_binary(
 )
 
 ios_test_runner(
+    name = "ios_legacy_runner",
+    visibility = ["//visibility:public"],
+)
+
+ios_xctestrun_runner(
     name = "ios_default_runner",
     # Used by the rule implementations, so it needs to be public; but
     # should be considered an implementation detail of the rules and

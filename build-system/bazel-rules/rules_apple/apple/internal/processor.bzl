@@ -64,16 +64,16 @@ rule.
 """
 
 load(
+    "@apple_support//lib:apple_support.bzl",
+    "apple_support",
+)
+load(
     "@bazel_skylib//lib:partial.bzl",
     "partial",
 )
 load(
     "@bazel_skylib//lib:paths.bzl",
     "paths",
-)
-load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
-    "apple_support",
 )
 load(
     "//apple/internal:codesigning_support.bzl",
@@ -228,6 +228,7 @@ def _bundle_partial_outputs_files(
         actions,
         apple_mac_toolchain_info,
         apple_xplat_toolchain_info,
+        xplat_exec_group,
         bundle_extension,
         bundle_name,
         codesign_inputs = [],
@@ -249,6 +250,7 @@ def _bundle_partial_outputs_files(
       actions: The actions provider from `ctx.actions`.
       apple_mac_toolchain_info: A AppleMacToolsToolchainInfo provider.
       apple_xplat_toolchain_info: A AppleXPlatToolsToolchainInfo provider.
+      xplat_exec_group: A String. The exec_group for action using xplat toolchain.
       bundle_extension: The extension for the bundle.
       bundle_name: The name of the output bundle.
       codesign_inputs: Extra inputs needed for the `codesign` tool.
@@ -271,13 +273,17 @@ def _bundle_partial_outputs_files(
 
     # Autotrim locales here only if the rule supports it and there weren't requested locales.
     config_vars = platform_prerequisites.config_vars
-    requested_locales_flag = locales_to_include or config_vars.get("apple.locales_to_include")
+    requested_locales = (
+        locales_to_include or
+        config_vars.get("apple.locales_to_include") or
+        platform_prerequisites.build_settings.locales_to_include
+    )
 
     trim_locales = defines.bool_value(
         config_vars = config_vars,
-        default = None,
+        default = platform_prerequisites.build_settings.trim_lproj_locales,
         define_name = "apple.trim_lproj_locales",
-    ) and rule_descriptor.allows_locale_trimming and requested_locales_flag == None
+    ) and rule_descriptor.allows_locale_trimming and not requested_locales
 
     control_files = []
     control_zips = []
@@ -452,10 +458,11 @@ def _bundle_partial_outputs_files(
     else:
         bundletool = apple_xplat_toolchain_info.bundletool
         actions.run(
-            executable = bundletool,
-            inputs = bundletool_inputs,
+            executable = bundletool.files_to_run,
+            inputs = depset(bundletool_inputs),
             mnemonic = "BundleApp",
             progress_message = "Bundling %s" % label_name,
+            exec_group = xplat_exec_group,
             **action_args
         )
 
@@ -464,6 +471,7 @@ def _bundle_post_process_and_sign(
         actions,
         apple_mac_toolchain_info,
         apple_xplat_toolchain_info,
+        xplat_exec_group,
         bundle_extension,
         bundle_name,
         codesign_inputs,
@@ -487,6 +495,7 @@ def _bundle_post_process_and_sign(
         actions: The actions provider from `ctx.actions`.
         apple_mac_toolchain_info: A AppleMacToolsToolchainInfo provider.
         apple_xplat_toolchain_info: A AppleXPlatToolsToolchainInfo provider.
+        xplat_exec_group: A String. The exec_group for action using xplat toolchain.
         bundle_extension: The extension for the bundle.
         bundle_name: The name of the output bundle.
         codesign_inputs: Extra inputs needed for the `codesign` tool.
@@ -547,6 +556,7 @@ def _bundle_post_process_and_sign(
             actions = actions,
             apple_mac_toolchain_info = apple_mac_toolchain_info,
             apple_xplat_toolchain_info = apple_xplat_toolchain_info,
+            xplat_exec_group = xplat_exec_group,
             bundle_extension = bundle_extension,
             bundle_name = bundle_name,
             codesign_inputs = codesign_inputs,
@@ -579,6 +589,7 @@ def _bundle_post_process_and_sign(
             actions = actions,
             apple_mac_toolchain_info = apple_mac_toolchain_info,
             apple_xplat_toolchain_info = apple_xplat_toolchain_info,
+            xplat_exec_group = xplat_exec_group,
             bundle_extension = bundle_extension,
             bundle_name = bundle_name,
             ipa_post_processor = ipa_post_processor,
@@ -654,6 +665,7 @@ def _bundle_post_process_and_sign(
                 actions = actions,
                 apple_mac_toolchain_info = apple_mac_toolchain_info,
                 apple_xplat_toolchain_info = apple_xplat_toolchain_info,
+                xplat_exec_group = xplat_exec_group,
                 bundle_extension = bundle_extension,
                 bundle_name = bundle_name,
                 embedding = True,
@@ -695,6 +707,7 @@ def _process(
         actions,
         apple_mac_toolchain_info,
         apple_xplat_toolchain_info,
+        xplat_exec_group,
         bundle_extension,
         bundle_name,
         bundle_post_process_and_sign = True,
@@ -718,6 +731,7 @@ def _process(
       actions: The actions provider from `ctx.actions`.
       apple_mac_toolchain_info: A AppleMacToolsToolchainInfo provider.
       apple_xplat_toolchain_info: A AppleXPlatToolsToolchainInfo provider.
+      xplat_exec_group: A String. The exec_group for action using xplat toolchain.
       bundle_extension: The extension for the bundle.
       bundle_name: The name of the output bundle.
       bundle_post_process_and_sign: If the process action should also post process and sign after
@@ -762,6 +776,7 @@ def _process(
             actions = actions,
             apple_mac_toolchain_info = apple_mac_toolchain_info,
             apple_xplat_toolchain_info = apple_xplat_toolchain_info,
+            xplat_exec_group = xplat_exec_group,
             bundle_extension = bundle_extension,
             bundle_name = bundle_name,
             codesign_inputs = codesign_inputs,

@@ -267,10 +267,16 @@ Provides information for an Apple dSYM bundle.
 <pre>
 load("@rules_apple//apple:providers.bzl", "AppleDynamicFrameworkInfo")
 
-AppleDynamicFrameworkInfo(<a href="#AppleDynamicFrameworkInfo-framework_dirs">framework_dirs</a>, <a href="#AppleDynamicFrameworkInfo-framework_files">framework_files</a>, <a href="#AppleDynamicFrameworkInfo-binary">binary</a>, <a href="#AppleDynamicFrameworkInfo-cc_info">cc_info</a>)
+AppleDynamicFrameworkInfo(<a href="#AppleDynamicFrameworkInfo-_init-kwargs">*kwargs</a>)
 </pre>
 
 Contains information about an Apple dynamic framework.
+
+**CONSTRUCTOR PARAMETERS**
+
+| Name  | Description | Default Value |
+| :------------- | :------------- | :------------- |
+| <a id="AppleDynamicFrameworkInfo-_init-kwargs"></a>kwargs | <p align="center">-</p> | none |
 
 **FIELDS**
 
@@ -289,17 +295,22 @@ Contains information about an Apple dynamic framework.
 <pre>
 load("@rules_apple//apple:providers.bzl", "AppleExecutableBinaryInfo")
 
-AppleExecutableBinaryInfo(<a href="#AppleExecutableBinaryInfo-objc">objc</a>, <a href="#AppleExecutableBinaryInfo-binary">binary</a>, <a href="#AppleExecutableBinaryInfo-cc_info">cc_info</a>)
+AppleExecutableBinaryInfo(<a href="#AppleExecutableBinaryInfo-_init-kwargs">*kwargs</a>)
 </pre>
 
 Contains the executable binary output that was built using
 `link_multi_arch_binary` with the `executable` binary type.
 
+**CONSTRUCTOR PARAMETERS**
+
+| Name  | Description | Default Value |
+| :------------- | :------------- | :------------- |
+| <a id="AppleExecutableBinaryInfo-_init-kwargs"></a>kwargs | <p align="center">-</p> | none |
+
 **FIELDS**
 
 | Name  | Description |
 | :------------- | :------------- |
-| <a id="AppleExecutableBinaryInfo-objc"></a>objc |  apple_common.Objc provider used for legacy linking behavior.    |
 | <a id="AppleExecutableBinaryInfo-binary"></a>binary |  The executable binary artifact output by `link_multi_arch_binary`.    |
 | <a id="AppleExecutableBinaryInfo-cc_info"></a>cc_info |  A `CcInfo` which contains information about the transitive dependencies linked into the binary.    |
 
@@ -570,11 +581,6 @@ AppleTestInfo(<a href="#AppleTestInfo-_init-kwargs">*kwargs</a>)
 
 Provider that test targets propagate to be used for IDE integration.
 
-This includes information regarding test source files, transitive include paths,
-transitive module maps, and transitive Swift modules. Test source files are
-considered to be all of which belong to the first-level dependencies on the test
-target.
-
 **CONSTRUCTOR PARAMETERS**
 
 | Name  | Description | Default Value |
@@ -585,15 +591,8 @@ target.
 
 | Name  | Description |
 | :------------- | :------------- |
-| <a id="AppleTestInfo-includes"></a>includes |  `depset` of `String`s representing transitive include paths which are needed by IDEs to be used for indexing the test sources.    |
-| <a id="AppleTestInfo-module_maps"></a>module_maps |  `depset` of `File`s representing module maps which are needed by IDEs to be used for indexing the test sources.    |
-| <a id="AppleTestInfo-module_name"></a>module_name |  `String` representing the module name used by the test's sources. This is only set if the test only contains a single top-level Swift dependency. This may be used by an IDE to identify the Swift module (if any) used by the test's sources.    |
-| <a id="AppleTestInfo-non_arc_sources"></a>non_arc_sources |  `depset` of `File`s containing non-ARC sources from the test's immediate deps.    |
-| <a id="AppleTestInfo-sources"></a>sources |  `depset` of `File`s containing sources and headers from the test's immediate deps.    |
-| <a id="AppleTestInfo-swift_modules"></a>swift_modules |  `depset` of `File`s representing transitive swift modules which are needed by IDEs to be used for indexing the test sources.    |
 | <a id="AppleTestInfo-test_bundle"></a>test_bundle |  The artifact representing the XCTest bundle for the test target.    |
 | <a id="AppleTestInfo-test_host"></a>test_host |  The artifact representing the test host for the test target, if the test requires a test host.    |
-| <a id="AppleTestInfo-deps"></a>deps |  `depset` of `String`s representing the labels of all immediate deps of the test. Only source files from these deps will be present in `sources`. This may be used by IDEs to differentiate a test target's transitive module maps from its direct module maps, as including the direct module maps may break indexing for the source files of the immediate deps.    |
 
 
 <a id="AppleTestRunnerInfo"></a>
@@ -838,6 +837,31 @@ that requirement.
 | Name  | Description | Default Value |
 | :------------- | :------------- | :------------- |
 | <a id="IosImessageExtensionBundleInfo-_init-kwargs"></a>kwargs | <p align="center">-</p> | none |
+
+
+<a id="IosKernelExtensionBundleInfo"></a>
+
+## IosKernelExtensionBundleInfo
+
+<pre>
+load("@rules_apple//apple:providers.bzl", "IosKernelExtensionBundleInfo")
+
+IosKernelExtensionBundleInfo(<a href="#IosKernelExtensionBundleInfo-_init-kwargs">*kwargs</a>)
+</pre>
+
+Denotes that a target is an iOS kernel extension.
+
+This provider does not contain any fields of its own at this time but is used as
+a "marker" to indicate that a target is specifically an iOS kernel extension
+bundle (and not some other Apple bundle). Rule authors who wish to require that
+a dependency is an iOS kernel extension should use this provider to describe that
+requirement.
+
+**CONSTRUCTOR PARAMETERS**
+
+| Name  | Description | Default Value |
+| :------------- | :------------- | :------------- |
+| <a id="IosKernelExtensionBundleInfo-_init-kwargs"></a>kwargs | <p align="center">-</p> | none |
 
 
 <a id="IosStaticFrameworkBundleInfo"></a>

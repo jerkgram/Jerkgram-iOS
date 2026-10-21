@@ -6,15 +6,15 @@ This guide describes the public build contract for Jerkgram Stable source snapsh
 
 ```text
 TelegramMessenger/Telegram-iOS
-release-12.9.2
-6ad963e5b62d354da79040f388ae2b9132fb17b8
+release-13.0.0
+f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838
 ```
 
 ## Stable source snapshot
 
 The public Stable snapshot contains the release source tree and the corresponding build material included with that source, including the relevant Bazel/build definitions and source dependencies.
 
-For Jerkgram 1.0.2, use the public source tag `v1.0.2` and verify the release metadata in `JERKGRAM_RELEASE.json` before building.
+For Jerkgram 1.1.0, use the public source tag `v1.1.0` and verify the release metadata in `JERKGRAM_RELEASE.json` before building.
 
 ## What you provide yourself
 

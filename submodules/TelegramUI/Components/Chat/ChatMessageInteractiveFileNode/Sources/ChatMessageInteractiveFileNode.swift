@@ -353,7 +353,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
         }
         
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-
+        
         var shouldBeginTranscription = false
         var shouldExpandNow = false
         
@@ -533,8 +533,8 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
         let audioTranscriptionState = self.audioTranscriptionState
         let forcedAudioTranscriptionText = self.forcedAudioTranscriptionText
         
-        return { arguments in
-            return (CGFloat.greatestFiniteMagnitude, { constrainedSize in
+        return { [weak self] arguments in
+            return (CGFloat.greatestFiniteMagnitude, { [weak self] constrainedSize in
                 let titleFont = Font.regular(floor(arguments.presentationData.fontSize.baseDisplaySize * 16.0 / 17.0))
                 let descriptionFont = Font.with(size: floor(arguments.presentationData.fontSize.baseDisplaySize * 13.0 / 17.0), design: .regular, weight: .regular, traits: [.monospacedNumbers])
                 let durationFont = Font.regular(floor(arguments.presentationData.fontSize.baseDisplaySize * 11.0 / 17.0))
@@ -732,7 +732,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                 if !Namespaces.Message.allNonRegular.contains(arguments.message.id.namespace) && arguments.message.id.peerId.namespace != Namespaces.Peer.SecretChat && !isViewOnceMessage && !arguments.presentationData.isPreview {
                     displayTranscribe = true
                 }
-
+                
                 let transcribedText = forcedAudioTranscriptionText ?? transcribedText(message: EngineMessage(arguments.message))
                 
                 switch audioTranscriptionState {
@@ -955,7 +955,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                     viewOnceIconImage = principalGraphics.radialIndicatorViewOnceIcon
                 }
                 
-                return (minLayoutWidth, { boundingWidth in
+                return (minLayoutWidth, { [weak self] boundingWidth in
                     let titleAndDescriptionHeight = titleLayout.size.height - 1.0 + descriptionLayout.size.height
                     
                     let normHeight: CGFloat

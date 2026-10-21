@@ -18,6 +18,8 @@ import Foundation
   import Darwin
 #elseif canImport(Glibc)
   import Glibc
+#elseif canImport(WinSDK)
+  import WinSDK
 #else
   #error("Unsupported platform")
 #endif
@@ -80,7 +82,9 @@ public final class SwiftTestingRunner: Sendable {
     for try await testOrSuite in try await listTests() {
       switch testOrSuite {
       case .suite(let suiteID):
-        discoveredSuites.withLock { $0.insert(suiteID) }
+        discoveredSuites.withLock { discoveredSuites in
+          _ = discoveredSuites.insert(suiteID)
+        }
       case .test(let test):
         collector.addTest(test)
       }
@@ -174,9 +178,17 @@ public final class SwiftTestingRunner: Sendable {
     // We only care about test events that have a test ID and an instant (when they occurred).
     guard
       case .string(let kind) = payload["kind"],
-      case .string(let testID) = payload["testID"],
-      // Ignore suites. The xUnit recorder reconstructs the hierarchy.
-      !discoveredSuites.withLock({ $0.contains(testID) }),
+      case .string(let testID) = payload["testID"]
+    else {
+      return
+    }
+
+    // Ignore suites. The xUnit recorder reconstructs the hierarchy.
+    let isDiscoveredSuite = discoveredSuites.withLock { discoveredSuites in
+      discoveredSuites.contains(testID)
+    }
+    guard
+      !isDiscoveredSuite,
       case .object(let instantJSON) = payload["instant"],
       case .number(let absolute) = instantJSON["absolute"]
     else {
@@ -184,6 +196,18 @@ public final class SwiftTestingRunner: Sendable {
     }
     let instant = EncodedInstant(seconds: absolute.doubleValue)
     let nameComponents = nameComponents(for: testID)
+
+    // Later versions of swift-testing (after Xcode 16.0) stopped reporting suites that don't use
+    // the `@Suite` attribute in the `listTests` request
+    // (https://github.com/swiftlang/swift-testing/issues/1099). It's not clear if this is
+    // intentional or not, but we still need to be able to distinguish suites from test functions to
+    // produce the correct tree structure in the test recorder. We can distinguish them by observing
+    // that the last component of a test function ID (after the source location is stripped off, as
+    // `nameComponents` does above) will have trailing parentheses, while suites will just be the
+    // name of the type.
+    guard let last = nameComponents.last, last.hasSuffix(")") else {
+      return
+    }
 
     switch kind {
     case "testStarted":
@@ -271,7 +295,7 @@ private struct SwiftTestingEntryPoint {
   /// Creates the entry point by looking it up by name in the current process, or fails if the
   /// entry point is not found.
   init?() {
-    guard let entryPointRaw = dlsym(rtldDefault, "swt_abiv0_getEntryPoint") else {
+    guard let entryPointRaw = _loadSwiftTestingSymbol("swt_abiv0_getEntryPoint") else {
       return nil
     }
     let abiv0_getEntryPoint = unsafeBitCast(
@@ -322,18 +346,43 @@ private struct SwiftTestingEntryPoint {
   }
 }
 
-// `RTLD_DEFAULT` is only defined on Linux when `_GNU_SOURCE` is defined. Just redefine it
-// here for convenience.
-#if compiler(>=5.10)
-  #if os(Linux)
-    private nonisolated(unsafe) let rtldDefault = UnsafeMutableRawPointer(bitPattern: 0)
-  #else
-    private nonisolated(unsafe) let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
-  #endif
+/// Looks up a symbol exported by the swift-testing framework in the current process, returning
+/// `nil` if it is not present (i.e. swift-testing was not linked into the test binary).
+#if canImport(WinSDK)
+  private func _loadSwiftTestingSymbol(_ name: String) -> UnsafeMutableRawPointer? {
+    // `GetProcAddress` resolves a symbol from a specific module, so check the modules that may
+    // export the swift-testing ABI: the test executable itself (when statically linked) and the
+    // `Testing.dll` shared library.
+    let modules: [HMODULE?] = [
+      GetModuleHandleW(nil),
+      "Testing.dll".withCString(encodedAs: UTF16.self) { GetModuleHandleW($0) },
+    ]
+    for module in modules {
+      guard let module else { continue }
+      if let symbol = name.withCString({ GetProcAddress(module, $0) }) {
+        return unsafeBitCast(symbol, to: UnsafeMutableRawPointer.self)
+      }
+    }
+    return nil
+  }
 #else
-  #if os(Linux)
-    private let rtldDefault = UnsafeMutableRawPointer(bitPattern: 0)
+  // `RTLD_DEFAULT` is only defined on Linux when `_GNU_SOURCE` is defined. Just redefine it
+  // here for convenience.
+  #if compiler(>=5.10)
+    #if os(Linux)
+      private nonisolated(unsafe) let rtldDefault = UnsafeMutableRawPointer(bitPattern: 0)
+    #else
+      private nonisolated(unsafe) let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
+    #endif
   #else
-    private let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
+    #if os(Linux)
+      private let rtldDefault = UnsafeMutableRawPointer(bitPattern: 0)
+    #else
+      private let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
+    #endif
   #endif
+
+  private func _loadSwiftTestingSymbol(_ name: String) -> UnsafeMutableRawPointer? {
+    return dlsym(rtldDefault, name)
+  }
 #endif

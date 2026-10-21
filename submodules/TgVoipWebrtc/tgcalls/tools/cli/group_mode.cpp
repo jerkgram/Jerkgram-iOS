@@ -1,4 +1,6 @@
 #include "group_mode.h"
+
+#include <cstdlib>
 #include "group_participant.h"
 
 #include <algorithm>
@@ -11,13 +13,21 @@
 // CGo header
 #include "submodules/TgVoipWebrtc/tgcalls/tools/go_sfu/go_sfu.h"
 
-int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants) {
+int runGroupMode(int customParticipants, int referenceParticipants, int duration, bool quiet, bool video, const std::string& networkScenario, const std::set<int>& mutedParticipants, bool earlyVideoRequest, bool videoSinkChurn, bool e2e, VideoFeed videoFeed, bool requestOwnVideo, int unmuteAfterSeconds, bool videoRerequest) {
     gGroupQuiet = quiet;
     gGroupStartTime = std::chrono::steady_clock::now();
 
     int participants = customParticipants + referenceParticipants;
     if (participants < 2) {
         fprintf(stderr, "Error: need at least 2 participants total\n");
+        return 1;
+    }
+
+    // The two own the run's timeline and the unmute branch is an `else if` below, so
+    // combining them would run the scenario, never unmute anyone, find no late
+    // unmuters to validate, and report SUCCESS without having tested anything.
+    if (unmuteAfterSeconds > 0 && !networkScenario.empty()) {
+        fprintf(stderr, "Error: --unmute-after cannot be combined with --network-scenario\n");
         return 1;
     }
 
@@ -35,8 +45,11 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         return 1;
     }
 
-    groupLog("Group", "created SFU handle=%lld, custom=%d, reference=%d, duration=%ds",
-             (long long)sfuHandle, customParticipants, referenceParticipants, duration);
+    const char* videoFeedName = videoFeed == VideoFeed::Source ? "source"
+        : videoFeed == VideoFeed::CaptureAtJoin ? "capture-at-join" : "capture-late";
+    groupLog("Group", "created SFU handle=%lld, custom=%d, reference=%d, duration=%ds, video=%d, earlyVideoRequest=%d, videoFeed=%s, requestOwnVideo=%d",
+             (long long)sfuHandle, customParticipants, referenceParticipants, duration, video ? 1 : 0, earlyVideoRequest ? 1 : 0,
+             videoFeedName, requestOwnVideo ? 1 : 0);
 
     auto threads = tgcalls::StaticThreads::getThreads();
 
@@ -47,7 +60,7 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
     for (int i = 0; i < participants; ++i) {
         bool isReference = (i >= customParticipants);
         bool muted = mutedParticipants.count(i) > 0;
-        auto state = createParticipant(i, isReference, sfuHandle, threads, quiet, video, &states, muted);
+        auto state = createParticipant(i, isReference, sfuHandle, threads, quiet, video, &states, muted, earlyVideoRequest, e2e, videoFeed, requestOwnVideo);
         if (!state) {
             anyFailed = true;
             continue;
@@ -81,6 +94,51 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
         groupLog("Group", "connection timeout: %d/%d connected", connectedCount, (int)states.size());
     }
 
+    // Optionally replace every incoming video sink a few times once frames
+    // are flowing (mirrors the app recreating tile views on quality changes).
+    if (video && videoSinkChurn) {
+        constexpr int kSinkChurnRounds = 5;
+        groupLog("Group", "video-sink-churn: waiting 3s for frames, then %d replacement rounds", kSinkChurnRounds);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        for (int round = 0; round < kSinkChurnRounds; ++round) {
+            groupLog("Group", "video-sink-churn: round %d", round + 1);
+            churnVideoSinks(states);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+
+    // Optionally drop every video request and issue it again on the same
+    // PeerConnection (the app does this whenever the UI leaves and re-enters
+    // the video grid, e.g. on backgrounding). Video keeps flowing under a
+    // downlink delay while the engines renegotiate, because on a real network
+    // the packets the SFU forwarded before it read the empty
+    // ReceiverVideoConstraints are still in flight when the receive streams
+    // are torn down; without the delay the in-process SFU stops the streams
+    // before the renegotiation lands and the case is never exercised.
+    //
+    // The cycle repeats: the hazard is a packet that the network thread has
+    // already handed to the worker when the worker tears the stream down, and
+    // at the harness's packet rates a single cycle rarely lands in that
+    // window. Validation compares against the counts recorded at the last
+    // drop, so every round must come back for the run to pass.
+    if (video && videoRerequest) {
+        constexpr int kEgressDelayMs = 150;
+        constexpr int kRerequestRounds = 5;
+        groupLog("Group", "video-rerequest: waiting 3s for frames, then %dms downlink delay and %d drop/re-request rounds", kEgressDelayMs, kRerequestRounds);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        for (const auto& s : states) {
+            GoSfu_SetNetworkParams(sfuHandle, s->id, 1, kEgressDelayMs, 0, 0.0, 0);
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        for (int round = 0; round < kRerequestRounds; ++round) {
+            groupLog("Group", "video-rerequest: round %d", round + 1);
+            dropAllVideoRequests(states);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            rerequestAllVideo(states);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+
     // Run for the specified duration, optionally with network scenario.
     if (!networkScenario.empty() && networkScenario == "step-down-up") {
         // Scenario: start uncapped, then step down, step up, uncap.
@@ -112,9 +170,52 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
             GoSfu_SetNetworkParams(sfuHandle, s->id, 1, 0, 0, 0.0, 0);
         }
         std::this_thread::sleep_for(std::chrono::seconds(phase));
+    } else if (unmuteAfterSeconds > 0) {
+        // Mid-call unmute. The muted participants sent nothing while everyone
+        // joined, so their SSRCs are unknown to every peer until now — and by
+        // now each peer has already negotiated the audio m-lines for the SSRCs
+        // it discovered at join. This is the app's "someone turns their
+        // microphone on after a while" case.
+        int settle = std::min(unmuteAfterSeconds, duration);
+        groupLog("Group", "running for %ds, then unmuting %d participant(s)",
+                 settle, (int)mutedParticipants.size());
+        std::this_thread::sleep_for(std::chrono::seconds(settle));
+
+        // Nothing is signalled to the peers: they are told about this participant by
+        // no one and must notice the new SSRC from the media itself, exactly as they
+        // must in a real call. The unmute deliberately lands after the peers have
+        // renegotiated for the SSRCs they saw at join.
+        for (const auto& s : states) {
+            if (!s->muted || !s->instance) continue;
+            groupLog("Group", "unmuting P%d (ssrc=%u)", s->id, s->audioSsrc);
+            s->instance->setIsMuted(false);
+            s->muted = false;
+            s->unmutedLate = true;
+        }
+
+        int remaining = std::max(duration - settle, 5);
+        groupLog("Group", "running for %d more seconds after the unmute...", remaining);
+        std::this_thread::sleep_for(std::chrono::seconds(remaining));
     } else {
         groupLog("Group", "running for %d seconds...", duration);
         std::this_thread::sleep_for(std::chrono::seconds(duration));
+    }
+
+    // Ask the SFU, while it is still alive, whether any participant requested
+    // its OWN video. --request-own-video puts the own endpoint in the list the
+    // way the app does; the engine has to drop it before it reaches the SFU.
+    if (video) {
+        for (const auto& s : states) {
+            s->sfuSelfRequestedLayer.store((int)GoSfu_QueryRequestedLayer(sfuHandle, (GoInt)s->id, (GoInt)s->id));
+        }
+    }
+
+    // Ask the SFU how many audio RTP packets each participant actually sent it.
+    // Validation requires zero for anyone who stayed muted for the whole run.
+    for (const auto& s : states) {
+        if (s->audioSsrc != 0) {
+            s->sfuAudioPacketsReceived.store((int64_t)GoSfu_QuerySsrcPackets(sfuHandle, s->audioSsrc));
+        }
     }
 
     // Stop all participants (using GoSfu_Destroy for bulk teardown)
@@ -124,6 +225,9 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
     for (auto& s : states) {
         if (s->videoSource) {
             s->videoSource->Stop();
+        }
+        if (s->videoCapture) {
+            s->videoCapture->setState(tgcalls::VideoState::Inactive);
         }
     }
 
@@ -153,6 +257,7 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
 
     for (auto& s : states) {
         s->instance.reset();
+        s->videoCapture.reset();
     }
 
     // Destroy SFU
@@ -165,7 +270,11 @@ int runGroupMode(int customParticipants, int referenceParticipants, int duration
 
     // Clean up log files
     for (const auto& s : states) {
-        unlink(s->logPath.c_str());
+        // TGCALLS_CLI_KEEP_LOGS=1 keeps the engine logs of a passing run
+        // (see stopParticipant in group_participant.cpp).
+        if (const char* keep = std::getenv("TGCALLS_CLI_KEEP_LOGS"); !(keep && keep[0] == '1')) {
+            unlink(s->logPath.c_str());
+        }
     }
 
     fflush(stdout);

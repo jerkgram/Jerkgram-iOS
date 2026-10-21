@@ -1,4 +1,5 @@
 import UIKit
+import PasscodeCore
 import TelegramUI
 import BuildConfig
 import ShareExtensionContext
@@ -201,6 +202,7 @@ BuildConfig.jerkgramRecordExtensionDiagnostic(
     detail: "selected app-group identifier"
 )
             
+            try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .appExtension))
             let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
 BuildConfig.jerkgramRecordExtensionDiagnostic(
     process: "share",

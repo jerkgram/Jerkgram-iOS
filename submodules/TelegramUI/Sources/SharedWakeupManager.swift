@@ -533,7 +533,7 @@ public final class SharedWakeupManager {
             return
         }
         
-        let baseAppBundleId = "ph.telegra.Telegraph"
+        let baseAppBundleId = "com.jerkgram.ios"
         
         _ = baseAppBundleId
         let uploadTaskId = "\(baseAppBundleId).upload.message\(self.nextBackgroundProcessingTaskId)"
@@ -593,7 +593,7 @@ public final class SharedWakeupManager {
                 }
             }
             
-            Task { @MainActor [weak self] in
+            let _ = Task { @MainActor [weak self] in
                 guard let self else {
                     task.updateTitle(task.title, subtitle: presentationData.strings.BackgroundTasks_MediaFinished)
                     task.setTaskCompleted(success: true)
@@ -711,7 +711,7 @@ public final class SharedWakeupManager {
             return
         }
         
-        let baseAppBundleId = "ph.telegra.Telegraph"
+        let baseAppBundleId = "com.jerkgram.ios"
         
         _ = baseAppBundleId
         let uploadTaskId = "\(baseAppBundleId).upload.story\(self.nextBackgroundStoryProcessingTaskId)"
@@ -771,7 +771,7 @@ public final class SharedWakeupManager {
                 }
             }
             
-            Task { @MainActor [weak self] in
+            let _ = Task { @MainActor [weak self] in
                 guard let self else {
                     task.updateTitle(task.title, subtitle: presentationData.strings.BackgroundTasks_StoryFinished)
                     task.setTaskCompleted(success: true)

@@ -1,0 +1,52 @@
+# Rust build artifacts
+target/
+bindgen/apple/target/
+bindgen/kotlin/target/
+bindgen/wasm/target/
+bindgen/cpp/target/
+xtask/target/
+/packaging/android/.gradle/
+/packaging/android/build/
+/packaging/android/local.properties
+
+# Generated foreign-language bindings
+/bindings/
+/tests/ton-connect/dapp/dist/
+/tests/ton-connect/dapp/node_modules/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.mnemonic
+wallet_engine_secrets.tsv
+wallet_engine_wallets.tsv
+wallet_engine_wallets.tsv.bak
+wallet_engine_journal.tsv
+wallet_engine_cpp.log
+wallet_engine_toncenter_api_key
+
+# Code intelligence and local tooling
+.codegraph/
+.codebase-memory/
+.playwright-mcp/
+.mcp.json
+
+# Coverage and reports
+coverage/
+lcov.info
+mutants.out/
+mutants.out.old/
+
+# Local research notes and checked-out reference implementations
+research/

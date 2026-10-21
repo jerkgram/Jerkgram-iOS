@@ -4,6 +4,11 @@ licenses(["notice"])
 
 exports_files(["LICENSE"])
 
+# gazelle:exclude test
+# gazelle:exclude tools/http_dmg/private/tests
+# gazelle:exclude crosstool
+# gazelle:exclude toolchain
+
 # An umbrella bzl_library for anything that needs it (like to then use stardoc),
 # but odds are using the specific sub bzl_library to with the public bzl files
 # are a better choice to get the proper subset of dependencies.
@@ -16,26 +21,4 @@ bzl_library(
         "//lib:xcode_support",
         "//rules:apple_genrule",
     ],
-)
-
-# Consumed by bazel tests.
-filegroup(
-    name = "for_bazel_tests",
-    testonly = 1,
-    srcs = [
-        "BUILD",
-        "LICENSE",
-        "//configs:for_bazel_tests",
-        "//constraints:for_bazel_tests",
-        "//crosstool:for_bazel_tests",
-        "//lib:for_bazel_tests",
-        "//platforms:for_bazel_tests",
-        "//rules:for_bazel_tests",
-        "//tools:for_bazel_tests",
-        "//xcode:for_bazel_tests",
-    ],
-    # Exposed publicly just so other rules can use this if they set up
-    # integration tests that need to copy all the support files into
-    # a temporary workspace for the tests.
-    visibility = ["//visibility:public"],
 )

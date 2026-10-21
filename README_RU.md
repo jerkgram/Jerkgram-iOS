@@ -17,7 +17,7 @@
 Он сохраняет нативный опыт Telegram для iOS как основу и добавляет недостающий слой: **что изменилось, что исчезло и что всё ещё относится к разговору.**
 
 > [!NOTE]
-> Jerkgram 1.0.2 — текущий Stable-релиз с публичными исходниками. Канонический source tag — `v1.0.2`; хеши артефактов зафиксированы в `JERKGRAM_RELEASE.json`.
+> Jerkgram 1.1.0 — текущий Stable-релиз с публичными исходниками. Канонический source tag — `v1.1.0`; хеши артефактов зафиксированы в `JERKGRAM_RELEASE.json`.
 
 ## Контекст остаётся
 
@@ -37,8 +37,8 @@ Jerkgram строится вокруг простой идеи: удаление
 
 ```text
 Upstream repository   TelegramMessenger/Telegram-iOS
-Upstream tag          release-12.9.2
-Upstream commit       6ad963e5b62d354da79040f388ae2b9132fb17b8
+Upstream tag          release-13.0.0
+Upstream commit       f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838
 ```
 
 Jerkgram — независимый проект и **не является официальным приложением Telegram**. Для него предполагаются собственные Telegram API credentials и собственная application/signing identity.

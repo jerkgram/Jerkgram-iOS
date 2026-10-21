@@ -25,11 +25,26 @@ opt_test = make_action_command_line_test_rule(
     },
 )
 
+fastbuild_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:compilation_mode": "fastbuild",
+    },
+)
+
 dead_strip_requested_test = make_action_command_line_test_rule(
     config_settings = {
         "//command_line_option:compilation_mode": "fastbuild",
         "//command_line_option:features": [
             "dead_strip",
+        ],
+    },
+)
+
+opt_dead_strip_disabled_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:compilation_mode": "opt",
+        "//command_line_option:features": [
+            "-dead_strip",
         ],
     },
 )
@@ -87,6 +102,24 @@ kernel_extension_test = make_action_command_line_test_rule(
     },
 )
 
+supported_linker_flags_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:features": [
+            "no_warn_duplicate_libraries",
+            "reproducible_linker_flag",
+        ],
+    },
+)
+
+disabled_linker_flags_test = make_action_command_line_test_rule(
+    config_settings = {
+        "//command_line_option:features": [
+            "-no_warn_duplicate_libraries",
+            "-reproducible_linker_flag",
+        ],
+    },
+)
+
 stripopt_test = make_action_command_line_test_rule(
     config_settings = {
         "//command_line_option:stripopt": ["-passed_arg"],
@@ -103,10 +136,6 @@ def linking_test_suite(name):
         name = "{}_default_apple_macos_link_test".format(name),
         tags = [name],
         expected_argv = [
-            "-Xlinker",
-            "-objc_abi_version",
-            "-Xlinker",
-            "2",
             "LINKED_BINARY",
             "-ObjC",
             "-framework",
@@ -125,10 +154,6 @@ def linking_test_suite(name):
         name = "{}_default_apple_ios_link_test".format(name),
         tags = [name],
         expected_argv = [
-            "-Xlinker",
-            "-objc_abi_version",
-            "-Xlinker",
-            "2",
             "LINKED_BINARY",
             "-ObjC",
             "-framework",
@@ -150,13 +175,17 @@ def linking_test_suite(name):
         name = "{}_opt_link_test".format(name),
         tags = [name],
         expected_argv = [
-            "-Xlinker",
-            "-objc_abi_version",
-            "-Xlinker",
-            "2",
             "-ObjC",
             "-dead_strip",
         ],
+        mnemonic = "ObjcLink",
+        target_under_test = "//test/test_data:macos_binary",
+    )
+
+    fastbuild_test(
+        name = "{}_fastbuild_link_test".format(name),
+        tags = [name],
+        not_expected_argv = ["-dead_strip"],
         mnemonic = "ObjcLink",
         target_under_test = "//test/test_data:macos_binary",
     )
@@ -165,13 +194,17 @@ def linking_test_suite(name):
         name = "{}_dead_strip_requested_test".format(name),
         tags = [name],
         expected_argv = [
-            "-Xlinker",
-            "-objc_abi_version",
-            "-Xlinker",
-            "2",
             "-ObjC",
             "-dead_strip",
         ],
+        mnemonic = "ObjcLink",
+        target_under_test = "//test/test_data:macos_binary",
+    )
+
+    opt_dead_strip_disabled_test(
+        name = "{}_opt_dead_strip_disabled_test".format(name),
+        tags = [name],
+        not_expected_argv = ["-dead_strip"],
         mnemonic = "ObjcLink",
         target_under_test = "//test/test_data:macos_binary",
     )
@@ -180,10 +213,7 @@ def linking_test_suite(name):
         name = "{}_disable_objc_apple_link_test".format(name),
         tags = [name],
         expected_argv = [
-            "-Xlinker",
-            "-objc_abi_version",
-            "-Xlinker",
-            "2",
+            "LINKED_BINARY",
             "-framework",
             "Foundation",
         ],
@@ -196,10 +226,7 @@ def linking_test_suite(name):
         name = "{}_disable_implicit_frameworks_apple_macos_link_test".format(name),
         tags = [name],
         expected_argv = [
-            "-Xlinker",
-            "-objc_abi_version",
-            "-Xlinker",
-            "2",
+            "LINKED_BINARY",
             "-ObjC",
         ],
         not_expected_argv = [
@@ -214,10 +241,7 @@ def linking_test_suite(name):
         name = "{}_disable_implicit_frameworks_apple_ios_link_test".format(name),
         tags = [name],
         expected_argv = [
-            "-Xlinker",
-            "-objc_abi_version",
-            "-Xlinker",
-            "2",
+            "LINKED_BINARY",
             "-ObjC",
         ],
         not_expected_argv = [
@@ -251,17 +275,43 @@ def linking_test_suite(name):
         tags = [name],
         expected_argv = [
             "-nostdlib",
-            "-lkmod",
-            "-lkmodc++",
-            "-lcc_kext",
             "-Xlinker",
             "-kext",
+            "-lcc_kext",
+            "-lkmod",
+            "-lkmodc++",
         ],
         not_expected_argv = [
             "-lc++",
+            "-framework",
+            "Foundation",
         ],
         mnemonic = "ObjcLink",
         target_under_test = "//test/test_data:macos_binary",
+    )
+
+    kernel_extension_test(
+        name = "{}_kernel_extension_ios_test".format(name),
+        tags = [name],
+        expected_argv = [
+            "-nostdlib",
+            "-Xlinker",
+            "-kext",
+            "-lcc_kext",
+        ],
+        not_expected_argv = [
+            "-lc++",
+            "-Objc",
+            "-fobjc-link-runtime",
+            "-lkmod",
+            "-lkmodc++",
+            "-framework",
+            "Foundation",
+            "-framework",
+            "UIKit",
+        ],
+        mnemonic = "ObjcLink",
+        target_under_test = "//test/test_data:ios_binary",
     )
 
     default_test(
@@ -295,7 +345,7 @@ def linking_test_suite(name):
         expected_argv = [
             "DSYM_HINT_DSYM_PATH",
             "LINKED_BINARY",
-            "-Wl,-prune_interval_lto,10",
+            "-Wl,-v",
         ],
         mnemonic = "CppLink",
         target_under_test = "//test/test_data:cc_test_binary",
@@ -333,6 +383,40 @@ def linking_test_suite(name):
         not_expected_argv = ["-map"],
         mnemonic = "ObjcLink",
         target_under_test = "//test/test_data:macos_binary",
+    )
+
+    # Assume we're on a new enough version to test that detection works
+    default_test(
+        name = "{}_default_supported_linker_flags_test".format(name),
+        tags = [name],
+        expected_argv = [
+            "-Wl,-no_warn_duplicate_libraries",
+            "-Wl,-reproducible",
+        ],
+        mnemonic = "CppLink",
+        target_under_test = "//test/test_data:cc_test_binary",
+    )
+
+    supported_linker_flags_test(
+        name = "{}_supported_linker_flags_test".format(name),
+        tags = [name],
+        expected_argv = [
+            "-Wl,-no_warn_duplicate_libraries",
+            "-Wl,-reproducible",
+        ],
+        mnemonic = "CppLink",
+        target_under_test = "//test/test_data:cc_test_binary",
+    )
+
+    disabled_linker_flags_test(
+        name = "{}_disabled_linker_flags_test".format(name),
+        tags = [name],
+        not_expected_argv = [
+            "-Wl,-no_warn_duplicate_libraries",
+            "-Wl,-reproducible",
+        ],
+        mnemonic = "CppLink",
+        target_under_test = "//test/test_data:cc_test_binary",
     )
 
     strip_test(
@@ -435,8 +519,20 @@ def linking_test_suite(name):
             "-S",
             "-o",
             "$(BIN_DIR)/test/test_data/cc_test_binary.stripped",
-            "-passed_arg",
             "$(BIN_DIR)/test/test_data/cc_test_binary",
+        ],
+        mnemonic = "CcStrip",
+        target_under_test = "//test/test_data:cc_test_binary",
+    )
+
+    # TODO: Not unified with above because ordering is different but doesn't
+    # matter between the 2 toolchains, remove when we only have 1
+    stripopt_test(
+        name = "{}_builtin_stripopt_test".format(name),
+        tags = [name],
+        expected_argv = [
+            "-S",
+            "-passed_arg",
         ],
         mnemonic = "CcStrip",
         target_under_test = "//test/test_data:cc_test_binary",

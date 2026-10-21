@@ -82,9 +82,9 @@ Before a release is marked Stable:
 
 ## Current Stable
 
-Jerkgram 1.0.2 is the current Stable release.
+Jerkgram 1.1.0 is the current Stable release.
 
-- **Canonical release:** [Jerkgram 1.0.2](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.0.2)
-- **Canonical source tag:** `v1.0.2`
-- **Canonical IPA:** `Jerkgram-1.0.2.ipa`, attached to the GitHub Release above
+- **Canonical release:** [Jerkgram 1.1.0](https://github.com/jerkgram/Jerkgram-iOS/releases/tag/v1.1.0)
+- **Canonical source tag:** `v1.1.0`
+- **Canonical IPA:** `Jerkgram-1.1.0.ipa`, attached to the GitHub Release above
 - **Exact artifact hashes and provenance:** [`JERKGRAM_RELEASE.json`](../JERKGRAM_RELEASE.json)

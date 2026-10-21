@@ -27,14 +27,14 @@ function tear_down() {
 function create_runners() {
   cat > macos/BUILD <<EOF
 load(
-    "@build_bazel_rules_apple//apple:macos.bzl",
+    "@rules_apple//apple:macos.bzl",
     "macos_unit_test"
 )
-load("@build_bazel_rules_swift//swift:swift.bzl",
+load("@rules_swift//swift:swift.bzl",
      "swift_library"
 )
 load(
-    "@build_bazel_rules_apple//apple/testing/default_runner:macos_test_runner.bzl",
+    "@rules_apple//apple/testing/default_runner:macos_test_runner.bzl",
     "macos_test_runner"
 )
 load("@rules_cc//cc:objc_library.bzl", "objc_library")
@@ -273,10 +273,17 @@ objc_library(
     srcs = ["pass_unit_test.m"],
 )
 
+swift_library(
+    name = "pass_unit_test_swift_lib",
+    testonly = True,
+    srcs = ["pass_unit_test.swift"],
+    module_name = "PassingUnitTestSwift",
+)
+
 macos_unit_test(
     name = "PassingUnitTest",
     infoplists = ["PassUnitTest-Info.plist"],
-    deps = [":pass_unit_test_lib"],
+    deps = [":pass_unit_test_lib", ":pass_unit_test_swift_lib"],
     minimum_os_version = "${MIN_OS_MACOS}",
     env = test_env,
     runner = ":macos_runner",
@@ -285,7 +292,7 @@ macos_unit_test(
 macos_unit_test(
     name = "PassingUnitTestWithHooks",
     infoplists = ["PassUnitTest-Info.plist"],
-    deps = [":pass_unit_test_lib"],
+    deps = [":pass_unit_test_lib", ":pass_unit_test_swift_lib"],
     minimum_os_version = "${MIN_OS_MACOS}",
     env = test_env,
     runner = ":macos_runner_with_hooks",
@@ -523,7 +530,7 @@ function test_macos_unit_test_pass() {
 
   expect_log "Test Suite 'PassingUnitTest' passed"
   expect_log "Test Suite 'PassingUnitTest.xctest' passed"
-  expect_log "Executed 4 tests, with 0 failures"
+  expect_log "Executed 7 tests, with 0 failures"
 }
 
 function test_macos_unit_test_with_hooks_pass() {
@@ -534,7 +541,7 @@ function test_macos_unit_test_with_hooks_pass() {
   expect_log "PRE-ACTION: TEST_TARGET=//macos:PassingUnitTestWithHooks"
   expect_log "Test Suite 'PassingUnitTest' passed"
   expect_log "Test Suite 'PassingUnitTestWithHooks.xctest' passed"
-  expect_log "Executed 4 tests, with 0 failures"
+  expect_log "Executed 7 tests, with 0 failures"
   expect_log "POST-ACTION: TEST_TARGET=//macos:PassingUnitTestWithHooks"
 }
 

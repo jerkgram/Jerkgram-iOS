@@ -13,6 +13,54 @@ import AccountContext
 import ItemListPeerItem
 import BuildConfig
 
+// Opt-in refresh callback owner. The existing capture owns the session lifetime.
+private final class JerkgramDiagnosticSettingsController: ItemListController {
+    var diagnosticRoute = "settingsSubpage"
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        JerkgramPerformanceDiagnostics.shared.setVisibleRoute(self.diagnosticRoute, owner: self)
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        JerkgramPerformanceDiagnostics.shared.setVisibleRoute(self.diagnosticRoute, owner: self)
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        JerkgramPerformanceDiagnostics.shared.clearVisibleRoute(owner: self)
+    }
+}
+
+private final class JerkgramRefreshIntervalProbe: NSObject {
+    static let shared = JerkgramRefreshIntervalProbe()
+    private var link: CADisplayLink?
+    private var observer: NSObjectProtocol?
+
+    func start() {
+        precondition(Thread.isMainThread)
+        guard self.link == nil, JerkgramPerformanceDiagnostics.shared.isRecording else { return }
+        JerkgramPerformanceDiagnostics.shared.reserveClientWork()
+        let link = CADisplayLink(target: self, selector: #selector(self.refresh(_:)))
+        self.link = link
+        link.add(to: .main, forMode: .common)
+        self.observer = NotificationCenter.default.addObserver(forName: JerkgramPerformanceDiagnostics.snapshotChanged, object: nil, queue: .main) { [weak self] _ in
+            if !JerkgramPerformanceDiagnostics.shared.isRecording { self?.stop() }
+        }
+    }
+
+    func stop() {
+        precondition(Thread.isMainThread)
+        self.link?.invalidate()
+        self.link = nil
+        if let observer = self.observer { NotificationCenter.default.removeObserver(observer) }
+        self.observer = nil
+    }
+
+    @objc private func refresh(_ link: CADisplayLink) {
+        guard JerkgramPerformanceDiagnostics.shared.isRecording else { self.stop(); return }
+        JerkgramPerformanceDiagnostics.shared.sampleRefreshOpportunity(timestamp: link.timestamp, targetTimestamp: link.targetTimestamp)
+    }
+}
+
 private enum GhostBaseKey {
     static let profileEnabled = "jerkgram.Profile.Enabled"
     static let showIds = "jerkgram.Profile.ShowIds"
@@ -491,7 +539,17 @@ private func jerkgramPersistChangedSettings(
     let oldValues = previous.map(jerkgramStateValues) ?? [:]
     let newValues = jerkgramStateValues(current)
     let changes = newValues.filter { oldValues[$0.key] != $0.value }
-    guard !changes.isEmpty else { return }
+    guard !changes.isEmpty else {
+    GhostBaseGlassStyle.setProfilePlaybackSettings(
+        glassEnabled: current.glassEnabled,
+        animatedBackgroundEnabled: current.profileAnimatedBackground,
+        avatarBlurInProfile: current.profileAvatarBlur,
+        tintEnabled: current.profileBlurTint,
+        reducedBlur: current.profileBlurReduced,
+        hideOwnPhone: current.hideOwnPhone
+    )
+        return
+    }
 
     // These values are consumed synchronously outside Settings immediately
     // before user-visible side effects. Leaving them behind the utility queue
@@ -502,6 +560,13 @@ private func jerkgramPersistChangedSettings(
     // UserDefaults.set updates the in-process defaults domain; deliberately
     // avoid any forced defaults/filesystem synchronization here.
     let jerkgramSynchronousRuntimeSettingKeys: Set<String> = Set<String>([
+        // Only preference changes project here, never avatar transition ticks.
+        GhostBaseKey.glassEnabled,
+        GhostBaseKey.profileAnimatedBackground,
+        GhostBaseKey.profileAvatarBlur,
+        GhostBaseKey.profileBlurTint,
+        GhostBaseKey.profileBlurReduced,
+        GhostBaseKey.hideOwnPhone,
         GhostBaseKey.scheduledSend,
         GhostBaseKey.protectedEnabled,
         GhostBaseKey.oneTimeSave,
@@ -525,10 +590,18 @@ private func jerkgramPersistChangedSettings(
         // projection directly from UserDefaults.standard.
         value.write(to: defaults, key: key)
         if key == GhostBaseKey.scheduledSend {
-            let sharedDefaults = UserDefaults(suiteName: "group.ph.telegra.Telegraph") ?? defaults
+            let sharedDefaults = UserDefaults(suiteName: "group.com.jerkgram.ios") ?? defaults
             value.write(to: sharedDefaults, key: key)
         }
     }
+    GhostBaseGlassStyle.setProfilePlaybackSettings(
+        glassEnabled: current.glassEnabled,
+        animatedBackgroundEnabled: current.profileAnimatedBackground,
+        avatarBlurInProfile: current.profileAvatarBlur,
+        tintEnabled: current.profileBlurTint,
+        reducedBlur: current.profileBlurReduced,
+        hideOwnPhone: current.hideOwnPhone
+    )
     JerkgramActivityGhostRuntime.invalidate()
 
     if changes[GhostBaseKey.hideBlockedMessages] != nil
@@ -2161,7 +2234,7 @@ private func ghostBaseSettingsEntries(
             .aboutValue(1, 3, strings.telegramBase, JerkgramReleaseIdentity.telegramBase),
             .header(2, strings.privacy),
             .telemetryToggle(2, 1, strings.anonymousAnalytics, jerkgramTelemetryEnabled()),
-            .info(3, strings.anonymousAnalyticsDescription)
+            .info(3, strings.anonymousAnalyticsDescription),
         ]
     }
 
@@ -2249,7 +2322,7 @@ NSE required: NO
 """))
 
     let ghostBaseNsePrefix = "jerkgram.V10D.NSE."
-    let ghostBaseNseDefaults = UserDefaults(suiteName: "group.ph.telegra.Telegraph") ?? UserDefaults.standard
+    let ghostBaseNseDefaults = UserDefaults(suiteName: "group.com.jerkgram.ios") ?? UserDefaults.standard
 
     entries.append(.info(debug, """
 Capture Mesh / NSE Probe:
@@ -2573,7 +2646,7 @@ editChannelMessage: \(ghostBaseCoreDefaults.integer(forKey: ghostBaseCorePrefix 
     entries.append(.info(debug, """
 Telegram ID: \(telegramId)
 Bundle ID: \(bundleId)
-AppGroup: group.ph.telegra.Telegraph
+AppGroup: group.com.jerkgram.ios
 Base: Official Telegram 12.9.2
 KeychainFix: sideloadKeychainFix.dylib
 Version: v1.1G-unified-recovery
@@ -3252,6 +3325,7 @@ private func ghostBaseSettingsPageController(
         username: "JerkgramCommunity"
     )
     var openAboutChannelImpl: ((EnginePeer) -> Void)?
+    var sharePerformanceImpl: (() -> Void)?
 
     let arguments = GhostBaseSettingsArguments(
         context: context,
@@ -3260,6 +3334,15 @@ private func ghostBaseSettingsPageController(
         },
         runResearchAction: { action in
             switch action {
+            case "performanceStart":
+                JerkgramPerformanceDiagnostics.shared.start()
+                JerkgramRefreshIntervalProbe.shared.start()
+            case "performanceStop":
+                JerkgramPerformanceDiagnostics.shared.stop()
+            case "performanceCopy":
+                UIPasteboard.general.string = JerkgramPerformanceDiagnostics.shared.report()
+            case "performanceShare":
+                sharePerformanceImpl?()
             case "copyExtensionDiagnostics":
                 UIPasteboard.general.string = BuildConfig.jerkgramExtensionDiagnosticsReport()
 
@@ -3813,14 +3896,21 @@ private func ghostBaseSettingsPageController(
         openSendTextStyleImpl?()
     })
 
+    let performanceChanges: Signal<Int, NoError> = page == .about ? Signal { subscriber in
+        let observer = NotificationCenter.default.addObserver(forName: JerkgramPerformanceDiagnostics.snapshotChanged, object: nil, queue: .main) { _ in subscriber.putNext(0) }
+        subscriber.putNext(0)
+        return ActionDisposable { NotificationCenter.default.removeObserver(observer) }
+    } : .single(0)
+
     let signal = combineLatest(
         context.sharedContext.presentationData,
         jerkgramImportRefreshStateSignal,
         aboutChannelSignal,
-        aboutCommunitySignal
+        aboutCommunitySignal,
+        performanceChanges
     )
     |> deliverOnMainQueue
-    |> map { presentationData, state, aboutChannelState, aboutCommunityState
+    |> map { presentationData, state, aboutChannelState, aboutCommunityState, _
         -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let controllerState = ItemListControllerState(
             presentationData: ItemListPresentationData(presentationData),
@@ -3847,10 +3937,23 @@ private func ghostBaseSettingsPageController(
         return (controllerState, (listState, arguments))
     }
 
-    let controller = ItemListController(
+    let controller = JerkgramDiagnosticSettingsController(
         context: context,
         state: signal
     )
+    controller.diagnosticRoute = page == .about ? "about" : "settingsSubpage"
+    sharePerformanceImpl = { [weak controller] in
+        guard let root = controller?.view.window?.rootViewController else { return }
+        var presenter = root
+        while let next = presenter.presentedViewController { presenter = next }
+        let activity = UIActivityViewController(activityItems: [JerkgramPerformanceDiagnostics.shared.report()], applicationActivities: nil)
+        if let popover = activity.popoverPresentationController {
+            popover.sourceView = presenter.view
+            popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1.0, height: 1.0)
+            popover.permittedArrowDirections = []
+        }
+        presenter.present(activity, animated: true)
+    }
 
     openAboutChannelImpl = { [weak controller] peer in
         guard let navigationController = controller?.navigationController

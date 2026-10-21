@@ -15,7 +15,7 @@
 """Implementation of iOS test rules."""
 
 load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
+    "@apple_support//lib:apple_support.bzl",
     "apple_support",
 )
 load(
@@ -119,7 +119,6 @@ _ios_internal_ui_test_bundle = rule_factory.create_apple_rule(
                 framework_provider_aspect,
             ],
             is_test_supporting_rule = True,
-            requires_legacy_cc_toolchain = True,
         ),
         rule_attrs.common_bundle_attrs(deps_cfg = transition_support.apple_platform_split_transition),
         rule_attrs.common_tool_attrs(),
@@ -198,7 +197,6 @@ _ios_internal_unit_test_bundle = rule_factory.create_apple_rule(
                 framework_provider_aspect,
             ],
             is_test_supporting_rule = True,
-            requires_legacy_cc_toolchain = True,
         ),
         rule_attrs.common_bundle_attrs(deps_cfg = transition_support.apple_platform_split_transition),
         rule_attrs.common_tool_attrs(),

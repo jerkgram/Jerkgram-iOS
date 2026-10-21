@@ -1,8 +1,14 @@
+common --check_direct_dependencies=off
+
 # https://github.com/bazelbuild/stardoc/issues/112
 common --incompatible_allow_tags_propagation
 
-# Fail if a glob doesn't match anything (https://github.com/bazelbuild/bazel/issues/8195)
-build --incompatible_disallow_empty_glob
+# Don't require a system python to run py_binary targets
+common --@rules_python//python/config_settings:bootstrap_impl=script
+common --incompatible_default_to_explicit_init_py
+
+common --flag_alias=swiftcopt=//swift:copt
+common --flag_alias=host_swiftcopt=//swift:exec_copt
 
 build --host_macos_minimum_os=14.0
 build --macos_minimum_os=14.0
@@ -11,42 +17,51 @@ build --macos_minimum_os=14.0
 # dependencies cause us to use a newer version
 build --check_direct_dependencies=off
 
-# This is needed for Bazel 6 compatibility.
-# It's enabled (and can't be disabled) in Bazel 7.
-# TODO: Remove this once we drop Bazel 6 support.
-# See also: https://github.com/bazelbuild/bazel/issues/14327
-build --experimental_enable_aspect_hints
-
 # Make sure no warnings slip into the C++ tools we vendor
 build --features treat_warnings_as_errors
-# TODO: Remove when we update protobuf
-build --copt=-Wno-deprecated-declarations --host_copt=-Wno-deprecated-declarations
 
 # The default strategy is worker, which has sandboxing disabled by default,
 # which can hide issues with non-hermetic bugs.
 build --worker_sandboxing
 
 build --enable_platform_specific_config
-build:macos --apple_crosstool_top=@local_config_apple_cc//:toolchain
-build:macos --crosstool_top=@local_config_apple_cc//:toolchain
-build:macos --host_crosstool_top=@local_config_apple_cc//:toolchain
 
-# TODO: Remove once https://github.com/protocolbuffers/protobuf/commit/7bb756c1cc580380c689a9141b27e20c7a5d95f3 is in a release
-build --per_file_copt="external/.*protobuf.*/src/google/protobuf/stubs/strutil.cc@-Wno-deprecated-declarations"
-# TODO: Use --host_per_file_copt here once we drop bazel 5.x
-build --host_cxxopt="-Wno-deprecated-declarations"
+common:macos --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common:linux --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 
-# TODO: Remove once https://github.com/protocolbuffers/protobuf/commit/85225b83c3386a282bf1e51f1be8bd2ad0bc45d0 is in a release
-build --per_file_copt="external/.*protobuf.*/.*.cc@-Wno-unused-function"
-# TODO: Use --host_per_file_copt here once we drop bazel 5.x
-build --host_cxxopt="-Wno-unused-function"
+common --repo_env=ACCEPTED_ANDROID_NDK_LICENSE_VERSION=r27c
+common --repo_env=ACCEPTED_ANDROID_SDK_LICENSE_VERSION=35
 
-# The CNIOBoringSSL library uses C++14 features like 'enable_if_t' macro support.
-# For more details on how to enable this in Bazel:
-# https://stackoverflow.com/questions/40260242/how-to-set-c-standard-version-when-build-with-bazel/43388168#43388168
-build:linux --cxxopt='-std=c++14'
+common --android_platforms=@rules_android//:arm64-v8a
+common --java_language_version=17
+common --java_runtime_version=remotejdk_17
+common --tool_java_language_version=17
+common --tool_java_runtime_version=remotejdk_17
+
+common:linux --repo_env=CC=clang
+build:linux --cxxopt='-std=c++17' --host_cxxopt='-std=c++17'
+common:linux --//test:apple_build_tests=False
+
+# Worker sandboxing copies the worker into a sandbox exec root and cleans it
+# between invocations. On Windows a running/recently-run executable cannot be
+# deleted, so that cleanup fails with "Permission denied". Run Swift workers
+# unsandboxed on Windows.
+build:windows --noworker_sandboxing
 
 # This C2K warning causes zlib to fail to compile.
 # There is an open issue about it on the zlib repository here:
 # https://github.com/madler/zlib/issues/633
 build --per_file_copt="external/.*zlib.*/.*.c@-Wno-deprecated-non-prototype"
+
+# TODO: Remove once fixed
+build --per_file_copt="external/.*protobuf.*/.*@-Wno-unused-private-field"
+build --host_per_file_copt="external/.*protobuf.*/.*@-Wno-unused-private-field"
+
+# ignore warnings in external CC dependencies
+build --features=external_include_paths --host_features=external_include_paths
+
+# MSVC ignores `/external:I` flag (given by "--features=external_include_paths") if also doesn't get the `/external:W<level>` flag which is
+# unfortunately not added by bazel by default. Adding it with `--copt` doesn't work, so we'll simply disable this feature on windows.
+build:windows --features=-external_include_paths --host_features=-external_include_paths
+
+try-import %workspace%/user.bazelrc

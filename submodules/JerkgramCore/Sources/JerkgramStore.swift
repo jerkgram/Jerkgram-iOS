@@ -75,7 +75,7 @@ public final class JerkgramJSONLEventStore: JerkgramEventStore {
         defer { Self.sharedLock.unlock() }
         let state = try self.ensureIndexLocked(accountPeerId)
         return self.filteredRecords(
-            state.records,
+            state.recordsByChat[chatPeerId] ?? [],
             chatPeerId: chatPeerId,
             afterSequence: afterSequence,
             throughSequence: throughSequence
@@ -94,7 +94,7 @@ public final class JerkgramJSONLEventStore: JerkgramEventStore {
             throw JerkgramCoreError.indexNotReady(accountPeerId)
         }
         return self.filteredRecords(
-            state.records,
+            state.recordsByChat[chatPeerId] ?? [],
             chatPeerId: chatPeerId,
             afterSequence: afterSequence,
             throughSequence: throughSequence

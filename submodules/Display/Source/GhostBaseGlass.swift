@@ -9,10 +9,77 @@ public enum GhostBaseGlassStyle {
         return UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
     }()
 
+    private static var profileAnimatedValue: Bool = {
+        return UserDefaults.standard.object(forKey: "jerkgram.ProfileBlur.Animated") as? Bool ?? true
+    }()
+
+    private static var profileAvatarValue = UserDefaults.standard.object(forKey: "jerkgram.ProfileBlur.Avatar") as? Bool ?? true
+    private static var profileTintValue = UserDefaults.standard.object(forKey: "jerkgram.ProfileBlur.Tint") as? Bool ?? true
+    private static var profileReducedValue = UserDefaults.standard.object(forKey: "jerkgram.ProfileBlur.Reduced") as? Bool ?? false
+    private static var profileHideOwnPhoneValue = UserDefaults.standard.object(forKey: "jerkgram.Appearance.HideOwnPhone") as? Bool ?? false
+
+    private static var preferenceGeneration: UInt64 = 0
+
     public static func reloadFromDefaults() {
+        // Account projection/import calls this after updating active defaults.
+        // Explicit refresh I/O is outside the hot lock; lazy bootstrap is once.
+        self.enabledLock.lock()
+        self.preferenceGeneration &+= 1
+        let generation = self.preferenceGeneration
+        self.enabledLock.unlock()
+        let defaults = UserDefaults.standard
+        let enabled = defaults.object(forKey: self.enabledKey) as? Bool ?? true
+        let animated = defaults.object(forKey: "jerkgram.ProfileBlur.Animated") as? Bool ?? true
+        let avatar = defaults.object(forKey: "jerkgram.ProfileBlur.Avatar") as? Bool ?? true
+        let tint = defaults.object(forKey: "jerkgram.ProfileBlur.Tint") as? Bool ?? true
+        let reduced = defaults.object(forKey: "jerkgram.ProfileBlur.Reduced") as? Bool ?? false
+        let hideOwnPhone = defaults.object(forKey: "jerkgram.Appearance.HideOwnPhone") as? Bool ?? false
         self.enabledLock.lock()
         defer { self.enabledLock.unlock() }
-        self.enabledValue = UserDefaults.standard.object(forKey: self.enabledKey) as? Bool ?? true
+        guard self.preferenceGeneration == generation else { return }
+        self.enabledValue = enabled
+        self.profileAnimatedValue = animated
+        self.profileAvatarValue = avatar
+        self.profileTintValue = tint
+        self.profileReducedValue = reduced
+        self.profileHideOwnPhoneValue = hideOwnPhone
+    }
+
+    public static var profileBlurSettings: GhostBaseProfileBlurSettings? {
+        self.enabledLock.lock()
+        defer { self.enabledLock.unlock() }
+        guard self.enabledValue else { return nil }
+        return GhostBaseProfileBlurSettings(
+            avatarBlurInProfile: self.profileAvatarValue,
+            animatedBackgroundEnabled: self.profileAnimatedValue,
+            tintEnabled: self.profileTintValue,
+            reducedBlur: self.profileReducedValue
+        )
+    }
+
+    public static var profileAnimatedBackgroundEnabled: Bool {
+        self.enabledLock.lock()
+        defer { self.enabledLock.unlock() }
+        return self.enabledValue && self.profileAnimatedValue
+    }
+
+    public static var profileHideOwnPhone: Bool {
+        self.enabledLock.lock()
+        defer { self.enabledLock.unlock() }
+        return self.profileHideOwnPhoneValue
+    }
+
+    public static func setProfilePlaybackSettings(glassEnabled: Bool, animatedBackgroundEnabled: Bool, avatarBlurInProfile: Bool? = nil, tintEnabled: Bool? = nil, reducedBlur: Bool? = nil, hideOwnPhone: Bool? = nil) {
+        // Controller projects profile and phone keys before atomic publication.
+        self.enabledLock.lock()
+        self.enabledValue = glassEnabled
+        self.profileAnimatedValue = animatedBackgroundEnabled
+        if let avatarBlurInProfile { self.profileAvatarValue = avatarBlurInProfile }
+        if let tintEnabled { self.profileTintValue = tintEnabled }
+        if let reducedBlur { self.profileReducedValue = reducedBlur }
+        if let hideOwnPhone { self.profileHideOwnPhoneValue = hideOwnPhone }
+        self.preferenceGeneration &+= 1
+        self.enabledLock.unlock()
     }
 
     public static var isEnabled: Bool {
@@ -26,10 +93,11 @@ public enum GhostBaseGlassStyle {
     }
 
     public static func setEnabled(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: self.enabledKey)
         self.enabledLock.lock()
         self.enabledValue = value
+        self.preferenceGeneration &+= 1
         self.enabledLock.unlock()
-        UserDefaults.standard.set(value, forKey: self.enabledKey)
     }
 
     // Pure compatibility tokens for the existing lightweight settings/gifts
@@ -98,18 +166,9 @@ public struct GhostBaseProfileBlurSettings: Equatable {
     public let tintEnabled: Bool
     public let reducedBlur: Bool
 
-    // Reads the master key first. Child settings are not read and no profile
-    // object is created when the effect is disabled.
+    // Master gate and all child values are read atomically from the snapshot.
+    // Defaults bootstrap is once; explicit account/import refresh stays supported.
     public static func loadEnabled() -> GhostBaseProfileBlurSettings? {
-        guard GhostBaseGlassStyle.isEnabled else {
-            return nil
-        }
-        let defaults = UserDefaults.standard
-        return GhostBaseProfileBlurSettings(
-            avatarBlurInProfile: defaults.object(forKey: self.avatarBlurKey) as? Bool ?? true,
-            animatedBackgroundEnabled: defaults.object(forKey: self.animatedKey) as? Bool ?? true,
-            tintEnabled: defaults.object(forKey: self.tintKey) as? Bool ?? true,
-            reducedBlur: defaults.object(forKey: self.reducedKey) as? Bool ?? false
-        )
+        return GhostBaseGlassStyle.profileBlurSettings
     }
 }

@@ -1,11 +1,11 @@
-load(
-    "@build_bazel_rules_swift//swift:swift.bzl",
-    "swift_library",
-)
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:objc_library.bzl", "objc_library")
+load(
+    "@rules_swift//swift:swift.bzl",
+    "swift_library",
+)
 load(
     "//apple:resources.bzl",
     "apple_bundle_import",
@@ -116,6 +116,12 @@ objc_library(
 objc_library(
     name = "objc_main_lib",
     srcs = ["main.m"],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "objc_order_file_main_lib",
+    srcs = ["order_file_main.m"],
     tags = common.fixture_tags,
 )
 
@@ -238,6 +244,12 @@ swift_library(
 )
 
 swift_library(
+    name = "swift_span_main_lib",
+    srcs = ["span_main.swift"],
+    tags = common.fixture_tags,
+)
+
+swift_library(
     name = "swift_lib_with_structured_resources",
     testonly = True,
     srcs = [
@@ -320,15 +332,11 @@ swift_library(
     tags = common.fixture_tags,
 )
 
-# TODO: Use `library_evolution = True` and remove `features` once rules_swift 3+ is required.
 swift_library(
     name = "swift_framework_lib_with_swiftinterface",
     srcs = ["//test/testdata/sources:main.swift"],
-    features = [
-        "swift.emit_swiftinterface",
-        "swift.enable_library_evolution",
-    ],
     generates_header = True,
+    library_evolution = True,
     module_name = "swift_framework_lib",
     tags = common.fixture_tags,
 )
@@ -467,6 +475,24 @@ apple_precompiled_resource_bundle(
     bundle_id = "org.bazel.rules_apple.precompiled_resource_bundle",
     infoplists = ["Another.plist"],
     resources = [":custom_apple_resource_info"],
+    tags = common.fixture_tags,
+)
+
+apple_precompiled_resource_bundle(
+    name = "core_ml_precompiled_resource_bundle",
+    bundle_name = "App_Resources",
+    resources = [
+        "//test/testdata/resources:sample.mlpackage",
+    ],
+    tags = common.fixture_tags,
+)
+
+swift_library(
+    name = "swift_uikit_appdelegate_with_core_ml_precompiled_resource_bundle",
+    srcs = ["AppDelegate.swift"],
+    data = [
+        ":core_ml_precompiled_resource_bundle",
+    ],
     tags = common.fixture_tags,
 )
 
@@ -716,8 +742,18 @@ filegroup(
 )
 
 filegroup(
+    name = "star_atlas_files",
+    srcs = ["//test/testdata/resources:star_atlas_files"],
+)
+
+filegroup(
     name = "localized_generic_resources",
     srcs = glob(["*.lproj/*.txt"]),
+)
+
+filegroup(
+    name = "localized_generic_resources_without_fr",
+    srcs = ["it.lproj/localized.txt"],
 )
 
 filegroup(
@@ -835,6 +871,14 @@ objc_library(
     name = "ios_localized_xcstrings_lib",
     data = [
         ":localized_xcstrings",
+    ],
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "ios_texture_atlas_lib",
+    data = [
+        ":star_atlas_files",
     ],
     tags = common.fixture_tags,
 )
@@ -989,6 +1033,25 @@ objc_library(
     name = "bundle_library_ios_lib",
     data = [
         ":bundle_library_ios",
+    ],
+    tags = common.fixture_tags,
+)
+
+apple_resource_bundle(
+    name = "bundle_library_dependency",
+    resources = select({
+        "//apple:ios_arm64": ["bundle_library_dependency_device.txt"],
+        "//apple:ios_arm64e": ["bundle_library_dependency_device.txt"],
+        "//apple:ios_sim_arm64": ["bundle_library_dependency_sim.txt"],
+        "//apple:ios_x86_64": ["bundle_library_dependency_sim.txt"],
+    }),
+    tags = common.fixture_tags,
+)
+
+objc_library(
+    name = "bundle_library_dependency_lib",
+    data = [
+        ":bundle_library_dependency",
     ],
     tags = common.fixture_tags,
 )
@@ -1411,13 +1474,6 @@ swift_library(
     srcs = ["widget_configuration_intent.swift"],
     linkopts = ["-Wl,-framework,AppIntents"],
     module_name = "WidgetConfigurationIntent",
-    tags = common.fixture_tags,
-)
-
-swift_library(
-    name = "extra_app_intent",
-    srcs = ["extra_app_intent.swift"],
-    linkopts = ["-Wl,-framework,AppIntents"],
     tags = common.fixture_tags,
 )
 

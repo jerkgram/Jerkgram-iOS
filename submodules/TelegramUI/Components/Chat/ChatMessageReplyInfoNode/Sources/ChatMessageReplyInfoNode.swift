@@ -45,7 +45,7 @@ private func generateGroupIcon() -> UIImage {
         UIGraphicsPushContext(context)
         sourceImage.draw(at: CGPoint(x: 0.0, y: 1.0 - UIScreenPixel))
         UIGraphicsPopContext()
-
+        
         //context.setFillColor(UIColor.white.cgColor)
         //context.fill(CGRect(origin: CGPoint(), size: size))
     })!.precomposed().withRenderingMode(.alwaysTemplate)
@@ -63,7 +63,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
         public let imageView: UIView?
         public let relativeSourceRect: CGRect
         public let relativeTargetRect: CGRect
-
+        
         public init(titleView: UIView, textView: UIView, lineView: UIView, imageView: UIView?, relativeSourceRect: CGRect, relativeTargetRect: CGRect) {
             self.titleView = titleView
             self.textView = textView
@@ -73,7 +73,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             self.relativeTargetRect = relativeTargetRect
         }
     }
-
+    
     public class Arguments {
         public let presentationData: ChatPresentationData
         public let strings: PresentationStrings
@@ -90,7 +90,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
         public let animationCache: AnimationCache?
         public let animationRenderer: MultiAnimationRenderer?
         public let associatedData: ChatMessageItemAssociatedData
-
+        
         public init(
             presentationData: ChatPresentationData,
             strings: PresentationStrings,
@@ -125,7 +125,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             self.associatedData = associatedData
         }
     }
-
+    
     public var visibility: Bool = false {
         didSet {
             if self.visibility != oldValue {
@@ -133,7 +133,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             }
         }
     }
-
+    
     private let backgroundView: MessageInlineBlockBackgroundView
     private var starsView: StarsView?
     private var quoteIconView: UIImageView?
@@ -146,29 +146,29 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
     private var expiredStoryIconView: UIImageView?
     private var checkLayer: CheckLayer?
     private var giftEmojiLayer: InlineStickerItemLayer?
-
+    
     private var currentProgressDisposable: Disposable?
-
+    
     public var isQuoteExpanded: Bool = false
-
+    
     override public init() {
         self.backgroundView = MessageInlineBlockBackgroundView(frame: CGRect())
-
+        
         self.contentNode = ASDisplayNode()
         self.contentNode.isUserInteractionEnabled = false
         self.contentNode.displaysAsynchronously = false
         self.contentNode.contentMode = .left
         self.contentNode.contentsScale = UIScreenScale
-
+        
         super.init()
-
+        
         self.addSubnode(self.contentNode)
     }
-
+    
     deinit {
         self.currentProgressDisposable?.dispose()
     }
-
+    
     public func makeProgress() -> Promise<Bool> {
         let progress = Promise<Bool>()
         self.currentProgressDisposable?.dispose()
@@ -182,20 +182,20 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
         })
         return progress
     }
-
+    
     public static func asyncLayout(_ maybeNode: ChatMessageReplyInfoNode?) -> (_ arguments: Arguments) -> (CGSize, (CGSize, Bool, ListViewItemUpdateAnimation) -> ChatMessageReplyInfoNode) {
         let titleNodeLayout = TextNode.asyncLayout(maybeNode?.titleNode)
         let textNodeLayout = TextNodeWithEntities.asyncLayout(maybeNode?.textNode)
         let imageNodeLayout = TransformImageNode.asyncLayout(maybeNode?.imageNode)
         let previousMediaReference = maybeNode?.previousMediaReference
-
+        
         let isQuoteExpanded = maybeNode?.isQuoteExpanded ?? false
-
+        
         return { arguments in
             let fontSize = floor(arguments.presentationData.fontSize.baseDisplaySize * 14.0 / 17.0)
             let titleFont = Font.semibold(fontSize)
             let textFont = Font.regular(fontSize)
-
+            
             var titleString: NSAttributedString
             var textString: NSAttributedString
             let isMedia: Bool
@@ -203,20 +203,20 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             var isExpiredStory: Bool = false
             var isStory: Bool = false
             var isPoll: Bool = false
-
+            
             let titleColor: UIColor
             let mainColor: UIColor
             let dustColor: UIColor
             var secondaryColor: UIColor?
             var tertiaryColor: UIColor?
-
+            
             var authorNameColor: UIColor?
             var dashSecondaryColor: UIColor?
             var dashTertiaryColor: UIColor?
             let placeholderColor: UIColor
-
+            
             var author = arguments.message?.effectiveAuthor
-
+            
             if let forwardInfo = arguments.message?.forwardInfo {
                 if let peer = forwardInfo.author {
                     author = peer
@@ -224,7 +224,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     author = TelegramUser(id: EnginePeer.Id(namespace: Namespaces.Peer.Empty, id: EnginePeer.Id.Id._internalFromInt64Value(Int64(authorSignature.persistentHashValue % 32))), accessHash: nil, firstName: authorSignature, lastName: nil, username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [], storiesHidden: nil, nameColor: nil, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, subscriberCount: nil, verificationIconFileId: nil)
                 }
             }
-
+            
             var giftEmojiFileId: Int64?
             switch author?.nameColor {
             case let .preset(nameColor):
@@ -241,11 +241,11 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             default:
                 break
             }
-
+            
             if arguments.isSummarized {
                 authorNameColor = nil
             }
-
+            
             switch arguments.type {
             case let .bubble(incoming):
                 titleColor = incoming ? (authorNameColor ?? arguments.presentationData.theme.theme.chat.message.incoming.accentTextColor) : arguments.presentationData.theme.theme.chat.message.outgoing.accentTextColor
@@ -277,17 +277,17 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 if dashTertiaryColor != nil {
                     tertiaryColor = .clear
                 }
-
+                
                 mainColor = serviceMessageColorComponents(chatTheme: arguments.presentationData.theme.theme.chat, wallpaper: arguments.presentationData.theme.wallpaper).primaryText
                 dustColor = titleColor
                 placeholderColor = serviceColor.primaryText.withAlphaComponent(0.2)
             }
-
+            
             if let message = arguments.message {
                 let author = message.effectiveAuthor
                 let rawTitleString = author.flatMap(EnginePeer.init)?.displayTitle(strings: arguments.strings, displayOrder: arguments.presentationData.nameDisplayOrder) ?? arguments.strings.User_DeletedAccount
                 titleString = NSAttributedString(string: rawTitleString, font: titleFont, textColor: titleColor)
-
+                
                 if let forwardInfo = message.forwardInfo {
                     if let author = forwardInfo.author {
                         let rawTitleString = EnginePeer(author).displayTitle(strings: arguments.strings, displayOrder: arguments.presentationData.nameDisplayOrder)
@@ -297,13 +297,13 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         titleString = NSAttributedString(string: rawTitleString, font: titleFont, textColor: titleColor)
                     }
                 }
-
+                
                 if message.id.peerId != arguments.parentMessage.id.peerId, let peer = message.peers[message.id.peerId], (peer is TelegramChannel || peer is TelegramGroup) {
                     final class RunDelegateData {
                         let ascent: CGFloat
                         let descent: CGFloat
                         let width: CGFloat
-
+                        
                         init(ascent: CGFloat, descent: CGFloat, width: CGFloat) {
                             self.ascent = ascent
                             self.descent = descent
@@ -334,7 +334,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                             return data.takeUnretainedValue().width
                         }
                     )
-
+                    
                     if let runDelegate = CTRunDelegateCreate(&callbacks, Unmanaged.passRetained(runDelegateData).toOpaque()) {
                         if let peer = peer as? TelegramChannel, case .broadcast = peer.info {
                             let rawTitleString = NSMutableAttributedString(attributedString: titleString)
@@ -357,7 +357,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         }
                     }
                 }
-
+                
                 let (textStringValue, isMediaValue, isTextValue) = descriptionStringForMessage(contentSettings: arguments.context.currentContentSettings.with { $0 }, message: EngineMessage(message), strings: arguments.strings, nameDisplayOrder: arguments.presentationData.nameDisplayOrder, dateTimeFormat: arguments.presentationData.dateTimeFormat, accountPeerId: arguments.context.account.peerId)
                 textString = textStringValue
                 isMedia = isMediaValue
@@ -397,7 +397,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     titleString = NSAttributedString(string: rawTitleString, font: titleFont, textColor: titleColor)
                 }
                 isText = false
-
+                
                 var hideStory = false
                 if let peer = arguments.parentMessage.peers[story.peerId] as? TelegramChannel, peer.username == nil, peer.usernames.isEmpty {
                     switch peer.participationStatus {
@@ -407,7 +407,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         hideStory = true
                     }
                 }
-
+                
                 if let storyItem = arguments.parentMessage.associatedStories[story], storyItem.data.isEmpty {
                     isExpiredStory = true
                     textString = NSAttributedString(string: arguments.strings.Chat_ReplyExpiredStory)
@@ -427,7 +427,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 isMedia = true
                 isText = false
             }
-
+            
             let textColor: UIColor
             switch arguments.type {
                 case let .bubble(incoming):
@@ -441,27 +441,27 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 case .standalone:
                     textColor = titleColor
             }
-
+            
             var textLeftInset: CGFloat = 0.0
             var messageText: NSAttributedString
             var todoItemCompleted: Bool?
             var checkIsRectangle = false
-
+            
             if case let .pollOption(optionId) = arguments.innerSubject, let poll = arguments.message?.media.first(where: { $0 is TelegramMediaPoll }) as? TelegramMediaPoll, let pollOption = poll.options.first(where: { $0.opaqueIdentifier == optionId }) {
                 messageText = stringWithAppliedEntities(pollOption.text, entities: pollOption.entities, baseColor: textColor, linkColor: textColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont, underlineLinks: false, message: nil)
                 textLeftInset += 16.0
-
+                
                 todoItemCompleted = true
                 checkIsRectangle = poll.kind.multipleAnswers
             } else if case let .todoItem(todoItemId) = arguments.innerSubject, let todo = arguments.message?.media.first(where: { $0 is TelegramMediaTodo }) as? TelegramMediaTodo, let todoItem = todo.items.first(where: { $0.id == todoItemId }) {
                 messageText = stringWithAppliedEntities(todoItem.text, entities: todoItem.entities, baseColor: textColor, linkColor: textColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont, underlineLinks: false, message: nil)
                 textLeftInset += 16.0
-
+                
                 todoItemCompleted = todo.completions.contains(where: { $0.id == todoItemId })
             } else if isText, let message = arguments.message {
                 var text: String
                 var messageEntities: [MessageTextEntity]
-
+                
                 if let quote = arguments.quote?.quote, !quote.text.isEmpty {
                     text = quote.text
                     messageEntities = quote.entities
@@ -469,7 +469,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     text = foldLineBreaks(message.text)
                     messageEntities = message.textEntitiesAttribute?.entities ?? []
                 }
-
+                
                 if let translateToLanguage = arguments.associatedData.translateToLanguage, !text.isEmpty {
                     for attribute in message.attributes {
                         if let attribute = attribute as? TranslationMessageAttribute, !attribute.text.isEmpty, attribute.toLang == translateToLanguage {
@@ -479,7 +479,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         }
                     }
                 }
-
+                    
                 let entities = messageEntities.filter { entity in
                     if case .Strikethrough = entity.type {
                         return true
@@ -514,21 +514,17 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     messageText = NSAttributedString(string: quote.text, font: textFont, textColor: textColor)
                 }
             } else {
-                let mutableTextString = NSMutableAttributedString(attributedString: foldLineBreaks(textString))
-                mutableTextString.addAttributes([
-                    .font: textFont,
-                    .foregroundColor: textColor
-                ], range: NSRange(location: 0, length: mutableTextString.length))
+                let mutableTextString = styleInstantPagePreview(foldLineBreaks(textString), font: textFont, italicFont: Font.italic(textFont.pointSize), textColor: textColor)
                 messageText = renderInstantPagePreviewIcons(mutableTextString, font: textFont, textColor: textColor)
-
+                
                 if let _ = arguments.message?.media.first(where: { $0 is TelegramMediaPoll }) as? TelegramMediaPoll {
                     isPoll = true
                 }
             }
-
+            
             var leftInset: CGFloat = 11.0
             let spacing: CGFloat = 2.0
-
+            
             var updatedMediaReference: AnyMediaReference?
             var imageDimensions: CGSize?
             var hasRoundImage = false
@@ -540,7 +536,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     }
                 } else if let file = media as? TelegramMediaFile, file.isVideo && !file.isVideoSticker {
                     updatedMediaReference = .message(message: MessageReference(arguments.parentMessage), media: file)
-
+                    
                     if let dimensions = file.dimensions {
                         imageDimensions = dimensions.cgSize
                     } else if let representation = largestImageRepresentation(file.previewRepresentations), !file.isSticker {
@@ -560,7 +556,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         break
                     } else if let file = media as? TelegramMediaFile, !file.isVideoSticker {
                         updatedMediaReference = .message(message: MessageReference(message), media: file)
-
+                        
                         if let dimensions = file.dimensions {
                             imageDimensions = dimensions.cgSize
                         } else if let representation = largestImageRepresentation(file.previewRepresentations), !file.isSticker {
@@ -579,7 +575,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                             break
                         } else if let file = media as? TelegramMediaFile, !file.isVideoSticker {
                             updatedMediaReference = .message(message: MessageReference(message), media: file)
-
+                            
                             if let dimensions = file.dimensions {
                                 imageDimensions = dimensions.cgSize
                             } else if let representation = largestImageRepresentation(file.previewRepresentations), !file.isSticker {
@@ -601,7 +597,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         }
                     } else if let file = item.media as? TelegramMediaFile, file.isVideo && !file.isVideoSticker {
                         updatedMediaReference = .story(peer: peerReference, id: story.id, media: file)
-
+                        
                         if let dimensions = file.dimensions {
                             imageDimensions = dimensions.cgSize
                         } else if let representation = largestImageRepresentation(file.previewRepresentations), !file.isSticker {
@@ -617,7 +613,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     }
                 } else if let file = media as? TelegramMediaFile, file.isVideo && !file.isVideoSticker {
                     updatedMediaReference = .message(message: MessageReference(arguments.parentMessage), media: file)
-
+                    
                     if let dimensions = file.dimensions {
                         imageDimensions = dimensions.cgSize
                     } else if let representation = largestImageRepresentation(file.previewRepresentations), !file.isSticker {
@@ -628,32 +624,32 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     }
                 }
             }
-
+            
             var imageTextInset: CGFloat = 0.0
             if let _ = imageDimensions {
                 imageTextInset += floor(arguments.presentationData.fontSize.baseDisplaySize * 32.0 / 17.0)
             }
-
+            
             let maximumTextWidth = max(0.0, arguments.constrainedSize.width - 8.0 - imageTextInset)
-
+            
             var contrainedTextSize = CGSize(width: maximumTextWidth, height: arguments.constrainedSize.height)
-
+            
             let textInsets = UIEdgeInsets(top: 3.0, left: 0.0, bottom: 3.0, right: 0.0)
-
+            
             var additionalTitleWidth: CGFloat = 0.0
             var maxTitleNumberOfLines = 1
             var maxTextNumberOfLines = 1
             var adjustedConstrainedTextSize = contrainedTextSize
             var textCutout: TextNodeCutout?
             var textCutoutWidth: CGFloat = 0.0
-
+            
             var isQuote = false
             if let quote = arguments.quote, quote.isQuote {
                 isQuote = true
             } else if let replyForward = arguments.replyForward, replyForward.quote != nil, replyForward.isQuote {
                 isQuote = true
             }
-
+            
             if isQuote {
                 additionalTitleWidth += 10.0
                 maxTitleNumberOfLines = 2
@@ -667,27 +663,27 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 additionalTitleWidth += 16.0
             }
             adjustedConstrainedTextSize.width -= textLeftInset
-
+            
             if arguments.isSummarized {
                 titleString = NSAttributedString(string: arguments.presentationData.strings.Conversation_Summary_Title, font: titleFont, textColor: titleColor)
                 messageText = NSAttributedString(string: arguments.presentationData.strings.Conversation_Summary_Text, font: textFont, textColor: titleColor)
             }
-
+            
             let (titleLayout, titleApply) = titleNodeLayout(TextNodeLayoutArguments(attributedString: titleString, backgroundColor: nil, maximumNumberOfLines: maxTitleNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: contrainedTextSize.width - additionalTitleWidth, height: contrainedTextSize.height), alignment: .natural, cutout: nil, insets: textInsets))
             if isExpiredStory || isStory || isPoll {
                 contrainedTextSize.width -= 26.0
             }
-
+            
             if titleLayout.numberOfLines > 1 {
                 textCutout = nil
             }
-
+            
             let (textLayout, textApply) = textNodeLayout(TextNodeLayoutArguments(attributedString: messageText, backgroundColor: nil, maximumNumberOfLines: maxTextNumberOfLines, truncationType: .end, constrainedSize: adjustedConstrainedTextSize, alignment: .natural, lineSpacing: 0.07, cutout: textCutout, insets: textInsets))
-
+            
             let imageSide: CGFloat
             let titleLineHeight: CGFloat = titleLayout.linesRects().first?.height ?? 12.0
             imageSide = titleLineHeight * 2.0
-
+            
             var applyImage: (() -> TransformImageNode)?
             if let imageDimensions = imageDimensions {
                 let boundingSize = CGSize(width: imageSide, height: imageSide)
@@ -703,28 +699,28 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     applyImage = imageNodeLayout(TransformImageArguments(corners: ImageCorners(radius: radius), imageSize: imageSize, boundingSize: boundingSize, intrinsicInsets: UIEdgeInsets(), emptyColor: placeholderColor))
                 }
             }
-
+            
             var mediaUpdated = false
             if let updatedMediaReference = updatedMediaReference, let previousMediaReference = previousMediaReference {
                 mediaUpdated = !updatedMediaReference.media.isEqual(to: previousMediaReference.media)
             } else if (updatedMediaReference != nil) != (previousMediaReference != nil) {
                 mediaUpdated = true
             }
-
+            
             let hasSpoiler: Bool
             if let message = arguments.message {
                 hasSpoiler = message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute })
             } else {
                 hasSpoiler = false
             }
-
+            
             var updateImageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
-
+            
             var mediaUserLocation: MediaResourceUserLocation = .other
             if let message = arguments.message {
                 mediaUserLocation = .peer(message.id.peerId)
             }
-
+            
             if let updatedMediaReference = updatedMediaReference, mediaUpdated && imageDimensions != nil {
                 if let imageReference = updatedMediaReference.concrete(TelegramMediaImage.self) {
                     updateImageSignal = chatMessagePhotoThumbnail(account: arguments.context.account, userLocation: mediaUserLocation, photoReference: imageReference, blurred: hasSpoiler)
@@ -736,7 +732,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     }
                 }
             }
-
+            
             var size = CGSize()
             size.width = max(titleLayout.size.width + additionalTitleWidth - textInsets.left - textInsets.right, textLeftInset + textLayout.size.width - textInsets.left - textInsets.right - textCutoutWidth) + leftInset + 6.0
             size.height = titleLayout.size.height + textLayout.size.height - 2 * (textInsets.top + textInsets.bottom) + 2 * spacing
@@ -744,7 +740,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             if isExpiredStory || isStory || isPoll {
                 size.width += 16.0
             }
-
+            
             return (size, { realSize, attemptSynchronous, animation in
                 let node: ChatMessageReplyInfoNode
                 if let maybeNode = maybeNode {
@@ -752,19 +748,19 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 } else {
                     node = ChatMessageReplyInfoNode()
                 }
-
+                
                 var animation = animation
                 if node.titleNode == nil {
                     animation = .None
                 }
-
+                
                 node.previousMediaReference = updatedMediaReference
-
+                
                 //node.textNode?.textNode.displaysAsynchronously = !arguments.presentationData.isPreview
-
+                
                 let titleNode = titleApply()
                 titleNode.displaysAsynchronously = !arguments.presentationData.isPreview
-
+                
                 var textArguments: TextNodeWithEntities.Arguments?
                 if let cache = arguments.animationCache, let renderer = arguments.animationRenderer {
                     textArguments = TextNodeWithEntities.Arguments(context: arguments.context, cache: cache, renderer: renderer, placeholderColor: placeholderColor, attemptSynchronous: attemptSynchronous)
@@ -772,15 +768,15 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 let previousTextContents = node.textNode?.textNode.layer.contents
                 let textNode = textApply(textArguments)
                 textNode.textNode.displaysAsynchronously = !arguments.presentationData.isPreview
-
+                
                 textNode.visibilityRect = node.visibility ? CGRect.infinite : nil
-
+                
                 if node.titleNode == nil {
                     titleNode.isUserInteractionEnabled = false
                     node.titleNode = titleNode
                     node.contentNode.addSubnode(titleNode)
                 }
-
+                
                 if node.textNode == nil {
                     textNode.textNode.isUserInteractionEnabled = false
                     textNode.textNode.contentMode = .topLeft
@@ -790,7 +786,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     node.textNode = textNode
                     node.contentNode.addSubnode(textNode.textNode)
                 }
-
+                
                 if let applyImage = applyImage {
                     let imageNode = applyImage()
                     if node.imageNode == nil {
@@ -799,7 +795,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         node.imageNode = imageNode
                     }
                     imageNode.frame = CGRect(origin: CGPoint(x: 9.0, y: 4.0), size: CGSize(width: imageSide, height: imageSide))
-
+                    
                     if let updateImageSignal = updateImageSignal {
                         imageNode.setSignal(updateImageSignal)
                     }
@@ -810,24 +806,24 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 if let message = arguments.message {
                     node.imageNode?.captureProtected = !(((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)) && (arguments.associatedData.isCopyProtectionEnabled || message.isCopyProtected())
                 }
-
+                
                 titleNode.frame = CGRect(origin: CGPoint(x: leftInset - textInsets.left - 2.0, y: spacing - textInsets.top + 1.0), size: titleLayout.size)
-
+                
                 let textFrame = CGRect(origin: CGPoint(x: textLeftInset + leftInset - textInsets.left - 2.0 - textCutoutWidth, y: titleNode.frame.maxY - textInsets.bottom + spacing - textInsets.top - 2.0), size: textLayout.size)
                 let effectiveTextFrame = textFrame.offsetBy(dx: (isExpiredStory || isStory || isPoll) ? 18.0 : 0.0, dy: 0.0)
-
+                
                 if textNode.textNode.bounds.isEmpty || !animation.isAnimated || textNode.textNode.bounds.height == effectiveTextFrame.height {
                     textNode.textNode.frame = effectiveTextFrame
                 } else {
                     if textNode.textNode.bounds.height != effectiveTextFrame.height {
                         animation.animator.updateFrame(layer: textNode.textNode.layer, frame: effectiveTextFrame, completion: nil)
-
+                        
                         textNode.textNode.layer.setNeedsDisplay()
                         textNode.textNode.layer.display()
                     } else {
                         animation.animator.updateFrame(layer: textNode.textNode.layer, frame: effectiveTextFrame, completion: nil)
                     }
-
+                    
                     if let previousTextContents, let updatedContents = textNode.textNode.contents {
                         let previousTextContents = previousTextContents as AnyObject
                         let updatedContents = updatedContents as AnyObject
@@ -836,7 +832,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         }
                     }
                 }
-
+                
                 if isExpiredStory || isStory || isPoll {
                     let expiredStoryIconView: UIImageView
                     if let current = node.expiredStoryIconView {
@@ -846,7 +842,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         node.expiredStoryIconView = expiredStoryIconView
                         node.view.addSubview(expiredStoryIconView)
                     }
-
+                    
                     let imageType: ChatExpiredStoryIndicatorType
                     switch arguments.type {
                     case .standalone:
@@ -854,7 +850,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     case let .bubble(incoming):
                         imageType = incoming ? .incoming : .outgoing
                     }
-
+                    
                     if isPoll {
                         expiredStoryIconView.image = PresentationResourcesChat.chatReplyPollIndicatorIcon(arguments.presentationData.theme.theme, type: imageType)
                     } else if isExpiredStory {
@@ -876,7 +872,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 } else if let expiredStoryIconView = node.expiredStoryIconView {
                     expiredStoryIconView.removeFromSuperview()
                 }
-
+                
                 if !textLayout.spoilers.isEmpty {
                     let dustNode: InvisibleInkDustNode
                     if let current = node.dustNode {
@@ -893,15 +889,15 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     dustNode.removeFromSupernode()
                     node.dustNode = nil
                 }
-
+                
                 if node.backgroundView.superview == nil {
                     node.contentNode.view.insertSubview(node.backgroundView, at: 0)
                 }
-
+                
                 let backgroundFrame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: realSize.width, height: realSize.height))
-
+                
                 node.backgroundView.frame = backgroundFrame
-
+                
                 var pattern: MessageInlineBlockBackgroundView.Pattern?
                 if let backgroundEmojiId = author?.backgroundEmojiId {
                     pattern = MessageInlineBlockBackgroundView.Pattern(
@@ -928,20 +924,20 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     pattern: pattern,
                     animation: animation
                 )
-
+                
                 if isQuote {
                     let quoteIconFrame = CGRect(origin: CGPoint(x: backgroundFrame.maxX - 4.0 - quoteIcon.size.width, y: backgroundFrame.minY + 4.0), size: quoteIcon.size)
-
+                    
                     let quoteIconView: UIImageView
                     if let current = node.quoteIconView {
                         quoteIconView = current
-
+                        
                         animation.animator.updateFrame(layer: quoteIconView.layer, frame: quoteIconFrame, completion: nil)
                     } else {
                         quoteIconView = UIImageView(image: quoteIcon)
                         node.quoteIconView = quoteIconView
                         node.contentNode.view.addSubview(quoteIconView)
-
+                            
                         quoteIconView.frame = quoteIconFrame
                     }
                     quoteIconView.tintColor = mainColor
@@ -949,22 +945,22 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     node.quoteIconView = nil
                     quoteIconView.removeFromSuperview()
                 }
-
+                
                 if let todoItemCompleted {
                     let checkLayerFrame = CGRect(origin: CGPoint(x: textFrame.minX - 16.0, y: textFrame.minY + 5.0), size: CGSize(width: 12.0, height: 12.0))
                     let checkTheme = CheckNodeTheme(backgroundColor: titleColor, strokeColor: .clear, borderColor: titleColor, overlayBorder: false, hasInset: true, hasShadow: false, borderWidth: 1.0)
-
+                    
                     let checkLayer: CheckLayer
                     if let current = node.checkLayer {
                         checkLayer = current
-
+                        
                         checkLayer.setSelected(todoItemCompleted, animated: true)
                         animation.animator.updateFrame(layer: checkLayer, frame: checkLayerFrame, completion: nil)
                     } else {
                         checkLayer = CheckLayer(theme: checkTheme, content: .check(isRectangle: checkIsRectangle))
                         node.checkLayer = checkLayer
                         node.contentNode.layer.addSublayer(checkLayer)
-
+                        
                         checkLayer.setSelected(todoItemCompleted, animated: false)
                         checkLayer.frame = checkLayerFrame
                     }
@@ -973,11 +969,11 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     node.checkLayer = nil
                     checkLayer.removeFromSuperlayer()
                 }
-
+                
                 if let giftEmojiFileId {
                     let giftLayerSize = CGSize(width: 18.0, height: 18.0)
                     let giftLayerFrame = CGRect(origin: CGPoint(x: realSize.width - giftLayerSize.width - 4.0, y: 3.0), size: giftLayerSize)
-
+                    
                     let giftEmojiLayer: InlineStickerItemLayer
                     if let current = node.giftEmojiLayer, current.file?.fileId.id == giftEmojiFileId {
                         giftEmojiLayer = current
@@ -990,15 +986,15 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         giftEmojiLayer = InlineStickerItemLayer(context: arguments.context, userLocation: .other, attemptSynchronousLoad: true, emoji: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: giftEmojiFileId, file: nil, custom: nil, enableAnimation: true), file: nil, cache: arguments.context.animationCache, renderer: arguments.context.animationRenderer, unique: false, placeholderColor: placeholderColor, pointSize: CGSize(width: giftLayerSize.width * 2.0, height: giftLayerSize.height * 2.0), dynamicColor: nil, loopCount: 2)
                         node.giftEmojiLayer = giftEmojiLayer
                         node.contentNode.layer.addSublayer(giftEmojiLayer)
-
+                        
                         giftEmojiLayer.frame = giftLayerFrame
                     }
-
+                    
                 } else if let giftEmojiLayer = node.giftEmojiLayer {
                     node.giftEmojiLayer = nil
                     giftEmojiLayer.removeFromSuperlayer()
                 }
-
+                
                 if arguments.isSummarized {
                     let starsView: StarsView
                     if let current = node.starsView {
@@ -1014,20 +1010,20 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     node.starsView = nil
                     starsView.removeFromSuperview()
                 }
-
+                
                 node.contentNode.frame = CGRect(origin: CGPoint(), size: size)
-
+                
                 return node
             })
         }
     }
-
+    
     public func updateTouchesAtPoint(_ point: CGPoint?) {
         var isHighlighted = false
         if point != nil {
             isHighlighted = true
         }
-
+        
         let transition: ContainedViewLayoutTransition = .animated(duration: isHighlighted ? 0.3 : 0.2, curve: .easeInOut)
         let scale: CGFloat = isHighlighted ? ((self.bounds.width - 5.0) / self.bounds.width) : 1.0
         transition.updateSublayerTransformScale(node: self, scale: scale, beginWithCurrentState: true)
@@ -1105,14 +1101,14 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     x: localRect.minX + sourceImageView.frame.midX - imageNode.frame.midX,
                     y: localRect.minY + sourceImageView.frame.midY - imageNode.frame.midY
                 )
-
+                
                 transition.horizontal.animatePositionAdditive(node: imageNode, offset: CGPoint(x: offset.x, y: 0.0))
                 transition.vertical.animatePositionAdditive(node: imageNode, offset: CGPoint(x: 0.0, y: offset.y))
-
+                
                 sourceParentNode.view.addSubview(sourceImageView)
-
+                
                 imageNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
-
+                
                 sourceImageView.frame = sourceImageView.frame
                     .offsetBy(dx: sourceParentOffset.x, dy: sourceParentOffset.y)
                     .offsetBy(dx: localRect.minX - offset.x, dy: localRect.minY - offset.y)
@@ -1147,7 +1143,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             return offset
         }
     }
-
+    
     public func mediaTransitionView() -> UIView? {
         if let imageNode = self.imageNode {
             return imageNode.view
@@ -1158,32 +1154,32 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
 
 private final class StarsView: UIView {
     private let staticEmitterLayer = CAEmitterLayer()
-
+    
     private var currentColor: UIColor?
-
+    
     override init(frame: CGRect) {
         super.init(frame: frame)
-
+        
         self.clipsToBounds = true
-
+    
         self.layer.addSublayer(self.staticEmitterLayer)
     }
-
+    
     required init(coder: NSCoder) {
         preconditionFailure()
     }
-
+        
     private func setupEmitter(size: CGSize) {
         guard let currentColor = self.currentColor else {
             return
         }
         let color = currentColor
-
+        
         self.staticEmitterLayer.emitterShape = .rectangle
         self.staticEmitterLayer.emitterSize = size
         self.staticEmitterLayer.emitterMode = .surface
         self.layer.addSublayer(self.staticEmitterLayer)
-
+        
         let staticEmitter = CAEmitterCell()
         staticEmitter.name = "emitter"
         staticEmitter.contents = UIImage(bundleImageName: "Premium/Stars/Particle")?.cgImage
@@ -1196,7 +1192,7 @@ private final class StarsView: UIView {
         staticEmitter.emissionRange = .pi * 2.0
         staticEmitter.setValue(3.0, forKey: "mass")
         staticEmitter.setValue(2.0, forKey: "massRange")
-
+        
         let staticColors: [Any] = [
             color.withAlphaComponent(0.0).cgColor,
             color.cgColor,
@@ -1208,7 +1204,7 @@ private final class StarsView: UIView {
         let staticColorBehavior = CAEmitterCell.createEmitterBehavior(type: "colorOverLife")
         staticColorBehavior.setValue(staticColors, forKey: "colors")
         staticEmitter.setValue([staticColorBehavior], forKey: "emitterBehaviors")
-
+        
         let attractor = CAEmitterCell.createEmitterBehavior(type: "simpleAttractor")
         attractor.setValue("attractor", forKey: "name")
         attractor.setValue(20, forKey: "falloff")
@@ -1216,17 +1212,17 @@ private final class StarsView: UIView {
         self.staticEmitterLayer.setValue([attractor], forKey: "emitterBehaviors")
         self.staticEmitterLayer.setValue(4.0, forKeyPath: "emitterBehaviors.attractor.stiffness")
         self.staticEmitterLayer.setValue(false, forKeyPath: "emitterBehaviors.attractor.enabled")
-
+        
         self.staticEmitterLayer.emitterCells = [staticEmitter]
     }
-
+    
     func update(size: CGSize, color: UIColor) {
         if self.staticEmitterLayer.emitterCells == nil {
             self.currentColor = color
             self.setupEmitter(size: size)
         } else if self.currentColor != color {
             self.currentColor = color
-
+            
             let staticColors: [Any] = [
                 UIColor.white.withAlphaComponent(0.0).cgColor,
                 UIColor.white.withAlphaComponent(0.35).cgColor,
@@ -1236,12 +1232,12 @@ private final class StarsView: UIView {
             ]
             let staticColorBehavior = CAEmitterCell.createEmitterBehavior(type: "colorOverLife")
             staticColorBehavior.setValue(staticColors, forKey: "colors")
-
+            
             for cell in self.staticEmitterLayer.emitterCells ?? [] {
                 cell.setValue([staticColorBehavior], forKey: "emitterBehaviors")
             }
         }
-
+        
         let emitterPosition = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
         self.staticEmitterLayer.frame = CGRect(origin: .zero, size: size)
         self.staticEmitterLayer.emitterPosition = emitterPosition

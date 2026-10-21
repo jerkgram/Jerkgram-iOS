@@ -15,6 +15,10 @@
 """Partial implementation for Swift dylib processing for bundles."""
 
 load(
+    "@apple_support//lib:apple_support.bzl",
+    "apple_support",
+)
+load(
     "@bazel_skylib//lib:partial.bzl",
     "partial",
 )
@@ -23,16 +27,16 @@ load(
     "paths",
 )
 load(
-    "@build_bazel_apple_support//lib:apple_support.bzl",
-    "apple_support",
-)
-load(
     "//apple/internal:intermediates.bzl",
     "intermediates",
 )
 load(
     "//apple/internal:processor.bzl",
     "processor",
+)
+load(
+    "//apple/internal:shared_environment.bzl",
+    "shared_environment",
 )
 load(
     "//apple/internal/utils:defines.bzl",
@@ -57,22 +61,22 @@ File object that represents a directory containing the Swift dylibs to package f
     },
 )
 
-# Minimum OS versions for which we no longer need to potentially bundle any
-# Swift dylibs with the application. The first cutoff point was when the
-# platforms bundled the standard libraries, the second was when they started
-# bundling the Concurrency library. There may be future libraries that require
-# us to continue bumping these values. The tool is smart enough only to bundle
-# those libraries required by the minimum OS version of the scanned binaries.
+# For each platform, the minimum OS version at which we no longer need to bundle
+# any Swift dylibs with the application -- either the pre-ABI-stable runtime or
+# back-deployed runtimes (e.g., Concurrency and Span). We do not need to
+# consider each of these cases individually; `swift-stdlib-tool` will only
+# bundle the libraries required based on the minimum OS version of the scanned
+# binaries.
 #
-# Values are the first version where bundling is no longer required and should
-# correspond with the Swift compilers values for these which is the source of
-# truth https://github.com/apple/swift/blob/998d3518938bd7229e7c5e7b66088d0501c02051/lib/Basic/Platform.cpp#L82-L105
+# These values should be kept in sync with the values in
+# `swift::tripleRequiresRPathForSwiftLibrariesInOS` defined in:
+# https://github.com/apple/swift/blob/main/lib/Basic/Platform.cpp.
 _MIN_OS_PLATFORM_SWIFT_PRESENCE = {
-    "ios": apple_common.dotted_version("15.0"),
-    "macos": apple_common.dotted_version("12.0"),
-    "tvos": apple_common.dotted_version("15.0"),
-    "visionos": apple_common.dotted_version("1.0"),
-    "watchos": apple_common.dotted_version("8.0"),
+    "ios": apple_common.dotted_version("26.0"),
+    "macos": apple_common.dotted_version("26.0"),
+    "tvos": apple_common.dotted_version("26.0"),
+    "visionos": apple_common.dotted_version("26.0"),
+    "watchos": apple_common.dotted_version("26.0"),
 }
 
 def _swift_dylib_action(
@@ -104,6 +108,7 @@ def _swift_dylib_action(
         actions = actions,
         apple_fragment = platform_prerequisites.apple_fragment,
         arguments = [swift_stdlib_tool_args],
+        env = shared_environment.default_env,
         executable = swift_stdlib_tool,
         inputs = binary_files,
         mnemonic = "SwiftStdlibCopy",
@@ -154,7 +159,7 @@ def _swift_dylibs_partial_impl(
     swift_support_requested = defines.bool_value(
         config_vars = platform_prerequisites.config_vars,
         define_name = "apple.package_swift_support",
-        default = True,
+        default = platform_prerequisites.build_settings.package_swift_support,
     )
     needs_swift_support = platform_prerequisites.platform.is_device and swift_support_requested
 

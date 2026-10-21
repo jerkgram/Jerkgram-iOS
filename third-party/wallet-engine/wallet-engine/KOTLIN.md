@@ -1,0 +1,263 @@
+# Kotlin and Android bindings
+
+Generate the Kotlin UniFFI source:
+
+```shell
+just bindings-kotlin
+# or: cargo xtask bindings kotlin
+```
+
+The generated file is written to
+`bindings/kotlin/src/main/kotlin/org/ton/wallet/engine/wallet_engine.kt`.
+The `bindings/` directory is ignored because the Rust ABI and the pinned
+generator are the source of truth.
+
+Build Android native libraries for `arm64-v8a` and `x86_64`:
+
+```shell
+just build-android
+# or: cargo xtask android --abi all
+```
+
+The libraries are written to `target/android/jniLibs/<abi>/libwallet_engine.so`.
+Both generated bindings and native libraries must be packaged by the Android
+application.
+
+The Android module needs these runtime dependencies:
+
+```kotlin
+implementation("androidx.annotation:annotation:1.9.1")
+implementation("net.java.dev.jna:jna:5.12.0@aar")
+implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+```
+
+The generated `WalletHttpHost` and `WalletPlatformHost` callbacks and the
+exported engine methods use Kotlin `suspend` functions. No handwritten JNI
+adapter is required.
+
+## Use a release package
+
+Each tagged release contains `wallet-engine-android-VERSION.aar` and matching
+Maven metadata. The AAR contains the Kotlin wrapper and native libraries for
+`arm64-v8a` and `x86_64`.
+
+Add the AAR to the application as a local dependency. Add the runtime
+dependencies from this document to the application module.
+
+The release AAR requires Android API level 28 or newer.
+
+## Address utilities
+
+The generated module validates raw and user-friendly addresses, exposes the
+friendly flags, and converts between canonical formats:
+
+```kotlin
+val info = parseTonAddress(input)
+val valid = isValidTonAddress(input)
+val raw = convertTonAddress(input, TonAddressFormat.Raw)
+val display = convertTonAddress(
+    raw,
+    TonAddressFormat.UserFriendly(bounceable = false, testnet = false),
+)
+```
+
+`TonAddressFormat.UserFriendly` inside `info.format` contains the parsed
+`bounceable` and `testnet` flags. Raw input has `TonAddressFormat.Raw` because
+the raw representation does not carry these flags.
+
+## TON transfer links
+
+Parse a standard transfer link before showing its confirmation screen:
+
+```kotlin
+val invoice = parseTonTransferLink(
+    "ton://transfer/$recipient?amount=1000000000&text=hello%20TON",
+)
+```
+
+The result preserves the recipient, Gram or jetton asset, optional exact
+elementary-unit amount, text or BOC payload, and expiration policy. This
+function only parses the strict `ton://transfer/` baseline: `amount`, `text`,
+`exp`, `jetton`, and `bin`. It does not resolve chain state, check expiration,
+select bounce behavior, or authorize a send.
+
+## Mnemonic word list
+
+Use the engine's BIP-39 word list for recovery-phrase input:
+
+```kotlin
+val words = mnemonicWordlist()
+val suggestions = words.filter { it.startsWith(input.lowercase()) }
+```
+
+The list contains the 2048 English BIP-39 words accepted by the same
+recovery-phrase validation used for wallet import. Its order is the BIP-39
+index order.
+
+## Mnemonic scheme detection
+
+Classify entered recovery words to explain a failed import:
+
+```kotlin
+val schemes = detectMnemonicSchemes(enteredWords)
+when {
+    MnemonicScheme.ROTATION in schemes -> {
+        // importWallet accepts this phrase.
+    }
+    schemes.isNotEmpty() -> {
+        // A TON (TON) or 24-word BIP-39 (BIP39) phrase from another
+        // wallet scheme. Explain that in your own product wording.
+    }
+    else -> {
+        // Not a known mnemonic.
+    }
+}
+```
+
+Pass the words exactly as you would pass them to `importWallet`. Only
+`ROTATION` phrases can be imported; `TON` and `BIP39` are detection only and
+the engine derives no keys from them.
+
+## Prepare key rotation
+
+Create a new signing half and the signed Wallet rev00 request:
+
+```kotlin
+val prepared = client.prepareKeyRotation(
+    PrepareKeyRotationRequest(
+        validUntil = validUntil,
+        messageKind = KeyRotationMessageKind.EXTERNAL,
+    ),
+)
+
+val request = SendBocRequest(
+    operationId = UUID.randomUUID().toString().lowercase(),
+    force = false,
+    signedBoc = prepared.signedBoc,
+    seqno = prepared.seqno,
+    validUntil = prepared.validUntil,
+)
+val preview = client.previewSendBoc(request)
+
+// Persist the replacement phrase in the application's protected storage first.
+val result = client.sendBoc(request)
+```
+
+The client first fetches fresh account state through its configured HTTP host.
+It calls the `seqno` getter only for an active contract; an undeployed account
+uses `seqno` zero and gets anchor-based `StateInit` in the prepared BOC.
+It then requests the protected secret with
+`SecretAccessReason.PREPARE_KEY_ROTATION`. It returns a complete 24-word phrase,
+the new public key, a signed BOC, and the `seqno` covered by the signature. It
+does not change protected storage or submit the BOC by itself.
+
+For a later rotation, protected storage must contain the 24-word phrase from
+the last successful rotation.
+
+The signed request also carries the replaced signing key encrypted with the new
+one (`encryptedOldPrivateKey`), which the contract publishes so that
+`decryptComment` can later open comments sent to earlier keys. The engine adds
+it automatically; the host stores and submits the BOC exactly as before. See
+[key-change log](README.md#key-change-log).
+
+`previewSendBoc` validates fresh `seqno`, destination, and expiration, then
+emulates the exact signed BOC without journaling or submitting it. Its returned
+message list is empty because it does not decode the opaque BOC into a
+`SendIntent`.
+
+Before `sendBoc`, store the phrase in protected storage. `sendBoc` validates
+fresh `seqno`, destination, and expiration, then stores the exact BOC in the
+same durable wallet-wide journal used by `send` before provider handoff. It
+returns `SendResult`; `SUBMISSION_UNKNOWN`, `resolvePending`, `cancelSend`, and
+the ordinary-send block have the same semantics as transfer submission.
+
+## Enriched activity
+
+Every nonzero transfer returned in `WalletSnapshot.activity.items` includes
+`transactionFeeNanograms`, `status`, and an optional decoded plaintext
+`comment`. The fee is the total fee for the transaction. It is repeated when
+one transaction produces multiple activity rows, so do not sum it per row.
+
+## Encrypted comments
+
+Call `WalletClient.createEncryptedComment` with the recipient and UTF-8 text.
+The engine reads the recipient account state and calls `get_public_key` on an
+active wallet. Optionally set `CreateEncryptedCommentRequest.recipientPublicKey`
+to the recipient's 32-byte Ed25519 key so an undeployed wallet can receive the
+comment; an active wallet's on-chain key always takes precedence. The engine
+verifies that the supplied key derives the recipient address using supported
+default wallet parameters; see
+[supplied-key verification](README.md#sending-gram). A mismatch is rejected
+before protected-secret access. The engine requests the protected mnemonic with
+`SecretAccessReason.ENCRYPT_COMMENT`, and returns a BOC. Use that BOC as a
+`SendMessageBody.RawPayload`, then preview and send the same intent.
+
+`WalletClient.resolveEncryptedCommentRecipient` takes the same recipient and
+optional key and returns the key `createEncryptedComment` would encrypt for,
+without any protected-secret access. `EncryptedCommentUnavailable` means the
+recipient cannot receive an encrypted comment; `EncryptedCommentLookupFailed`
+means the provider did not answer and the call can be retried. See
+[recipient resolution](README.md#sending-gram).
+
+Encrypted activity has `encryptedComment` instead of `comment`. Decrypt it
+explicitly with `WalletClient.decryptComment`, passing the sender address. For
+received activity the sender is `counterparty`; for sent activity it is the
+wallet address. This read uses `SecretAccessReason.DECRYPT_COMMENT`, so refresh
+does not trigger device authentication. Plaintext is limited to 960 UTF-8
+bytes.
+
+`decryptComment` reads the protected phrase once per call and tries the current
+signing key, then the anchor key, without any HTTP request. When neither matches
+on a rotated wallet, it reads the wallet's `change_wallet_key` actions from
+Toncenter v3 (`/api/v3/actions`), recovers the earlier signing keys, and tries
+them. The history is public and cached in memory; recovered keys never leave the
+call and are never stored. `WalletClientException.EncryptedCommentLookupFailed`
+means the history is not available yet, for example because the indexer has not
+reported the latest rotation, and the call can be retried later.
+`WalletClientException.EncryptedCommentUnavailable` means no key of this wallet
+decrypts the body or the body is malformed. Comments sent to replaced keys need
+a provider that runs Toncenter indexer v1.3 or later. See [encrypted comment
+decryption](README.md#encrypted-comment-decryption).
+
+## TON DNS
+
+Resolve the standard `wallet` record for a `.ton` name before you build a send
+intent:
+
+```kotlin
+val address: String? = client.resolveDns("foundation.ton")
+```
+
+The engine normalizes the name to lowercase and follows TON DNS delegation
+through the provider. `ProviderConfig.dnsRootAddress` can override the root;
+`null` uses the built-in current root for the wallet network. The result is
+`null` when the name has no wallet record. Invalid names and malformed provider
+data throw `DnsResolutionUnavailable`. This read-only call does not request the
+protected mnemonic.
+
+## NFT collection metadata
+
+An NFT that belongs to a collection includes a neutral `collection` descriptor
+with its address, standard TEP-64 fields, and complete string metadata. Keep
+product-specific classification, such as Telegram gifts, in the application.
+
+## TON Connect
+
+The generated Kotlin module includes `TonConnectSession`, manifest parsing,
+account reply data, and `ton_proof` signing. The application owns manifest and
+bridge transport, approval screens, and protected session storage.
+
+Read [TON_CONNECT.md](TON_CONNECT.md) for the required session and bridge POST
+order. The current Android example does not implement the TON Connect user
+interface.
+
+## Clear client secret copies
+
+Rust clears the secret buffers that it owns. Kotlin `String` values are
+immutable, so the application cannot reliably clear `RecoveryPhrase.phrase`.
+
+Keep the phrase only while the recovery screen is visible. Do not write it to
+logs, errors, analytics, saved state, or application storage.
+
+Use `ByteArray` for mutable secret copies in the platform host. Call `fill(0)`
+in a `finally` block after the callback finishes.

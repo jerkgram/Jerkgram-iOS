@@ -128,9 +128,9 @@ extension ChatControllerImpl {
             self.present(controller, in: .window(.root))
             return
         }
-
+        
         let isIncoming = message.effectivelyIncoming(self.context.account.peerId)
-
+        
         var presentImpl: ((ViewController) -> Void)?
         let configuration = ContextController.Configuration(
             sources: [
@@ -158,7 +158,7 @@ extension ChatControllerImpl {
                 )
             ], initialId: 0
         )
-
+        
         let contextController = makeContextController(presentationData: self.presentationData, configuration: configuration)
         contextController.getOverlayViews = { [weak self] in
             guard let self else {
@@ -168,11 +168,11 @@ extension ChatControllerImpl {
         }
         self.currentContextController = contextController
         self.presentInGlobalOverlay(contextController)
-
+        
         presentImpl = { [weak contextController] c in
             contextController?.present(c, in: .current)
         }
-
+        
         let _ = self.context.sharedContext.openChatMessage(OpenChatMessageParams(context: self.context, chatLocation: nil, chatFilterTag: nil, chatLocationContextHolder: nil, message: message._asMessage(), standalone: false, reverseMessageGalleryOrder: false, navigationController: nil, dismissInput: { }, present: { _, _, _ in }, transitionNode: { _, _, _ in return nil }, addToTransitionSurface: { _ in }, openUrl: { _ in }, openPeer: { _, _ in }, callPeer: { _, _ in }, openConferenceCall: { _ in
         }, enqueueMessage: { _ in }, sendSticker: nil, sendEmoji: nil, setupTemporaryHiddenMedia: { _, _, _ in }, chatAvatarHiddenMedia: { _, _ in }, playlistLocation: .singleMessage(message.id)))
     }

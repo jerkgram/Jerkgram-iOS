@@ -24,6 +24,7 @@ load("//swift/internal:env_expansion.bzl", "expanded_env")
 load(
     "//swift/internal:feature_names.bzl",
     "SWIFT_FEATURE_ADD_TARGET_NAME_TO_OUTPUT",
+    "SWIFT_FEATURE_STATIC_STDLIB",
 )
 load("//swift/internal:features.bzl", "is_feature_enabled")
 load(
@@ -94,6 +95,7 @@ def _generate_test_discovery_srcs(
         *,
         actions,
         deps,
+        env = {},
         name,
         objc_test_discovery,
         owner_module_name,
@@ -109,6 +111,9 @@ def _generate_test_discovery_srcs(
     Args:
         actions: The context's actions object.
         deps: The list of direct dependencies of the test target.
+        env: Environment variables to set when running the discovery tool. On
+            Windows this must include a `Path` that contains the Swift runtime
+            DLLs, otherwise the (Swift) discovery executable fails to launch.
         name: The name of the target being built, which will be used to derive
             the basename of the directory containing the generated files.
         objc_test_discovery: If `True`, the runner should use Objective-C-based
@@ -197,6 +202,7 @@ def _generate_test_discovery_srcs(
 
     actions.run(
         arguments = [args],
+        env = env,
         executable = test_discoverer,
         exec_group = _DISCOVER_TESTS_EXEC_GROUP,
         inputs = inputs,
@@ -280,7 +286,10 @@ def _swift_test_impl(ctx):
         ctx = ctx,
         requested_features = ctx.features,
         toolchains = toolchains,
-        unsupported_features = ctx.disabled_features,
+        # XCTest and Swift Testing are shared libraries whose dependencies use
+        # the dynamic Swift runtime, so a test executable cannot safely link a
+        # separate static copy of that runtime.
+        unsupported_features = ctx.disabled_features + [SWIFT_FEATURE_STATIC_STDLIB],
     )
 
     discover_tests = ctx.attr.discover_tests
@@ -339,7 +348,10 @@ def _swift_test_impl(ctx):
 
     module_name = ctx.attr.module_name
     if not module_name:
-        module_name = derive_swift_module_name(ctx.label)
+        module_name = derive_swift_module_name(
+            ctx.label,
+            feature_configuration = feature_configuration,
+        )
 
     include_dev_srch_paths = include_developer_search_paths(ctx.attr)
 
@@ -408,6 +420,7 @@ def _swift_test_impl(ctx):
         discovery_srcs = _generate_test_discovery_srcs(
             actions = ctx.actions,
             deps = ctx.attr.deps,
+            env = toolchains.swift.test_configuration.env,
             name = ctx.label.name,
             objc_test_discovery = objc_test_discovery,
             owner_module_name = module_name,
@@ -507,7 +520,6 @@ def _swift_test_impl(ctx):
                 collect_data = True,
                 collect_default = True,
                 files = ctx.files.data,
-                transitive_files = ctx.attr._apple_coverage_support.files,
             ),
         ),
         OutputGroupInfo(
@@ -524,6 +536,7 @@ def _swift_test_impl(ctx):
                 create_swift_module_context(
                     name = module_context.name,
                     compilation_context = module_context.compilation_context,
+                    label = getattr(module_context, "label", None),
                     # The rest of the fields are intentionally ommited, as we
                     # only want to expose the compilation_context
                 )
@@ -582,12 +595,6 @@ a zero exit code for success or a non-zero exit code for failure.
 Specifies additional environment variables to inherit from the external
 environment when the test is executed by `bazel test`.
 """,
-            ),
-            "_apple_coverage_support": attr.label(
-                cfg = "exec",
-                default = Label(
-                    "@build_bazel_apple_support//tools:coverage_support",
-                ),
             ),
             "_swizzle_absolute_xcttestsourcelocation": attr.label(
                 default = Label(

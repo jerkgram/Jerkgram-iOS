@@ -131,6 +131,9 @@ Type of build for the target under test. Possible values are `simulator` or
 """,
             values = ["simulator", "device"],
         ),
+        "build_settings": attr.string_dict(
+            doc = "Build settings for target under test.",
+        ),
         "compilation_mode": attr.string(
             default = "fastbuild",
             doc = """
@@ -165,9 +168,6 @@ used as a wildcard, similar to how it works in shell scripts.
 Array of plist keys that should not exist. The test will fail if the key
 exists.
 """,
-        ),
-        "_allowlist_function_transition": attr.label(
-            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),
         "_xcode_config": attr.label(
             default = configuration_field(

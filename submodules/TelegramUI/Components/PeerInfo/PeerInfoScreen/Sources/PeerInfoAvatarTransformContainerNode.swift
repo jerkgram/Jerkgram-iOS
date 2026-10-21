@@ -19,6 +19,7 @@ import GalleryUI
 import HierarchyTrackingLayer
 
 final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
+    weak var performanceProbe: JerkgramProfilePerformanceProbe?
     let context: AccountContext
     
     let containerNode: ContextControllerSourceNode
@@ -184,6 +185,8 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
     }
         
     func updateTransitionFraction(_ fraction: CGFloat, transition: ContainedViewLayoutTransition) {
+        let timing = self.performanceProbe?.begin(.transition)
+        defer { if let timing { self.performanceProbe?.end(.transition, timing) } }
         if let videoNode = self.videoNode {
             if case .immediate = transition, fraction == 1.0 {
                 return
@@ -193,24 +196,27 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
             // V11O:
             // Fullscreen background and circular avatar share the same
             // is enabled this node must not pause that shared playback.
-            let keepVideoAlive =
-                GhostBaseProfileBlurSettings
-                    .loadEnabled()?
-                    .animatedBackgroundEnabled
-                == true
+            let preferencesTiming = self.performanceProbe?.begin(.preferences)
+            let animatedBackgroundEnabled = GhostBaseGlassStyle.profileAnimatedBackgroundEnabled
+            let keepVideoAlive = animatedBackgroundEnabled
+            if let preferencesTiming { self.performanceProbe?.end(.preferences, preferencesTiming) }
 
             if keepVideoAlive {
+                let timing = self.performanceProbe?.begin(.play)
                 videoNode.play()
+                if let timing { self.performanceProbe?.end(.play, timing) }
             } else if fraction > 0.0 {
                 videoNode.pause()
             } else {
                 videoNode.play()
             }
 
+            let alphaTiming = self.performanceProbe?.begin(.alpha)
             transition.updateAlpha(
                 node: videoNode,
                 alpha: 1.0 - fraction
             )
+            if let alphaTiming { self.performanceProbe?.end(.alpha, alphaTiming) }
         }
         if let markupNode = self.markupNode {
             if case .immediate = transition, fraction == 1.0 {

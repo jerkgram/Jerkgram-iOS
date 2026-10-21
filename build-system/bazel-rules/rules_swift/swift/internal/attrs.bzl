@@ -16,7 +16,7 @@
 
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
-load("//swift:providers.bzl", "SwiftInfo")
+load("//swift:providers.bzl", "SwiftInfo", "SwiftToolsInfo")
 load(":providers.bzl", "SwiftCompilerPluginInfo")
 
 def swift_common_rule_attrs(
@@ -145,7 +145,9 @@ Swift 5.9+.
                 cfg = config.exec(exec_group = "swift_plugins"),
                 doc = """\
 A list of `swift_compiler_plugin` targets that should be loaded by the compiler
-when compiling this module and any modules that directly depend on it.
+when compiling this module and any modules that depend on it. Enable the
+`swift.load_plugins_from_direct_dependencies` feature to load them only for
+this module and modules that directly depend on it.
 """,
                 providers = [SwiftCompilerPluginInfo],
             ),
@@ -377,11 +379,12 @@ potentially avoid a PLT relocation).  Set to `False` to build a `.so` or `.dll`.
 def swift_toolchain_driver_attrs():
     """Returns attributes used to attach custom drivers to toolchains.
 
-    These attributes are useful for compiler development alongside Bazel. The
-    public attribute (`swift_executable`) lets a custom driver be permanently
-    associated with a particular toolchain instance. If not specified, the
-    private default is associated with a command-line option that can be used to
-    provide a custom driver at build time.
+    `swift_tools` is useful when using a standalone hermetic toolchain, while
+    `swift_executable` and `_default_swift_executable` can be convenient for
+    compiler development alongside Bazel.
+    `swift_tools` is mutually exclusive with `swift_executable`. If neither is
+    specified, the private default is associated with a command-line option
+    that can be used to provide a custom driver at build time.
 
     Returns:
         A dictionary of attributes that should be added to a toolchain rule.
@@ -397,7 +400,18 @@ If this is empty, the default Swift driver in the toolchain will be used.
 Otherwise, this binary will be used and `--driver-mode` will be passed to ensure
 that it is invoked in the correct mode (i.e., `swift`, `swiftc`,
 `swift-autolink-extract`, etc.).
+ """,
+        ),
+        "swift_tools": attr.label(
+            cfg = "exec",
+            doc = """\
+A label to a target providing a SwiftToolsInfo provider (such as `swift_tools`)
+
+When using a hermetic toolchain, tools must be pulled into the sandbox based on the action type.
+This field can be used to let bazel know which tool should be added to the input tree for a given
+action.
 """,
+            providers = [SwiftToolsInfo],
         ),
         "_default_swift_executable": attr.label(
             allow_files = True,

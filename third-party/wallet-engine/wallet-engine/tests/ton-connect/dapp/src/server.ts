@@ -1,0 +1,594 @@
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+	createServer as createHTTPServer,
+	type IncomingMessage,
+	type ServerResponse,
+} from "node:http";
+import { createServer as createHTTPSServer } from "node:https";
+
+import {
+	TonConnect,
+	type IStorage,
+	type SendTransactionRequest,
+	type SignMessageRequest,
+	type Wallet,
+} from "@tonconnect/sdk";
+
+interface ActorEvent {
+	readonly at: number;
+	readonly type: string;
+	readonly details?: unknown;
+}
+
+interface ActorState {
+	status:
+		| "idle"
+		| "connecting"
+		| "connected"
+		| "disconnecting"
+		| "disconnected"
+		| "error";
+	connectLink: string | null;
+	account: {
+		address: string;
+		chain: string;
+		publicKey: string | null;
+		walletStateInit: string;
+	} | null;
+	device: Wallet["device"] | null;
+	config: DappActorConfig;
+	error: ActorError | null;
+	transaction: TransactionState;
+	signMessage: SignMessageState;
+	journal: ActorEvent[];
+}
+
+interface ActorError {
+	readonly name: string;
+	readonly message: string;
+	readonly cause?: unknown;
+}
+
+interface TransactionState {
+	status: "idle" | "pending" | "success" | "error";
+	request: SendTransactionRequest | null;
+	result: unknown | null;
+	error: ActorError | null;
+}
+
+interface SignMessageState {
+	status: "idle" | "pending" | "success" | "error";
+	request: SignMessageRequest | null;
+	result: unknown | null;
+	error: ActorError | null;
+}
+
+type ActorCommand =
+	| { readonly type: "connect"; readonly proofPayload?: string }
+	| { readonly type: "restore" | "disconnect" | "clear_storage" | "reset" }
+	| {
+			readonly type: "send_transaction";
+			readonly transaction: SendTransactionRequest;
+	  }
+	| { readonly type: "sign_message"; readonly transaction: SignMessageRequest };
+
+interface DappActorConfig {
+	readonly bridgeUrl: string;
+	readonly manifestUrl: string;
+	readonly universalLink: string;
+	readonly inNetwork?: string;
+	readonly manifest: {
+		readonly url: string;
+		readonly name: string;
+		readonly iconUrl: string;
+	};
+}
+
+class MemoryStorage implements IStorage {
+	private readonly items = new Map<string, string>();
+
+	/** Persists one SDK session value for the lifetime of this actor process. */
+	async setItem(key: string, value: string): Promise<void> {
+		this.items.set(key, value);
+	}
+
+	/** Returns a stored SDK session value without exposing the backing map. */
+	async getItem(key: string): Promise<string | null> {
+		return this.items.get(key) ?? null;
+	}
+
+	/** Removes one SDK session value during disconnect or session replacement. */
+	async removeItem(key: string): Promise<void> {
+		this.items.delete(key);
+	}
+
+	/** Clears all SDK persistence for deterministic restore and reset scenarios. */
+	clear(): void {
+		this.items.clear();
+	}
+}
+
+const port = parsePort(process.env.PORT, 4173);
+const servesInsecureHTTP = process.env.TON_CONNECT_INSECURE_HTTP === "1";
+const server = servesInsecureHTTP
+	? createHTTPServer()
+	: createHTTPSServer({
+			key: readFileSync(requiredEnvironment("TON_CONNECT_TLS_KEY")),
+			cert: readFileSync(requiredEnvironment("TON_CONNECT_TLS_CERTIFICATE")),
+		});
+
+// Keep the OS-assigned port bound while constructing this actor's URLs.
+await new Promise<void>((resolve, reject) => {
+	server.once("error", reject);
+	server.listen(port, "127.0.0.1", resolve);
+});
+const address = server.address();
+if (address === null || typeof address === "string") {
+	throw new Error("dApp actor did not bind a TCP port");
+}
+const origin = `${servesInsecureHTTP ? "http" : "https"}://127.0.0.1:${address.port}`;
+const config = renderConfig(
+	parseConfig(process.env.TON_CONNECT_DAPP_CONFIG),
+	origin,
+);
+const storage = new MemoryStorage();
+const state: ActorState = initialActorState(config);
+const walletsList = ["wallet-engine-test", "tonkeeper"].map((appName) => ({
+	app_name: appName,
+	name: appName,
+	image: config.manifest.iconUrl,
+	about_url: config.manifest.url,
+	universal_url: config.universalLink,
+	bridge: [{ type: "sse", url: config.bridgeUrl }],
+	platforms: ["chrome"],
+}));
+
+const connector = new TonConnect({
+	manifestUrl: config.manifestUrl,
+	storage,
+	disableAutoPauseConnection: true,
+	// Keep SDK metadata refreshes on the isolated bridge throughout the test.
+	walletsListSource: `data:application/json,${encodeURIComponent(JSON.stringify(walletsList))}`,
+	analytics: { mode: "off" },
+});
+if (config.inNetwork !== undefined) {
+	connector.setConnectionNetwork(config.inNetwork);
+}
+
+connector.onStatusChange(
+	(wallet) => {
+		applyWallet(wallet);
+		record(wallet ? "wallet_connected" : "wallet_disconnected", state.account);
+	},
+	(error) => {
+		state.status = "error";
+		state.error = actorError(error);
+		record("connector_error", state.error);
+	},
+);
+
+/** Handles one actor request and converts command failures into observable actor state. */
+const requestHandler = (
+	request: IncomingMessage,
+	response: ServerResponse,
+): void => {
+	void route(request, response).catch((error) => {
+		const message = error instanceof Error ? error.message : String(error);
+		state.status = "error";
+		state.error = actorError(error);
+		record("command_error", { message });
+		sendJson(response, 400, { error: message });
+	});
+};
+server.on("request", requestHandler);
+
+// Publish only a complete origin, through a file unique to the owning harness.
+const readyFile = process.env.TON_CONNECT_DAPP_READY_FILE;
+if (readyFile !== undefined) {
+	writeFileSync(`${readyFile}.pending`, origin);
+	renameSync(`${readyFile}.pending`, readyFile);
+}
+
+process.on("SIGTERM", () => {
+	server.close();
+});
+
+/** Dispatches the actor's health, state, manifest, icon, and command endpoints. */
+async function route(
+	request: IncomingMessage,
+	response: ServerResponse,
+): Promise<void> {
+	if (request.method === "OPTIONS") {
+		response.writeHead(204, corsHeaders());
+		response.end();
+		return;
+	}
+
+	if (request.method === "GET" && request.url === "/health") {
+		sendJson(response, 200, { status: "ok" });
+		return;
+	}
+
+	if (request.method === "GET" && request.url === "/state") {
+		sendJson(response, 200, state);
+		return;
+	}
+
+	if (
+		request.method === "GET" &&
+		request.url === new URL(config.manifestUrl).pathname
+	) {
+		sendJson(response, 200, config.manifest);
+		return;
+	}
+
+	if (
+		request.method === "GET" &&
+		request.url === new URL(config.manifest.iconUrl).pathname
+	) {
+		sendPng(response);
+		return;
+	}
+
+	if (request.method === "POST" && request.url === "/command") {
+		const command = await readCommand(request);
+		await executeCommand(command, response);
+		return;
+	}
+
+	sendJson(response, 404, { error: "not found" });
+}
+
+/** Executes one validated test command against the official TON Connect SDK instance. */
+async function executeCommand(
+	command: ActorCommand,
+	response: ServerResponse,
+): Promise<void> {
+	switch (command.type) {
+		case "connect": {
+			state.status = "connecting";
+			state.error = null;
+			const options = command.proofPayload
+				? { request: { tonProof: command.proofPayload } }
+				: undefined;
+			const link = connector.connect(
+				{ universalLink: config.universalLink, bridgeUrl: config.bridgeUrl },
+				options,
+			);
+			if (typeof link !== "string") {
+				throw new Error(
+					"HTTP bridge connection did not produce a connect link",
+				);
+			}
+			state.connectLink = link;
+			record("connect_link_created", { link });
+			sendJson(response, 200, { link });
+			return;
+		}
+		case "restore": {
+			await connector.restoreConnection();
+			applyWallet(connector.wallet);
+			record("connection_restored", state.account);
+			sendJson(response, 200, { status: state.status });
+			return;
+		}
+		case "disconnect": {
+			state.status = "disconnecting";
+			record("disconnect_requested");
+			void connector.disconnect().then(
+				() => {
+					applyWallet(null);
+					record("dapp_disconnected");
+				},
+				(error) => {
+					const message =
+						error instanceof Error ? error.message : String(error);
+					state.status = "error";
+					state.error = actorError(error);
+					record("disconnect_error", { message });
+				},
+			);
+			sendJson(response, 200, { status: state.status });
+			return;
+		}
+		case "send_transaction": {
+			state.transaction = {
+				status: "pending",
+				request: command.transaction,
+				result: null,
+				error: null,
+			};
+			record("transaction_requested", command.transaction);
+			// The SDK registers its reply handler immediately after onRequestSent.
+			// Wait for that registration before letting a fast test wallet reply.
+			await new Promise<void>((resolve) => {
+				void connector
+					.sendTransaction(command.transaction, {
+						onRequestSent: () => {
+							record("transaction_sent");
+							resolve();
+						},
+					})
+					.then(
+						(result) => {
+							state.transaction.status = "success";
+							state.transaction.result = result;
+							record("transaction_succeeded", result);
+						},
+						(error) => {
+							state.transaction.status = "error";
+							state.transaction.error = actorError(error);
+							record("transaction_failed", state.transaction.error);
+							resolve();
+						},
+					);
+			});
+			sendJson(response, 202, { status: state.transaction.status });
+			return;
+		}
+		case "sign_message": {
+			state.signMessage = {
+				status: "pending",
+				request: command.transaction,
+				result: null,
+				error: null,
+			};
+			record("sign_message_requested", command.transaction);
+			await new Promise<void>((resolve) => {
+				void connector
+					.signMessage(command.transaction, {
+						onRequestSent: () => {
+							record("sign_message_sent");
+							resolve();
+						},
+					})
+					.then(
+						(result) => {
+							state.signMessage.status = "success";
+							state.signMessage.result = result;
+							record("sign_message_succeeded", result);
+						},
+						(error) => {
+							state.signMessage.status = "error";
+							state.signMessage.error = actorError(error);
+							record("sign_message_failed", state.signMessage.error);
+							resolve();
+						},
+					);
+			});
+			sendJson(response, 202, { status: state.signMessage.status });
+			return;
+		}
+		case "clear_storage": {
+			storage.clear();
+			record("storage_cleared");
+			sendJson(response, 200, { status: state.status });
+			return;
+		}
+		case "reset": {
+			if (connector.wallet) {
+				await connector.disconnect();
+			}
+			storage.clear();
+			Object.assign(state, initialActorState(config));
+			sendJson(response, 200, { status: state.status });
+			return;
+		}
+	}
+}
+
+/** Creates an empty protocol observation state for one isolated scenario. */
+function initialActorState(actorConfig: DappActorConfig): ActorState {
+	return {
+		status: "idle",
+		connectLink: null,
+		account: null,
+		device: null,
+		config: actorConfig,
+		error: null,
+		transaction: {
+			status: "idle",
+			request: null,
+			result: null,
+			error: null,
+		},
+		signMessage: {
+			status: "idle",
+			request: null,
+			result: null,
+			error: null,
+		},
+		journal: [],
+	};
+}
+
+/** Copies the SDK wallet state into stable JSON fields consumed by Rust assertions. */
+function applyWallet(wallet: Wallet | null): void {
+	if (!wallet) {
+		state.status = "disconnected";
+		state.account = null;
+		state.device = null;
+		return;
+	}
+
+	state.status = "connected";
+	state.account = {
+		address: wallet.account.address,
+		chain: wallet.account.chain,
+		publicKey: wallet.account.publicKey ?? null,
+		walletStateInit: wallet.account.walletStateInit,
+	};
+	state.device = wallet.device;
+	state.error = null;
+}
+
+/** Appends a timestamped observation to the actor journal without mutating its details. */
+function record(type: string, details?: unknown): void {
+	const event: ActorEvent =
+		details === undefined
+			? { at: Date.now(), type }
+			: { at: Date.now(), type, details };
+	state.journal.push(event);
+}
+
+/** Reads and validates a bounded JSON command body from the local HTTP client. */
+async function readCommand(request: IncomingMessage): Promise<ActorCommand> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of request) {
+		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+		size += buffer.length;
+		if (size > 1024 * 1024) {
+			throw new Error("command body is too large");
+		}
+		chunks.push(buffer);
+	}
+
+	const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+	if (!isActorCommand(value)) {
+		throw new Error("invalid actor command");
+	}
+	return value;
+}
+
+/** Narrows untrusted JSON to the actor command discriminated union. */
+function isActorCommand(value: unknown): value is ActorCommand {
+	if (typeof value !== "object" || value === null || !("type" in value)) {
+		return false;
+	}
+	const type = value.type;
+	if (type === "send_transaction" || type === "sign_message") {
+		return (
+			"transaction" in value &&
+			typeof value.transaction === "object" &&
+			value.transaction !== null
+		);
+	}
+	return (
+		type === "connect" ||
+		type === "restore" ||
+		type === "disconnect" ||
+		type === "clear_storage" ||
+		type === "reset"
+	);
+}
+
+/** Sends one complete JSON response unless another branch has already committed headers. */
+function sendJson(
+	response: ServerResponse,
+	status: number,
+	value: unknown,
+): void {
+	if (response.headersSent) {
+		return;
+	}
+	const body = JSON.stringify(value);
+	response.writeHead(status, {
+		...corsHeaders(),
+		"content-type": "application/json; charset=utf-8",
+		"content-length": Buffer.byteLength(body),
+	});
+	response.end(body);
+}
+
+/** Allows browser wallets on another local origin to load the dApp manifest. */
+function corsHeaders(): Record<string, string> {
+	return {
+		"access-control-allow-headers": "content-type",
+		"access-control-allow-methods": "GET, POST, OPTIONS",
+		"access-control-allow-origin": "*",
+	};
+}
+
+/** Serves the deterministic one-pixel PNG referenced by the local dApp manifest. */
+function sendPng(response: ServerResponse): void {
+	const body = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+		"base64",
+	);
+	response.writeHead(200, {
+		"content-type": "image/png",
+		"content-length": body.length,
+	});
+	response.end(body);
+}
+
+/** Parses the required process configuration and rejects incomplete actor fixtures. */
+function parseConfig(value: string | undefined): DappActorConfig {
+	if (value === undefined) {
+		throw new Error("TON_CONNECT_DAPP_CONFIG is required");
+	}
+	const parsed: unknown = JSON.parse(value);
+	if (!isDappActorConfig(parsed)) {
+		throw new Error("TON_CONNECT_DAPP_CONFIG is invalid");
+	}
+	return parsed;
+}
+
+/** Renders origin placeholders only after the actor owns its listening socket. */
+function renderConfig(config: DappActorConfig, origin: string): DappActorConfig {
+	return {
+		...config,
+		manifestUrl: config.manifestUrl.replaceAll("{actor_origin}", origin),
+		manifest: {
+			...config.manifest,
+			url: config.manifest.url.replaceAll("{actor_origin}", origin),
+			iconUrl: config.manifest.iconUrl.replaceAll("{actor_origin}", origin),
+		},
+	};
+}
+
+/** Validates every field needed to construct the SDK and serve the dApp manifest. */
+function isDappActorConfig(value: unknown): value is DappActorConfig {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const candidate = value as Record<string, unknown>;
+	const manifest = candidate.manifest;
+	if (typeof manifest !== "object" || manifest === null) {
+		return false;
+	}
+	const manifestRecord = manifest as Record<string, unknown>;
+	return (
+		typeof candidate.bridgeUrl === "string" &&
+		typeof candidate.manifestUrl === "string" &&
+		typeof candidate.universalLink === "string" &&
+		(candidate.inNetwork === undefined ||
+			typeof candidate.inNetwork === "string") &&
+		typeof manifestRecord.url === "string" &&
+		typeof manifestRecord.name === "string" &&
+		typeof manifestRecord.iconUrl === "string"
+	);
+}
+
+/** Reads one mandatory environment variable and reports its exact missing name. */
+function requiredEnvironment(name: string): string {
+	const value = process.env[name];
+	if (!value) {
+		throw new Error(`${name} is required`);
+	}
+	return value;
+}
+
+/** Serializes JavaScript errors, including structured causes, for cross-process assertions. */
+function actorError(error: unknown): ActorError {
+	if (!(error instanceof Error)) {
+		return { name: "Error", message: String(error) };
+	}
+	const name = error.name === "Error" ? error.constructor.name : error.name;
+	return error.cause === undefined
+		? { name, message: error.message }
+		: { name, message: error.message, cause: error.cause };
+}
+
+/** Parses a TCP port or returns the supplied local-development fallback. */
+function parsePort(value: string | undefined, fallback: number): number {
+	if (value === undefined) {
+		return fallback;
+	}
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+		throw new Error(`invalid PORT: ${value}`);
+	}
+	return parsed;
+}

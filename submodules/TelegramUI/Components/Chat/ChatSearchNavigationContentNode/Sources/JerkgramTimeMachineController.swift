@@ -59,7 +59,22 @@ private enum JerkgramTimeMachineUIEntry: ItemListNodeEntry {
         case .loadMore: return Int32.max
         }
     }
-    static func == (lhs: Self, rhs: Self) -> Bool { return lhs.stableId == rhs.stableId && String(describing: lhs) == String(describing: rhs) }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case let (.header(ls, lt), .header(rs, rt)),
+             let (.info(ls, lt), .info(rs, rt)),
+             let (.loadMore(ls, lt), .loadMore(rs, rt)):
+            return ls == rs && lt == rt
+        case let (.summary(ls, li, lt, lv), .summary(rs, ri, rt, rv)):
+            return ls == rs && li == ri && lt == rt && lv == rv
+        case let (.filter(ls, li, lt, lv, lk), .filter(rs, ri, rt, rv, rk)):
+            return ls == rs && li == ri && lt == rt && lv == rv && lk == rk
+        case let (.result(ls, li, lt, lv, le), .result(rs, ri, rt, rv, re)):
+            return ls == rs && li == ri && lt == rt && lv == rv && le == re
+        default:
+            return false
+        }
+    }
     static func < (lhs: Self, rhs: Self) -> Bool { return lhs.stableId < rhs.stableId }
 
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
@@ -111,14 +126,9 @@ case let .filter(_, _, title, value, kind):
     }
 }
 
-private func jerkgramTimeMachineDateText(_ timestampMs: Int64, dateTimeFormat: PresentationDateTimeFormat) -> String {
-    let _ = dateTimeFormat
+private func jerkgramTimeMachineDateText(_ timestampMs: Int64, formatter: DateFormatter) -> String {
     let timestamp = TimeInterval(timestampMs) / 1000.0
     guard timestamp > 0.0 else { return "" }
-    let formatter = DateFormatter()
-    formatter.locale = Locale.current
-    formatter.dateStyle = .medium
-    formatter.timeStyle = .short
     return formatter.string(from: Date(timeIntervalSince1970: timestamp))
 }
 
@@ -280,9 +290,13 @@ public func jerkgramTimeMachineController(
             .filter(1, 4, strings.timeMachineAuthor, state.senderPeerId.map(String.init) ?? strings.timeMachineAllAuthors, nil),
             .header(2, strings.timeMachineResults),
         ]
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale.current
+        dateFormatter.dateStyle = .medium
+        dateFormatter.timeStyle = .short
         for (index, event) in results.enumerated() {
             let text = event.payload.text ?? event.payload.previousText ?? event.eventId.rawValue
-            let date = jerkgramTimeMachineDateText(event.observedAtMs, dateTimeFormat: presentationData.dateTimeFormat)
+            let date = jerkgramTimeMachineDateText(event.observedAtMs, formatter: dateFormatter)
             let kind = jerkgramEventKindTitle(event.kind, strings: strings)
             let detail = date.isEmpty ? kind : "\(kind) · \(date)"
             entries.append(.result(2, Int32(index + 1), String(text.prefix(120)), detail, event))

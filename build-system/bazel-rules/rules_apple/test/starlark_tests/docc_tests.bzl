@@ -68,6 +68,26 @@ def docc_test_suite(name):
         tags = [name],
     )
 
+    # Verify doccarchive bundle is created for Swift library which includes a .docc bundle.
+    archive_contents_test(
+        name = "{}_contains_doccarchive_with_docc_bundle_when_swift_library".format(name),
+        build_type = "simulator",
+        target_under_test = "//test/starlark_tests/targets_under_test/ios:basic_swift_library_with_docc_bundle.doccarchive",
+        contains = [
+            "$BUNDLE_ROOT/index.html",
+            "$BUNDLE_ROOT/documentation/basicframework/readme/index.html",
+        ],
+        text_test_file = "$BUNDLE_ROOT/metadata.json",
+        text_test_values = [
+            '"bundleDisplayName":"BasicFramework"',
+            '"bundleID":"com.google.example.swift.lib"',
+            '"major":0',
+            '"minor":1',
+            '"patch":0',
+        ],
+        tags = [name],
+    )
+
     # Verify doccarchive bundle is created for an ObjC library which defines data and has a dependency on a Swift lib.
     archive_contents_test(
         name = "{}_contains_doccarchive_when_objc_library_with_swift_dep".format(name),
@@ -106,6 +126,9 @@ def docc_test_suite(name):
     )
 
     # Verifying multiple symbol graph conversion via transitive dependencies.
+    #
+    # Transitive dependencies should be present in addition to the `dep` target
+    # ("TransitiveDependencyTest" in this case)
     archive_contents_test(
         name = "{}_contains_doccarchive_with_transitive_dependencies".format(name),
         build_type = "simulator",
@@ -113,6 +136,8 @@ def docc_test_suite(name):
         contains = [
             "$BUNDLE_ROOT/index.html",
             "$BUNDLE_ROOT/documentation/transitivedependencytest/index.html",
+            "$BUNDLE_ROOT/documentation/directdependencytest/index.html",
+            "$BUNDLE_ROOT/documentation/basicframework/index.html",
         ],
         tags = [name],
     )
