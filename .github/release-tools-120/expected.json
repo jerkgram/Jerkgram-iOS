@@ -1,0 +1,18 @@
+{
+  "builderCommit": "636decefd426586118c0a06de03d2d3c2cc24cde",
+  "workflowRun": 43516752691,
+  "assets": {
+    "Jerkgram-1.2.0-source.tar.xz": {
+      "size": 159619428,
+      "sha256": "571f9d54a6027b712a27286b060127cfcc8f391fc8c386f89b3e07d283df01c3"
+    },
+    "public-source-manifest.json": {
+      "size": 13028082,
+      "sha256": "dc19d8d2f07bc0f05de2975efb709a8dc4ffcf48b93758d169e3f5953c2b2f32"
+    },
+    "Jerkgram-1.2.0.ipa": {
+      "size": 101719687,
+      "sha256": "4c520eb3cf8cade914903a1cdc08f54c7b0dc73c8916dbec6361bfe8f76254f1"
+    }
+  }
+}
