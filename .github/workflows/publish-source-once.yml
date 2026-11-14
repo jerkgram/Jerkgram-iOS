@@ -2,7 +2,7 @@ name: Publish Jerkgram 1.2.0 source once
 on:
   push:
     branches: [main]
-    paths: [.github/workflows/publish-source-once.yml]
+    paths: [.github/workflows/publish-source-once.yml, .github/release-tools-120/**]
   workflow_dispatch:
 permissions:
   contents: write

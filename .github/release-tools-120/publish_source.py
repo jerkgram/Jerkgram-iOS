@@ -14,14 +14,8 @@ def publish(repo,assets,expected):
     fingerprint=hashlib.sha256(json.dumps(manifest['files'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
     assert fingerprint==expected['sourceLeavesSha256'], 'Source file contents/modes/links differ from local snapshot: '+fingerprint
     print('Exact local source leaves VERIFIED: '+fingerprint,flush=True)
-    # XZ releases can produce different bytes for identical tar contents. Pin the
-    # entire local leaf manifest, then record and re-download verify actual assets.
     for name,row in expected['assets'].items():
-        p=assets/name
-        if name=='Jerkgram-1.2.0.ipa':assert p.stat().st_size==row['size'] and sha(p)==row['sha256'],name
-        else:expected['assets'][name]={'size':p.stat().st_size,'sha256':sha(p)}
-    assert manifest['sourceArchive']=={'filename':'Jerkgram-1.2.0-source.tar.xz',**expected['assets']['Jerkgram-1.2.0-source.tar.xz']}
-
+        p=assets/name;assert p.stat().st_size==row['size'] and sha(p)==row['sha256'],name
     assert manifest['build']==183 and manifest['builder']['commit']==expected['builderCommit']
     records={x['path']:x for x in manifest['files']};actual={};prefix='Jerkgram-1.2.0-source/'
     destination=repo.parent/'verified-source';destination.mkdir()
@@ -88,7 +82,20 @@ def publish(repo,assets,expected):
     (repo/'.github/workflows/publish-source-once.yml').unlink()
     shutil.rmtree(repo/'.github/release-tools-120')
     run('git','config','user.name','github-actions[bot]');run('git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com')
-    run('git','add','-A');run('git','commit','-m','Publish Jerkgram 1.2.0 source / Build183')
+    # Publication records archive bytes, including upstream CRLF fixtures and expanded LFS files.
+    info=repo/'.git/info';info.mkdir(exist_ok=True)
+    (info/'attributes').write_text('* -text -filter -ident\n')
+    run('git','-c','filter.lfs.process=','-c','filter.lfs.clean=cat','-c','filter.lfs.required=false','add','-A')
+    # Keep expanded vendored LFS data in this self-contained public source tree.
+    indexed={}
+    for line in subprocess.check_output(['git','ls-files','--stage','-z']).split(b'\0'):
+        if not line:continue
+        header,path=line.split(b'\t',1);indexed[path.decode()]=header.split()[1].decode()
+    for name,oid in indexed.items():
+        p=repo/name
+        data=os.readlink(p).encode() if p.is_symlink() else p.read_bytes()
+        assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==oid, 'Staged bytes changed by Git filters: '+name
+    run('git','commit','-m','Publish Jerkgram 1.2.0 source / Build183')
     commit=run('git','rev-parse','HEAD');run('git','tag','-a',TAG,'-m','Jerkgram 1.2.0 / Build183')
     run('git','push','--atomic','origin','HEAD:main',TAG)
     assert run('git','ls-remote','origin','refs/tags/'+TAG+'^{}').split()[0]==commit

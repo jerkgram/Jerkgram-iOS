@@ -3,17 +3,17 @@
   "workflowRun": 43516752691,
   "assets": {
     "Jerkgram-1.2.0-source.tar.xz": {
-      "size": 159619428,
-      "sha256": "571f9d54a6027b712a27286b060127cfcc8f391fc8c386f89b3e07d283df01c3"
+      "size": 162460448,
+      "sha256": "71ee50b4a664a21371ff03a816d9ef3a291b93192b4b99d72b92d482f7566ce5"
     },
     "public-source-manifest.json": {
-      "size": 13028082,
-      "sha256": "dc19d8d2f07bc0f05de2975efb709a8dc4ffcf48b93758d169e3f5953c2b2f32"
+      "size": 13028134,
+      "sha256": "d7db2e01f60736d5eb2c06af9cb22b334fdd1043e16397e6fa7c91bff1746809"
     },
     "Jerkgram-1.2.0.ipa": {
       "size": 101719687,
       "sha256": "4c520eb3cf8cade914903a1cdc08f54c7b0dc73c8916dbec6361bfe8f76254f1"
     }
   },
-  "sourceLeavesSha256": "c33666dedfe5197a895f2d17754322d286a084ad434a6c1aa9720e8c11dea3f3"
+  "sourceLeavesSha256": "45f656b5d8f29110f8f3fdce222db39df386d5701f0dfe396e937b4e053820f7"
 }
