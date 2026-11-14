@@ -11,8 +11,17 @@ def publish(repo,assets,expected):
     assert api('repos/'+REPO)['default_branch']=='main'
     assert not run('git','ls-remote','--tags','origin','refs/tags/'+TAG), 'Refuse existing tag'
     manifest=json.loads((assets/'public-source-manifest.json').read_text())
+    fingerprint=hashlib.sha256(json.dumps(manifest['files'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+    assert fingerprint==expected['sourceLeavesSha256'], 'Source file contents/modes/links differ from local snapshot: '+fingerprint
+    print('Exact local source leaves VERIFIED: '+fingerprint,flush=True)
+    # XZ releases can produce different bytes for identical tar contents. Pin the
+    # entire local leaf manifest, then record and re-download verify actual assets.
     for name,row in expected['assets'].items():
-        p=assets/name;assert p.stat().st_size==row['size'] and sha(p)==row['sha256'],name
+        p=assets/name
+        if name=='Jerkgram-1.2.0.ipa':assert p.stat().st_size==row['size'] and sha(p)==row['sha256'],name
+        else:expected['assets'][name]={'size':p.stat().st_size,'sha256':sha(p)}
+    assert manifest['sourceArchive']=={'filename':'Jerkgram-1.2.0-source.tar.xz',**expected['assets']['Jerkgram-1.2.0-source.tar.xz']}
+
     assert manifest['build']==183 and manifest['builder']['commit']==expected['builderCommit']
     records={x['path']:x for x in manifest['files']};actual={};prefix='Jerkgram-1.2.0-source/'
     destination=repo.parent/'verified-source';destination.mkdir()

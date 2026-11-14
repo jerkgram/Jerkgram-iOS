@@ -61,3 +61,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/release-tools-120/publish_source.py "$GITHUB_WORKSPACE" "$RUNNER_TEMP/assets" .github/release-tools-120/expected.json
+      - name: Preserve manifest if publication stops
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jerkgram-1.2.0-source-manifest-review
+          path: ${{ runner.temp }}/assets/public-source-manifest.json
+          if-no-files-found: ignore
