@@ -91,6 +91,13 @@ public final class StarsBalanceOverlayComponent: Component {
                 self.isUpdating = false
             }
             let previousComponent = self.component
+            if self.component?.context !== component.context || self.component?.peerId != component.peerId {
+                self.balanceDisposable?.dispose()
+                self.balanceDisposable = nil
+                self.starsRevenueStatsContext = nil
+                self.starsBalance = 0
+                self.tonBalance = 0
+            }
             self.component = component
             self.state = state
             
@@ -99,13 +106,13 @@ public final class StarsBalanceOverlayComponent: Component {
                     if let starsContext = component.context.starsContext, let tonContext = component.context.tonContext {
                         self.balanceDisposable = combineLatest(queue: Queue.mainQueue(),
                             starsContext.state,
-                            tonContext.state
+                            JerkgramLocalGramBalance.displayedBalance(accountPeerId: component.context.account.peerId.toInt64(), native: tonContext.state |> map { $0?.balance.value ?? 0 })
                         ).start(next: { [weak self] starsState, tonState in
                             guard let self else {
                                 return
                             }
                             self.starsBalance = starsState?.balance.value ?? 0
-                            self.tonBalance = tonState?.balance.value ?? 0
+                            self.tonBalance = tonState
                             if !self.isUpdating {
                                 self.state?.updated()
                             }
@@ -282,3 +289,4 @@ public final class StarsBalanceOverlayComponent: Component {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }
+

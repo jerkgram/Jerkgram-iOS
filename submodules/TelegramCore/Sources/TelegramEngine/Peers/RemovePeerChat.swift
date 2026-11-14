@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 func _internal_removePeerChat(account: Account, peerId: PeerId, reportChatSpam: Bool, deleteGloballyIfPossible: Bool = false) -> Signal<Void, NoError> {
@@ -25,6 +25,14 @@ func _internal_terminateSecretChat(transaction: Transaction, peerId: PeerId, req
 }
 
 func _internal_removePeerChat(account: Account, transaction: Transaction, mediaBox: MediaBox, peerId: PeerId, reportChatSpam: Bool, deleteGloballyIfPossible: Bool) {
+    if let peer = transaction.getPeer(peerId), jerkgramIsRetainedExcludedChat(peer) {
+        jerkgramClearRetainedExcludedChat(transaction: transaction, peer: peer)
+        transaction.setPeerChatInterfaceState(peerId, state: nil)
+        _internal_clearHistory(transaction: transaction, mediaBox: mediaBox, peerId: peerId, threadId: nil, namespaces: .all)
+        transaction.updatePeerChatListInclusion(peerId, inclusion: .notIncluded)
+        transaction.removeOrderedItemListItem(collectionId: Namespaces.OrderedItemList.RecentlySearchedPeerIds, itemId: RecentPeerItemId(peerId).rawValue)
+        return
+    }
     if let _ = transaction.getPeerChatInterfaceState(peerId) {
         transaction.setPeerChatInterfaceState(peerId, state: nil)
     }
@@ -77,6 +85,9 @@ func _internal_removePeerChat(account: Account, transaction: Transaction, mediaB
     transaction.removeOrderedItemListItem(collectionId: Namespaces.OrderedItemList.RecentlySearchedPeerIds, itemId: RecentPeerItemId(peerId).rawValue)
     
     if peerId.namespace == Namespaces.Peer.CloudChannel {
+        // Leaving takes the channel out of News (Remove from News leaves a light join). Stored now: the leave is only
+        // queued here, and its updates may not carry the channel at all.
+        _internal_storeLocalInNews(transaction: transaction, accountPeerId: account.peerId, channelId: peerId, isInNews: false)
         transaction.clearItemCacheCollection(collectionId: Namespaces.CachedItemCollection.cachedGroupCallDisplayAsPeers)
     }
 }

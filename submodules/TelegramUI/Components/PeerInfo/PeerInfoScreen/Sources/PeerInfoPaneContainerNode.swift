@@ -28,11 +28,23 @@ final class PeerInfoPaneWrapper {
     let key: PeerInfoPaneKey
     let node: PeerInfoPaneNode
     var isAnimatingOut: Bool = false
+    private var jerkgramVisualRevision: UInt64?
+    private var jerkgramGlassEnabled: Bool?
     private var appliedParams: (CGSize, CGFloat, CGFloat, CGFloat, DeviceMetrics, CGFloat, Bool, CGFloat, CGFloat, PresentationData)?
     
     init(key: PeerInfoPaneKey, node: PeerInfoPaneNode) {
         self.key = key
         self.node = node
+    }
+
+    func updateJerkgramVisualState(glassEnabled: Bool, revision: UInt64) {
+        if self.jerkgramVisualRevision == revision && self.jerkgramGlassEnabled == glassEnabled {
+            return
+        }
+        self.jerkgramVisualRevision = revision
+        self.jerkgramGlassEnabled = glassEnabled
+        self.appliedParams = nil
+        self.node.updateJerkgramVisualState(glassEnabled: glassEnabled, revision: revision)
     }
 
     func removeFromContainer() {
@@ -517,8 +529,17 @@ private final class PeerInfoPendingPane {
                 openAddStory()
             }
         case .media:
-            let visualPaneNode = PeerInfoVisualMediaPaneNode(context: context, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, contentType: .photoOrVideo, captureProtected: captureProtected, initialFocusMessageIndex: switchToMediaTarget?.kind == .photoVideo ? switchToMediaTarget?.messageIndex : nil, ghostBaseGlassEnabled: ghostBaseGlassEnabled)
+            let visualPaneNode: PeerInfoVisualMediaPane
+            if context.usesSharedMediaGridV2 {
+                visualPaneNode = PeerInfoMediaGridPaneNode(context: context, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, contentType: .photoOrVideo, captureProtected: captureProtected, initialFocusMessageIndex: switchToMediaTarget?.kind == .photoVideo ? switchToMediaTarget?.messageIndex : nil)
+            } else {
+                visualPaneNode = PeerInfoVisualMediaPaneNode(context: context, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, contentType: .photoOrVideo, captureProtected: captureProtected, initialFocusMessageIndex: switchToMediaTarget?.kind == .photoVideo ? switchToMediaTarget?.messageIndex : nil, ghostBaseGlassEnabled: ghostBaseGlassEnabled)
+            }
             paneNode = visualPaneNode
+            // VoiceOver: the legacy grid scrolls the profile to the focused tile; the MediaGrid pane has no such hook.
+            (visualPaneNode as? PeerInfoVisualMediaPaneNode)?.ensureRectVisible = { sourceView, rect in
+                ensureRectVisible(sourceView, rect)
+            }
             visualPaneNode.openCurrentDate = {
                 openMediaCalendar()
             }
@@ -528,14 +549,23 @@ private final class PeerInfoPendingPane {
         case .files:
             let visualPaneNode = PeerInfoVisualMediaPaneNode(context: context, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, contentType: .files, captureProtected: captureProtected, initialFocusMessageIndex: switchToMediaTarget?.kind == .photoVideo ? switchToMediaTarget?.messageIndex : nil, ghostBaseGlassEnabled: ghostBaseGlassEnabled)
             paneNode = visualPaneNode
+            visualPaneNode.ensureRectVisible = { sourceView, rect in
+                ensureRectVisible(sourceView, rect)
+            }
         case .links:
             paneNode = PeerInfoListPaneNode(context: context, updatedPresentationData: updatedPresentationData, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, tagMask: .webPage, ghostBaseGlassEnabled: ghostBaseGlassEnabled)
         case .voice:
             let visualPaneNode = PeerInfoVisualMediaPaneNode(context: context, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, contentType: .voiceAndVideoMessages, captureProtected: captureProtected, initialFocusMessageIndex: nil, ghostBaseGlassEnabled: ghostBaseGlassEnabled)
             paneNode = visualPaneNode
+            visualPaneNode.ensureRectVisible = { sourceView, rect in
+                ensureRectVisible(sourceView, rect)
+            }
         case .music:
             let visualPaneNode = PeerInfoVisualMediaPaneNode(context: context, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, contentType: .music, captureProtected: captureProtected, initialFocusMessageIndex: nil, ghostBaseGlassEnabled: ghostBaseGlassEnabled)
             paneNode = visualPaneNode
+            visualPaneNode.ensureRectVisible = { sourceView, rect in
+                ensureRectVisible(sourceView, rect)
+            }
         case .gifs:
             let visualPaneNode = PeerInfoGifPaneNode(context: context, chatControllerInteraction: chatControllerInteraction, peerId: chatLocationPeerId, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, contentType: .gifs)
             paneNode = visualPaneNode
@@ -600,7 +630,8 @@ private final class PeerInfoPendingPane {
 }
 
 final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegate {
-    private let ghostBaseGlassEnabled: Bool
+    private var ghostBaseGlassEnabled: Bool
+    private var jerkgramVisualRevision: UInt64 = 0
     private let context: AccountContext
     private let peerId: EnginePeer.Id
     private let chatLocation: ChatLocation
@@ -677,6 +708,20 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
     
     private let initialPaneKey: PeerInfoPaneKey?
     
+    func updateJerkgramVisualState(glassEnabled: Bool, revision: UInt64) {
+        guard self.ghostBaseGlassEnabled != glassEnabled || self.jerkgramVisualRevision != revision else {
+            return
+        }
+        self.ghostBaseGlassEnabled = glassEnabled
+        self.jerkgramVisualRevision = revision
+        for pane in self.currentPanes.values {
+            pane.updateJerkgramVisualState(glassEnabled: glassEnabled, revision: revision)
+        }
+        for pane in self.pendingPanes.values {
+            pane.pane.updateJerkgramVisualState(glassEnabled: glassEnabled, revision: revision)
+        }
+    }
+
     init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?, peerId: EnginePeer.Id, chatLocation: ChatLocation, sharedMediaFromForumTopic: (EnginePeer.Id, Int64)?, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>, isMediaOnly: Bool, initialPaneKey: PeerInfoPaneKey?, initialStoryFolderId: Int64?, initialGiftCollectionId: Int64?, switchToMediaTarget: PeerInfoSwitchToMediaTarget?, ghostBaseGlassEnabled: Bool = false) {
         self.ghostBaseGlassEnabled = ghostBaseGlassEnabled
         self.context = context
@@ -939,6 +984,22 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
         self.parentController?.presentInGlobalOverlay(contextController)
     }
     
+    /// iPhone Duo: the side strip on each side. The container (and the background it paints) stays full
+    /// width; the tabs and the panes are laid out between the strips.
+    var stripInsets: (left: CGFloat, right: CGFloat) = (0.0, 0.0)
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let result = super.hitTest(point, with: event)
+        // A touch in a strip lands on the container itself; the pane beside it takes it, so a drag there
+        // scrolls the pane rather than the profile.
+        if result === self.view, let currentParams = self.currentParams, let currentPane = self.currentPane, let forwardedPoint = peerInfoStripTouchForwardingPoint(point, containerWidth: currentParams.size.width, stripLeft: self.stripInsets.left, stripRight: self.stripInsets.right, paneFrame: currentPane.node.frame) {
+            if let paneResult = currentPane.node.view.hitTest(self.view.convert(forwardedPoint, to: currentPane.node.view), with: event) {
+                return paneResult
+            }
+        }
+        return result
+    }
+
     func update(size: CGSize, sideInset: CGFloat, topInset: CGFloat, bottomInset: CGFloat, deviceMetrics: DeviceMetrics, visibleHeight: CGFloat, expansionFraction: CGFloat, presentationData: PresentationData, data: PeerInfoScreenData?, areTabsHidden: Bool, disableTabSwitching: Bool, navigationHeight: CGFloat, transition: ContainedViewLayoutTransition) {
         let previousAvailablePanes = self.currentAvailablePanes
         let availablePanes = data?.availablePanes ?? []
@@ -1012,7 +1073,7 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
         let tabsHeight: CGFloat = 40.0
         let effectiveTabsHeight: CGFloat = areTabsHidden ? 0.0 : (10.0 + tabsHeight + 10.0 + 6.0)
         
-        let paneFrame = CGRect(origin: CGPoint(x: 0.0, y: -topInset), size: CGSize(width: size.width, height: topInset + size.height))
+        let paneFrame = CGRect(origin: CGPoint(x: self.stripInsets.left, y: -topInset), size: CGSize(width: size.width - self.stripInsets.left - self.stripInsets.right, height: topInset + size.height))
         
         var visiblePaneIndices: [Int] = []
         var requiredPendingKeys: [PeerInfoPaneKey] = []
@@ -1144,6 +1205,7 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
                 )
                 self.pendingPanes[key] = pane
                 pane.pane.node.frame = paneFrame
+                pane.pane.updateJerkgramVisualState(glassEnabled: self.ghostBaseGlassEnabled, revision: self.jerkgramVisualRevision)
                 pane.pane.update(size: paneFrame.size, topInset: topInset + effectiveTabsHeight, sideInset: sideInset, bottomInset: bottomInset, deviceMetrics: deviceMetrics, visibleHeight: visibleHeight, isScrollingLockedAtTop: isScrollingLockedAtTop, expandProgress: expansionFraction, navigationHeight: navigationHeight, presentationData: presentationData, synchronous: true, transition: .immediate)
                 let paneNode = pane.pane.node
                 pane.pane.node.tabBarOffsetUpdated = { [weak self, weak paneNode] transition in
@@ -1160,6 +1222,7 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
         
         for (key, pane) in self.pendingPanes {
             pane.pane.node.frame = paneFrame
+            pane.pane.updateJerkgramVisualState(glassEnabled: self.ghostBaseGlassEnabled, revision: self.jerkgramVisualRevision)
             pane.pane.update(size: paneFrame.size, topInset: effectiveTabsHeight + topInset, sideInset: sideInset, bottomInset: bottomInset, deviceMetrics: deviceMetrics, visibleHeight: visibleHeight, isScrollingLockedAtTop: isScrollingLockedAtTop, expandProgress: expansionFraction, navigationHeight: navigationHeight, presentationData: presentationData, synchronous: self.currentPaneKey == nil, transition: .immediate)
             
             if pane.isReady {
@@ -1210,6 +1273,8 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
         }
         
         for (key, pane) in self.currentPanes {
+            // A pager: only the current pane is read; its neighbours are laid out off screen beside it.
+            pane.node.accessibilityElementsHidden = key != self.currentPaneKey
             if let index = availablePanes.firstIndex(of: key), let updatedCurrentIndex = updatedCurrentIndex {
                 var paneWasAdded = false
                 if pane.node.supernode == nil {
@@ -1256,6 +1321,7 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
                         paneCompletion()
                     })
                 }
+                pane.updateJerkgramVisualState(glassEnabled: self.ghostBaseGlassEnabled, revision: self.jerkgramVisualRevision)
                 pane.update(size: paneFrame.size, topInset: effectiveTabsHeight + topInset, sideInset: sideInset, bottomInset: bottomInset, deviceMetrics: deviceMetrics, visibleHeight: visibleHeight, isScrollingLockedAtTop: isScrollingLockedAtTop, expandProgress: expansionFraction, navigationHeight: navigationHeight, presentationData: presentationData, synchronous: paneWasAdded, transition: paneTransition)
             }
         }
@@ -1293,7 +1359,7 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
         
         let tabsSideInset: CGFloat = sideInset + 16.0
         
-        let tabsContainerSize = CGSize(width: size.width - tabsSideInset * 2.0, height: tabsHeight)
+        let tabsContainerSize = CGSize(width: size.width - self.stripInsets.left - self.stripInsets.right - tabsSideInset * 2.0, height: tabsHeight)
         let tabsContainerEffectiveSize = self.tabsContainer.update(
             transition: ComponentTransition(transition),
             component: AnyComponent(HorizontalTabsComponent(
@@ -1361,6 +1427,12 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
                         content = .title(HorizontalTabsComponent.Tab.Title(text: presentationData.strings.PeerInfo_PanePolls, entities: [], enableAnimations: false))
                     }
                     
+                    var tabAccessibilityLabel: String?
+                    if case .gifts = paneKey {
+                        // The tab shows the title and the first gifts' stickers; it is read by its title.
+                        tabAccessibilityLabel = presentationData.strings.PeerInfo_PaneGifts
+                    }
+                    
                     return HorizontalTabsComponent.Tab(
                         id: AnyHashable(paneKey),
                         content: content,
@@ -1403,10 +1475,14 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
                             }
                             self.openTabContextMenu(key: paneKey, sourceView: sourceView, gesture: gesture)
                         } : nil,
-                        deleteAction: nil
+                        deleteAction: nil,
+                        accessibilityLabel: tabAccessibilityLabel,
+                        contextAccessibilityLabel: presentationData.strings.Common_More
                     )
                 },
-                selectedTab: self.currentPaneKey.flatMap { HorizontalTabsComponent.Tab.Id($0) },
+                // A lone tab has no pill: the bar fits its tabs, so the pill would fill the whole capsule and leave
+                // only its border, reading as a bare chip. Its title sits on the glass capsule instead.
+                selectedTab: availablePanes.count > 1 ? self.currentPaneKey.flatMap { HorizontalTabsComponent.Tab.Id($0) } : nil,
                 isEditing: false,
                 layout: .fit,
                 liftWhileSwitching: deviceMetrics.type != .tablet
@@ -1415,7 +1491,7 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
             containerSize: tabsContainerSize
         )
         
-        let tabContainerFrameOriginX = floorToScreenPixels((size.width - tabsContainerEffectiveSize.width) / 2.0)
+        let tabContainerFrameOriginX = self.stripInsets.left + floorToScreenPixels((size.width - self.stripInsets.left - self.stripInsets.right - tabsContainerEffectiveSize.width) / 2.0)
         let tabContainerFrame = CGRect(origin: CGPoint(x: tabContainerFrameOriginX, y: 10.0), size: tabsContainerEffectiveSize)
         
         transition.updateFrame(view: self.tabsBackgroundContainer, frame: tabContainerFrame)
@@ -1437,8 +1513,10 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
         }
                 
         for (_, pane) in self.pendingPanes {
+            pane.pane.node.accessibilityElementsHidden = true
             let paneTransition: ContainedViewLayoutTransition = .immediate
             paneTransition.updateFrame(node: pane.pane.node, frame: paneFrame)
+            pane.pane.updateJerkgramVisualState(glassEnabled: self.ghostBaseGlassEnabled, revision: self.jerkgramVisualRevision)
             pane.pane.update(size: paneFrame.size, topInset: effectiveTabsHeight + topInset, sideInset: sideInset, bottomInset: bottomInset, deviceMetrics: deviceMetrics, visibleHeight: visibleHeight, isScrollingLockedAtTop: isScrollingLockedAtTop, expandProgress: expansionFraction, navigationHeight: navigationHeight, presentationData: presentationData, synchronous: true, transition: paneTransition)
         }
         
@@ -1498,11 +1576,11 @@ private final class TabsExtractedContentSource: ContextExtractedContentSource {
     }
     
     func takeView() -> ContextControllerTakeViewInfo? {
-        return ContextControllerTakeViewInfo(containingItem: .node(self.sourceNode), contentAreaInScreenSpace: UIScreen.main.bounds)
+        return ContextControllerTakeViewInfo(containingItem: .node(self.sourceNode), contentAreaInScreenSpace: mainWindowScreenBounds)
     }
     
     func putBack() -> ContextControllerPutBackViewInfo? {
-        return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: UIScreen.main.bounds)
+        return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: mainWindowScreenBounds)
     }
 }
 
@@ -1519,7 +1597,7 @@ private final class TabsReferenceContentSource: ContextReferenceContentSource {
     func transitionInfo() -> ContextControllerReferenceViewInfo? {
         return ContextControllerReferenceViewInfo(
             referenceView: self.sourceView.contentView,
-            contentAreaInScreenSpace: UIScreen.main.bounds,
+            contentAreaInScreenSpace: mainWindowScreenBounds,
             actionsPosition: .bottom
         )
     }

@@ -189,6 +189,12 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
     
     private let context: AccountContext
     
+    /// An agent bot's chat shows its model under the title, and follows the composer's model chip.
+    private var agentSelectionPeerId: EnginePeer.Id?
+    private let agentSelectionDisposable = MetaDisposable()
+    private let jerkgramAppearanceDisposable = MetaDisposable()
+    private var jerkgramObservingAppearance = false
+    
     private var theme: PresentationTheme
     private var strings: PresentationStrings
     private var dateTimeFormat: PresentationDateTimeFormat
@@ -260,6 +266,7 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
     
     public var titleContent: ChatTitleContent? {
         didSet {
+            self.updateJerkgramAppearanceObservation()
             if let titleContent = self.titleContent {
                 let titleTheme = self.theme
                 
@@ -284,7 +291,7 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
                             }
                             isEnabled = false
                         } else {
-                            if let peer = peerView.peer {
+                            if let peer = self.context.jerkgramLocalAppearance.projectPeer(peerView.peer) {
                                 if let customTitle {
                                     segments = [.text(0, NSAttributedString(string: customTitle, font: titleFont, textColor: titleTheme.rootController.navigationBar.primaryTextColor))]
                                 } else if peerView.peerId == self.context.account.peerId {
@@ -506,7 +513,7 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
         if let titleContent = self.titleContent {
             switch titleContent {
             case let .peer(peerView, _, _, _, isScheduledMessages, _, _, _, _):
-                if let peer = peerView.peer {
+                if let peer = self.context.jerkgramLocalAppearance.projectPeer(peerView.peer) {
                     if peer.id == self.context.account.peerId || isScheduledMessages || peer.id.isRepliesOrVerificationCodes {
                         inputActivitiesAllowed = false
                     }
@@ -613,7 +620,7 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
                             } else if let customMessageCount = customMessageCount, customMessageCount != 0 {
                                 let string = NSAttributedString(string: self.strings.Conversation_Messages(Int32(customMessageCount)), font: subtitleFont, textColor: titleTheme.rootController.navigationBar.secondaryTextColor)
                                 state = .info(string, .generic)
-                            } else if let peer = peerView.peer {
+                            } else if let peer = self.context.jerkgramLocalAppearance.projectPeer(peerView.peer) {
                                 let servicePeer = isServicePeer(peer)
                                 if peer.id == self.context.account.peerId || isScheduledMessages || peer.id.isRepliesOrVerificationCodes {
                                     let string = NSAttributedString(string: "", font: subtitleFont, textColor: titleTheme.rootController.navigationBar.secondaryTextColor)
@@ -629,6 +636,11 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
                                         
                                         let string = NSAttributedString(string: statusText, font: subtitleFont, textColor: titleTheme.rootController.navigationBar.secondaryTextColor)
                                         state = .info(string, .generic)
+                                    } else if let _ = user.botInfo, isAgentBotPeer(appConfiguration: self.context.currentAppConfiguration.with({ $0 }), peerId: user.id) {
+                                        self.observeAgentSelection(peerId: user.id)
+                                        let statusText = AgentChatPlaceholderOptions.shared.selection(peerId: user.id).model.fullTitle
+                                        let string = NSAttributedString(string: statusText, font: subtitleFont, textColor: titleTheme.rootController.navigationBar.secondaryTextColor)
+                                        state = .info(string, .generic)
                                     } else if let _ = user.botInfo {
                                         let statusText: String
                                         if let subscriberCount = user.subscriberCount {
@@ -639,7 +651,7 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
                                         
                                         let string = NSAttributedString(string: statusText, font: subtitleFont, textColor: titleTheme.rootController.navigationBar.secondaryTextColor)
                                         state = .info(string, .generic)
-                                    } else if let peer = peerView.peer {
+                                    } else if let peer = self.context.jerkgramLocalAppearance.projectPeer(peerView.peer) {
                                         let timestamp = CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970
                                         let userPresence: TelegramUserPresence
                                         if let presence = peerView.peerPresences[peer.id] as? TelegramUserPresence {
@@ -757,6 +769,46 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
         } else {
             return false
         }
+    }
+    
+    deinit {
+        self.agentSelectionDisposable.dispose()
+        self.jerkgramAppearanceDisposable.dispose()
+    }
+
+    private func updateJerkgramAppearanceObservation() {
+        let needsAppearance: Bool
+        if case let .peer(peer, _, _, _, _, _, _, _, _)? = self.titleContent {
+            needsAppearance = peer.peerId == self.context.account.peerId
+        } else { needsAppearance = false }
+        guard needsAppearance != self.jerkgramObservingAppearance else { return }
+        self.jerkgramObservingAppearance = needsAppearance
+        guard needsAppearance else { self.jerkgramAppearanceDisposable.set(nil); return }
+        var seeded = false
+        self.jerkgramAppearanceDisposable.set((self.context.jerkgramLocalAppearance.updates
+        |> deliverOnMainQueue).start(next: { [weak self] _ in
+            guard seeded else { seeded = true; return }
+            guard let self else { return }
+            let content = self.titleContent
+            self.titleContent = content
+        }))
+    }
+    
+    private func observeAgentSelection(peerId: EnginePeer.Id) {
+        if self.agentSelectionPeerId == peerId {
+            return
+        }
+        self.agentSelectionPeerId = peerId
+        // The signal delivers the current value at once, inside the status update that subscribes; skip it.
+        var isFirst = true
+        self.agentSelectionDisposable.set((AgentChatPlaceholderOptions.shared.selectionSignal(peerId: peerId)
+        |> deliverOnMainQueue).startStrict(next: { [weak self] _ in
+            if isFirst {
+                isFirst = false
+                return
+            }
+            let _ = self?.updateStatus()
+        }))
     }
     
     public init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer) {
@@ -1025,13 +1077,18 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
         var titleFrame: CGRect
         
         var titleInsets: UIEdgeInsets = .zero
+        var inlineLeftIconWidth: CGFloat = 0.0
         if case .emojiStatus = self.titleVerifiedIcon, verifiedIconWidth > 0.0 {
-            titleInsets.left = verifiedIconWidth
+            if let image = self.titleLeftIconNode.image {
+                inlineLeftIconWidth = image.size.width + 3.0
+            }
+            titleInsets.left = verifiedIconWidth + inlineLeftIconWidth
         }
         
         var titleSize = self.titleTextNode.updateLayout(size: CGSize(width: size.width - leftIconWidth - credibilityIconWidth - verifiedIconWidth - statusIconWidth - rightIconWidth - titleSideInset * 2.0, height: size.height), insets: titleInsets, animated: titleTransition.isAnimated)
         titleSize.width += credibilityIconWidth
         titleSize.width += verifiedIconWidth
+        titleSize.width += inlineLeftIconWidth
         if statusIconWidth > 0.0 {
             titleSize.width += statusIconWidth
             if credibilityIconWidth > 0.0 {
@@ -1069,7 +1126,8 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
         }
         
         if let image = self.titleLeftIconNode.image {
-            titleTransition.updateFrame(node: self.titleLeftIconNode, frame: CGRect(origin: CGPoint(x: -image.size.width - 3.0 - UIScreenPixel, y: 4.0), size: image.size))
+            let leftIconX: CGFloat = inlineLeftIconWidth > 0.0 ? verifiedIconWidth : -image.size.width - 3.0 - UIScreenPixel
+            titleTransition.updateFrame(node: self.titleLeftIconNode, frame: CGRect(origin: CGPoint(x: leftIconX, y: 4.0), size: image.size))
         }
         
         var nextIconX: CGFloat = titleFrame.width

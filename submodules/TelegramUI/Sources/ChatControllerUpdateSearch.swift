@@ -11,6 +11,16 @@ extension ChatControllerImpl {
             return nil
         }
         
+        if interfaceState.historyFilter?.localSavedTagId != nil {
+            if interfaceState.search != nil {
+                return interfaceState.updatedHistoryFilter(nil).updatedDisplayHistoryFilterAsList(false)
+            }
+            self.searchState = nil
+            self.searching.set(false)
+            self.searchResultsCount.set(0)
+            self.searchDisposable?.set(nil)
+            return nil
+        }
         let limit: Int32 = 100
         
         var derivedSearchState: ChatSearchState?
@@ -37,8 +47,8 @@ extension ChatControllerImpl {
             }
             
             var reactions: [MessageReaction.Reaction]?
-            if !search.query.isEmpty, let historyFilter = interfaceState.historyFilter {
-                reactions = ReactionsMessageAttribute.reactionFromMessageTag(tag: historyFilter.customTag).flatMap {
+            if !search.query.isEmpty, let cloudTag = interfaceState.historyFilter?.customTag {
+                reactions = ReactionsMessageAttribute.reactionFromMessageTag(tag: cloudTag).flatMap {
                     [$0]
                 }
             }

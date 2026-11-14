@@ -59,11 +59,13 @@ final class JerkgramProfilePerformanceProbe {
     }
 
     func begin(_ stage: Stage) -> TimeInterval {
+        guard JerkgramPerformanceDiagnostics.shared.isRecording else { return 0 }
         self.samples[stage, default: Sample()].count += 1
         return ProcessInfo.processInfo.systemUptime
     }
 
     func end(_ stage: Stage, _ started: TimeInterval) {
+        guard started > 0 else { return }
         let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1000.0
         var sample = self.samples[stage] ?? Sample()
         sample.maxMs = max(sample.maxMs, elapsed)
@@ -76,6 +78,7 @@ final class JerkgramProfilePerformanceProbe {
     }
 
     func summary(_ boundary: String, sourceRetained: Bool, outputRetained: Bool) {
+        guard JerkgramPerformanceDiagnostics.shared.isRecording else { return }
         JerkgramPerformanceDiagnostics.shared.record("profile id=\(self.instance) output=\(self.outputIdentity) context=\(self.context) \(boundary) live=\(Self.liveInstances) created=\(Self.created) destroyed=\(Self.destroyed) sub=\(self.subscriptions) dispose=\(self.disposals) ready=\(self.ready) readyWallMs=\(Int(self.readyMaxWallMs)) ram=\(self.ramHits) requests=\(self.updateRequests) sourceSlot=\(sourceRetained) outputSlot=\(outputRetained)")
         let timings = Stage.allCases.map { stage -> String in
             let sample = self.samples[stage] ?? Sample()
@@ -205,6 +208,171 @@ private enum GhostBaseProfileBackgroundSource {
     case avatar(EnginePeer, TelegramMediaImageRepresentation, String, GhostBaseAnimatedMediaSource?)
     case placeholder(EnginePeer, UIColor, UIColor, String)
     case telegramTheme
+}
+
+// JG174 playback session begin
+// One native decoder/timeline; visible descendants only own secondary outputs.
+private final class JerkgramSettingsPlaybackSession {
+    private final class WeakLayer {
+        weak var value: AVSampleBufferDisplayLayer?
+        init(_ value: AVSampleBufferDisplayLayer) { self.value = value }
+    }
+    private weak var candidate: UniversalVideoNode?
+    private var retainedSource: UniversalVideoNode?
+    private var layers: [UUID: WeakLayer] = [:]
+    private var outputs: [UUID: Disposable] = [:]
+    private var active = UIApplication.shared.applicationState == .active
+    private var observers: [NSObjectProtocol] = []
+
+    init() {
+        for name in [UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
+            self.observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main, using: { [weak self] _ in
+                guard let self else { return }
+                self.active = name == UIApplication.didBecomeActiveNotification
+                self.reconcile()
+            }))
+        }
+    }
+
+    deinit {
+        for observer in self.observers { NotificationCenter.default.removeObserver(observer) }
+        JerkgramWave1Instrumentation.add("activeVideoOutputLeases", -self.layers.count)
+        self.detach()
+    }
+
+    func updateSource(_ source: UniversalVideoNode?) {
+        // A disappearing avatar briefly reports nil. A visible child still owns
+        // its original native player; only explicit invalidation may clear it.
+        guard let source else { return }
+        if self.candidate !== source {
+            // Strong successor local protects its native player during release.
+            let successor = source
+            self.detach()
+            self.candidate = successor
+        }
+        self.reconcile()
+    }
+
+    func invalidate() {
+        self.detach()
+        self.candidate = nil
+    }
+
+    func attach(_ layer: AVSampleBufferDisplayLayer) -> Disposable {
+        let id = UUID()
+        self.layers[id] = WeakLayer(layer)
+        JerkgramWave1Instrumentation.add("activeVideoOutputLeases")
+        self.reconcile()
+        return ActionDisposable { [weak self] in
+            guard let self else { return }
+            self.outputs.removeValue(forKey: id)?.dispose()
+            if self.layers.removeValue(forKey: id) != nil { JerkgramWave1Instrumentation.add("activeVideoOutputLeases", -1) }
+            self.reconcile()
+        }
+    }
+
+    private func detach(releaseSource: Bool = true) {
+        for output in self.outputs.values { output.dispose() }
+        self.outputs.removeAll()
+        self.retainedSource?.setCanPlaybackWithoutHierarchy(false)
+        if releaseSource { self.retainedSource = nil }
+    }
+
+    private func reconcile() {
+        let previousLayerCount = self.layers.count
+        self.layers = self.layers.filter { $0.value.value != nil }
+        JerkgramWave1Instrumentation.add("activeVideoOutputLeases", self.layers.count - previousLayerCount)
+        for id in Array(self.outputs.keys) where self.layers[id] == nil {
+            self.outputs.removeValue(forKey: id)?.dispose()
+        }
+        guard !self.layers.isEmpty, let source = self.candidate else {
+            self.detach()
+            return
+        }
+        // Keep the visible page's lease through app suspension so it can resume
+        // after its original avatar node has left the hierarchy. No decoding.
+        guard self.active else {
+            self.detach(releaseSource: false)
+            return
+        }
+        if self.retainedSource == nil { self.retainedSource = source }
+        if self.outputs.isEmpty {
+            source.setCanPlaybackWithoutHierarchy(true)
+            source.play()
+        }
+        for (id, layer) in self.layers where self.outputs[id] == nil {
+            if let layer = layer.value {
+                self.outputs[id] = source.registerSecondaryVideoLayer(layer)
+            }
+        }
+    }
+}
+// JG174 playback session end
+
+private final class JerkgramSettingsBackdropView: UIView {
+    let imageView = UIImageView()
+    let mirrorVideoView = GhostBaseProfileMirrorVideoView(frame: .zero)
+    let blurView = UIVisualEffectView(effect: nil)
+    let tintView = UIView()
+    private var playbackSession: JerkgramSettingsPlaybackSession?
+    private var playbackDisposable: Disposable?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        self.isUserInteractionEnabled = false
+        self.clipsToBounds = true
+        self.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.imageView.contentMode = .scaleAspectFill
+        self.imageView.clipsToBounds = true
+        self.addSubview(self.imageView)
+        self.addSubview(self.mirrorVideoView)
+        self.addSubview(self.blurView)
+        self.addSubview(self.tintView)
+    }
+
+    required init?(coder: NSCoder) { preconditionFailure("init(coder:) has not been implemented") }
+
+    deinit { self.playbackDisposable?.dispose() }
+
+    func setPlaybackSession(_ session: JerkgramSettingsPlaybackSession?) {
+        guard self.playbackSession !== session else { return }
+        // Register successor output before releasing predecessor. A shared native
+        // source therefore never loses its final lease during replacement.
+        let successor = self.window != nil ? session?.attach(self.mirrorVideoView.videoLayer) : nil
+        let predecessor = self.playbackDisposable
+        self.playbackSession = session
+        self.playbackDisposable = successor
+        predecessor?.dispose()
+        if session == nil { self.mirrorVideoView.videoLayer.flushAndRemoveImage() }
+        self.updatePlaybackVisibility()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        self.updatePlaybackVisibility()
+    }
+
+    private func updatePlaybackVisibility() {
+        if self.window != nil, let session = self.playbackSession {
+            if self.playbackDisposable == nil {
+                self.playbackDisposable = session.attach(self.mirrorVideoView.videoLayer)
+            }
+            self.mirrorVideoView.isHidden = false
+        } else {
+            self.playbackDisposable?.dispose()
+            self.playbackDisposable = nil
+            self.mirrorVideoView.isHidden = true
+            self.mirrorVideoView.videoLayer.flushAndRemoveImage()
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        self.imageView.frame = self.bounds
+        self.mirrorVideoView.frame = self.bounds
+        self.blurView.frame = self.bounds
+        self.tintView.frame = self.bounds
+    }
 }
 
 final class GhostBaseProfileBackgroundView: UIView {
@@ -502,8 +670,52 @@ final class GhostBaseProfileBackgroundView: UIView {
 
     // Exactly one reusable image view, one persistent visual-effect view and
     // one independent tint/dimming view. They are created once in init().
+    private let settingsBackdrops = NSHashTable<JerkgramSettingsBackdropView>.weakObjects()
+    private weak var settingsPlaybackSession: JerkgramSettingsPlaybackSession?
+
+    func makeSettingsBackdropView(existing: UIView? = nil) -> UIView? {
+        // Register the retained material before asynchronous source readiness.
+        // Source completion updates this weak-set member in place.
+        guard !self.bounds.isEmpty else { return nil }
+        let backdrop = (existing as? JerkgramSettingsBackdropView) ?? JerkgramSettingsBackdropView(frame: self.bounds)
+        self.settingsBackdrops.add(backdrop)
+        self.updateSettingsBackdrop(backdrop)
+        return backdrop
+    }
+
+    private func updateSettingsBackdrop(_ backdrop: JerkgramSettingsBackdropView) {
+        backdrop.backgroundColor = self.backgroundColor
+        backdrop.imageView.image = self.imageView.image
+        backdrop.blurView.effect = self.blurView.effect
+        backdrop.blurView.alpha = self.blurView.alpha
+        backdrop.tintView.backgroundColor = self.tintView.backgroundColor
+        backdrop.tintView.alpha = self.tintView.alpha
+        let session: JerkgramSettingsPlaybackSession?
+        if self.settings.animatedBackgroundEnabled, GhostBaseGlassStyle.allowsVideo, self.desiredVideoIdentity != nil {
+            session = self.settingsPlaybackSession ?? JerkgramSettingsPlaybackSession()
+            self.settingsPlaybackSession = session
+            session?.updateSource(self.lastAvatarVideoNode)
+        } else {
+            session = nil
+        }
+        backdrop.setPlaybackSession(session)
+    }
+
+    private func updateSettingsBackdrops() {
+        for backdrop in self.settingsBackdrops.allObjects { self.updateSettingsBackdrop(backdrop) }
+    }
+
     private let imageView: UIImageView
     private let blurView: UIVisualEffectView
+    private var lastMaterialStyle: UIBlurEffect.Style?
+    private var preferredMaterialStyle: UIBlurEffect.Style?
+    private func reconcileMaterial() {
+        let admittedStyle = GhostBaseGlassStyle.allowsMaterial && !self.settings.reducedBlur ? self.preferredMaterialStyle : nil
+        guard self.lastMaterialStyle != admittedStyle else { return }
+        self.lastMaterialStyle = admittedStyle
+        self.blurView.effect = admittedStyle.map { UIBlurEffect(style: $0) }
+        if admittedStyle != nil { JerkgramWave1Instrumentation.add("materialEffectCreations") }
+    }
     private let tintView: UIView
 
     // One native Telegram decoder/timeline owns playback.
@@ -522,6 +734,7 @@ final class GhostBaseProfileBackgroundView: UIView {
     private var isControllerVisible = false
     private var isApplicationActive = UIApplication.shared.applicationState == .active
     private var lifecycleObservers: [NSObjectProtocol] = []
+    private var replayVisibleSettingsSource: (() -> Void)?
     private var currentStateKey: GhostBaseProfileBackgroundStateKey?
     private var currentLoadKey: String?
 
@@ -557,11 +770,15 @@ final class GhostBaseProfileBackgroundView: UIView {
         self.visualSettingsObserver =
             NotificationCenter.default.addObserver(
                 forName:
-                    Self.visualSettingsDidChange,
+                    GhostBaseGlassStyle.settingsStyleDidChange,
                 object: nil,
                 queue: .main,
                 using: { [weak self] _ in
-                    self?.refreshLiveSettings()
+                    guard let self else { return }
+                    self.currentStateKey = nil
+                    // Updating retained descendants is cheap; root layout remains
+                    // deferred while hidden, through refreshLiveSettings's gate.
+                    self.refreshLiveSettings()
                 }
             )
         for name in [UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
@@ -570,6 +787,7 @@ final class GhostBaseProfileBackgroundView: UIView {
                 using: { [weak self] _ in
                     guard let self else { return }
                     self.isApplicationActive = name == UIApplication.didBecomeActiveNotification
+                    GhostBaseGlassStyle.invalidateVisualEnvironment()
                     self.setSceneActive(self.isControllerVisible)
                 }
             ))
@@ -639,6 +857,7 @@ final class GhostBaseProfileBackgroundView: UIView {
 
         self.imageView.image = nil
         self.blurView.effect = nil
+        self.lastMaterialStyle = nil
 
         self.tintView.backgroundColor =
             .clear
@@ -649,6 +868,7 @@ final class GhostBaseProfileBackgroundView: UIView {
             false
 
         self.isHidden = true
+        self.updateSettingsBackdrops()
     }
 
     func setSceneActive(_ active: Bool) {
@@ -658,6 +878,7 @@ final class GhostBaseProfileBackgroundView: UIView {
             return
         }
         self.isSceneActive = active
+        if active { self.refreshLiveSettings() }
         self.currentStateKey = nil
         self.currentLoadKey = nil
         if active {
@@ -684,6 +905,10 @@ final class GhostBaseProfileBackgroundView: UIView {
         }
 
         self.settings = settings
+        guard GhostBaseGlassStyle.allowsTransparentSurfaces else {
+            self.tearDownForDisabledSettings()
+            return
+        }
         self.isHidden = false
 
         if !settings
@@ -693,7 +918,15 @@ final class GhostBaseProfileBackgroundView: UIView {
         }
 
         self.currentStateKey = nil
+        // Admission can change while the root is hidden under a Settings child.
+        self.reconcileMaterial()
+        self.updateSettingsBackdrops()
         guard self.isSceneActive else {
+            // A visible descendant can refresh its source without laying out the
+            // hidden root. No source work is admitted for a fully hidden stack.
+            if self.settingsBackdrops.allObjects.contains(where: { $0.window != nil }) {
+                self.replayVisibleSettingsSource?()
+            }
             return
         }
         self.requestSceneUpdate()
@@ -727,13 +960,17 @@ final class GhostBaseProfileBackgroundView: UIView {
         cachedData: EngineCachedPeerData?,
         presentationData: PresentationData,
         isSettings: Bool,
-        avatarItem: PeerInfoAvatarListItem?
+        avatarItem: PeerInfoAvatarListItem?,
+        allowInactiveSettingsExport: Bool = false
     ) {
         self.performanceProbe.context = isSettings ? "settings" : "peer"
         let timing = self.beginPerformanceSpan(.background)
         defer { self.endPerformanceSpan(.background, timing) }
-        guard self.isSceneActive else {
+        guard self.isSceneActive || (isSettings && allowInactiveSettingsExport) else {
             return
+        }
+        self.replayVisibleSettingsSource = { [weak self] in
+            self?.update(peer: peer, cachedData: cachedData, presentationData: presentationData, isSettings: isSettings, avatarItem: avatarItem, allowInactiveSettingsExport: true)
         }
         let preferencesTiming = self.beginPerformanceSpan(.bgPreferences)
         let loadedSettings = GhostBaseProfileBlurSettings.loadEnabled()
@@ -744,6 +981,10 @@ final class GhostBaseProfileBackgroundView: UIView {
         }
 
         self.settings = liveSettings
+        guard GhostBaseGlassStyle.allowsTransparentSurfaces else {
+            self.tearDownForDisabledSettings()
+            return
+        }
         self.isHidden = false
 
         let resolveTiming = self.beginPerformanceSpan(.bgResolve)
@@ -1111,6 +1352,9 @@ final class GhostBaseProfileBackgroundView: UIView {
     }
 
     private func clearAnimatedMedia() {
+        self.settingsPlaybackSession?.invalidate()
+        self.settingsPlaybackSession = nil
+        for backdrop in self.settingsBackdrops.allObjects { backdrop.setPlaybackSession(nil) }
         self.secondaryVideoDisposable?.dispose()
         self.secondaryVideoDisposable = nil
         self.lastAvatarVideoNode = nil
@@ -1123,6 +1367,9 @@ final class GhostBaseProfileBackgroundView: UIView {
         let updatedIdentity = source?.identity
 
         if self.desiredVideoIdentity != updatedIdentity {
+            self.settingsPlaybackSession?.invalidate()
+            self.settingsPlaybackSession = nil
+            for backdrop in self.settingsBackdrops.allObjects { backdrop.setPlaybackSession(nil) }
             self.secondaryVideoDisposable?.dispose()
             self.secondaryVideoDisposable = nil
             self.lastAvatarVideoNode = nil
@@ -1137,6 +1384,7 @@ final class GhostBaseProfileBackgroundView: UIView {
 
     func refreshAnimatedVideoOwner(_ videoNode: UniversalVideoNode?) {
         self.lastAvatarVideoNode = videoNode
+        self.settingsPlaybackSession?.updateSource(videoNode)
 
         guard
             self.isSceneActive,
@@ -1165,6 +1413,7 @@ final class GhostBaseProfileBackgroundView: UIView {
         stateKey: GhostBaseProfileBackgroundStateKey,
         presentationData: PresentationData
     ) {
+        defer { self.updateSettingsBackdrops() }
         self.setSourceSubscription(nil)
         self.currentLoadKey = nil
 
@@ -1177,7 +1426,8 @@ final class GhostBaseProfileBackgroundView: UIView {
         let effectStyle: UIBlurEffect.Style = isDark
             ? .systemUltraThinMaterialDark
             : .systemUltraThinMaterialLight
-        self.blurView.effect = UIBlurEffect(style: effectStyle)
+        self.preferredMaterialStyle = effectStyle
+        self.reconcileMaterial()
         // Reset for every source; only static avatars lower intensity.
         self.blurView.alpha = 1.0
 
@@ -1476,6 +1726,7 @@ final class GhostBaseProfileBackgroundView: UIView {
         isDark: Bool,
         reduced: Bool
     ) {
+        defer { self.updateSettingsBackdrops() }
         //
         // The fullscreen background stays visible, but the single existing
         // tint layer now also provides adaptive contrast. This is deliberately

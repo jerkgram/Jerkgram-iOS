@@ -1,8 +1,298 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
+
+// Account policy is hydrated by the canonical GhostBase settings owner on activation.
+// Kept here because this source owner is already present in TelegramCore's build inputs.
+public enum JerkgramTranslationSettings {
+    public static let preferenceKey = "jerkgram.EnhancedTranslation"
+    public static let policyVersion: Int32 = 2
+    private static let masterObserver: NSObjectProtocol = NotificationCenter.default.addObserver(forName: JerkgramLocalPremiumPolicy.changed, object: nil, queue: nil) { _ in
+        lock.lock()
+        let accounts = Array(values.keys)
+        for account in accounts {
+            epoch &+= 1
+            values[account] = (values[account]!.0, epoch)
+            JerkgramTranslationAdmission.shared.cancel(accountPeerId: account)
+        }
+        lock.unlock()
+        DispatchQueue.main.async {
+            for account in accounts { NotificationCenter.default.post(name: Notification.Name("JerkgramTranslationPolicyChanged"), object: account) }
+        }
+    }
+    private static let lock = NSLock()
+    private static var values: [Int64: (Bool, UInt64)] = [:]
+    private static var order: [Int64] = []
+    private static var epoch: UInt64 = 1
+    public static func scopedKey(accountPeerId: Int64) -> String { return "jerkgram.account.\(accountPeerId).setting.\(preferenceKey)" }
+    public static func enabled(accountPeerId: Int64) -> Bool {
+        _ = masterObserver
+        lock.lock(); defer { lock.unlock() }
+        return JerkgramLocalPremiumPolicy.effective(value(accountPeerId: accountPeerId).0)
+    }
+    public static func generation(accountPeerId: Int64) -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return value(accountPeerId: accountPeerId).1
+    }
+    // A bounded cache miss reads the canonical scoped value once. Rendering a
+    // known account never performs settings I/O; eviction cannot turn OFF into ON.
+    private static func value(accountPeerId: Int64) -> (Bool, UInt64) {
+        if let current = values[accountPeerId] { return current }
+        let enabled = UserDefaults.standard.object(forKey: scopedKey(accountPeerId: accountPeerId)) as? Bool ?? true
+        epoch &+= 1
+        values[accountPeerId] = (enabled, epoch)
+        order.append(accountPeerId)
+        trim()
+        return (enabled, epoch)
+    }
+    private static func trim() {
+        while order.count > 16 {
+            let evicted = order.removeFirst()
+            values.removeValue(forKey: evicted)
+            JerkgramTranslationAdmission.shared.cancel(accountPeerId: evicted)
+        }
+    }
+    public static func update(accountPeerId: Int64, enabled: Bool) {
+        lock.lock()
+        if value(accountPeerId: accountPeerId).0 == enabled { lock.unlock(); return }
+        epoch &+= 1
+        values[accountPeerId] = (enabled, epoch)
+        order.removeAll(where: { $0 == accountPeerId }); order.append(accountPeerId)
+        JerkgramTranslationAdmission.shared.cancel(accountPeerId: accountPeerId)
+        trim()
+        lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Notification.Name("JerkgramTranslationPolicyChanged"), object: accountPeerId)
+        }
+    }
+}
+
+private func jerkgramPolicyIsCurrent(account: Account, generation: UInt64) -> Bool {
+    return JerkgramTranslationSettings.enabled(accountPeerId: account.peerId.toInt64()) && JerkgramTranslationSettings.generation(accountPeerId: account.peerId.toInt64()) == generation
+}
+
+private typealias JerkgramTranslatedTexts = [(String, [MessageTextEntity])]
+// MessageTextEntity is Codable in the pinned Telegram owner. Encode the full
+// entity graph so TextUrl/Pre/custom-emoji sticker-pack string payloads all count;
+// a fixed per-entity estimate alone cannot bound retained source or cached output.
+private func jerkgramTranslationPayloadBytes(_ texts: JerkgramTranslatedTexts) -> Int? {
+    var bytes = 0
+    for text in texts {
+        guard let encodedEntities = try? JSONEncoder().encode(text.1) else { return nil }
+        let (textBytes, textOverflow) = text.0.utf8.count.addingReportingOverflow(encodedEntities.count)
+        let (entityOverhead, entityOverflow) = text.1.count.multipliedReportingOverflow(by: 64)
+        let (itemBytes, itemOverflow) = textBytes.addingReportingOverflow(entityOverhead)
+        let (total, totalOverflow) = bytes.addingReportingOverflow(itemBytes)
+        guard !textOverflow, !entityOverflow, !itemOverflow, !totalOverflow else { return nil }
+        bytes = total
+    }
+    return bytes
+}
+
+private func jerkgramValidTranslatedEntities(_ text: String, _ entities: [MessageTextEntity]) -> Bool {
+    let utf16 = text as NSString
+    let count = utf16.length
+    func isBoundary(_ offset: Int) -> Bool {
+        if offset == 0 || offset == count { return true }
+        // Foundation range conversion can accept a UTF16-surrogate interior.
+        // Scalar boundaries are allowed even inside a combining grapheme.
+        return !((0xD800 ... 0xDBFF).contains(utf16.character(at: offset - 1)) && (0xDC00 ... 0xDFFF).contains(utf16.character(at: offset)))
+    }
+    return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && entities.allSatisfy {
+        $0.range.lowerBound >= 0 && $0.range.upperBound <= count && $0.range.lowerBound < $0.range.upperBound && isBoundary($0.range.lowerBound) && isBoundary($0.range.upperBound)
+    }
+}
+
+// Derive new ranges from translated output. Preserve hidden link destinations
+// only when their original label survives exactly once; otherwise fail explicitly.
+private func jerkgramLocalTranslatedEntities(source: (String, [MessageTextEntity]), translated: String) -> [MessageTextEntity]? {
+    let nsText = translated as NSString
+    let fullRange = NSRange(location: 0, length: nsText.length)
+    var entities: [MessageTextEntity] = []
+    if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+        for match in detector.matches(in: translated, range: fullRange) {
+            entities.append(MessageTextEntity(range: match.range.location ..< NSMaxRange(match.range), type: .Url))
+        }
+    }
+    if let mentions = try? NSRegularExpression(pattern: "(?<![\\p{L}\\p{N}_])@[A-Za-z][A-Za-z0-9_]{4,31}\\b") {
+        for match in mentions.matches(in: translated, range: fullRange) {
+            let range = match.range.location ..< NSMaxRange(match.range)
+            if !entities.contains(where: { $0.range.overlaps(range) }) { entities.append(MessageTextEntity(range: range, type: .Mention)) }
+        }
+    }
+    for entity in source.1 {
+        if case let .TextUrl(url) = entity.type {
+            guard let originalRange = Range(NSRange(location: entity.range.lowerBound, length: entity.range.count), in: source.0) else { return nil }
+            let label = String(source.0[originalRange])
+            let match = nsText.range(of: label)
+            guard match.location != NSNotFound, match.length > 0 else { return nil }
+            let remainder = NSRange(location: NSMaxRange(match), length: nsText.length - NSMaxRange(match))
+            guard nsText.range(of: label, range: remainder).location == NSNotFound else { return nil }
+            let range = match.location ..< NSMaxRange(match)
+            entities.removeAll(where: { $0.range.overlaps(range) })
+            entities.append(MessageTextEntity(range: range, type: .TextUrl(url: url)))
+        }
+    }
+    entities.sort { $0.range.lowerBound < $1.range.lowerBound }
+    return jerkgramValidTranslatedEntities(translated, entities) ? entities : nil
+}
+
+// All enhanced cloud and fallback work shares this admission, including manual requests.
+// State and physical request lifetime are owned by one serial queue.
+private final class JerkgramTranslationAdmission {
+    static let shared = JerkgramTranslationAdmission()
+    private final class Job {
+        let key: String; let count: Int; let bytes: Int
+        let start: () -> Signal<JerkgramTranslatedTexts, TranslationError>
+        var observers: [UUID: (JerkgramTranslatedTexts?, TranslationError?) -> Void] = [:]
+        let transport = MetaDisposable()
+        var running = false
+        var timer: DispatchWorkItem?
+        init(key: String, count: Int, bytes: Int, start: @escaping () -> Signal<JerkgramTranslatedTexts, TranslationError>) { self.key = key; self.count = count; self.bytes = bytes; self.start = start }
+    }
+    private let queue = DispatchQueue(label: "org.jerkgram.translation.admission")
+    private var jobs: [String: Job] = [:]
+    private var waiting: [String] = []
+    private var active = 0
+    private var items = 0
+    private var bytes = 0
+    private var cache: [String: (JerkgramTranslatedTexts, Int)] = [:]
+    private var lru: [String] = []
+    private var cacheBytes = 0
+    func cancel(accountPeerId: Int64) {
+        queue.async {
+            let prefix = "\(accountPeerId):"
+            let stale = self.jobs.values.filter { $0.key.hasPrefix(prefix) }
+            for job in stale { self.finish(job, value: nil, error: .generic) }
+            for key in self.lru.filter({ $0.hasPrefix(prefix) }) {
+                if let old = self.cache.removeValue(forKey: key) { self.cacheBytes -= old.1 }
+            }
+            self.lru.removeAll(where: { $0.hasPrefix(prefix) })
+        }
+    }
+    func request(key: String, count: Int, bytes: Int, start: @escaping () -> Signal<JerkgramTranslatedTexts, TranslationError>) -> Signal<JerkgramTranslatedTexts, TranslationError> {
+        return Signal { [self] subscriber in
+            let token = UUID()
+            self.queue.async {
+                if let cached = self.cache[key] {
+                    self.lru.removeAll(where: { $0 == key }); self.lru.append(key)
+                    subscriber.putNext(cached.0); subscriber.putCompletion(); return
+                }
+                let observer: (JerkgramTranslatedTexts?, TranslationError?) -> Void = { value, error in
+                    if let error { subscriber.putError(error) } else if let value { subscriber.putNext(value); subscriber.putCompletion() }
+                }
+                if let job = self.jobs[key] {
+                    guard job.observers.count < 64 else { subscriber.putError(.limitExceeded); return }
+                    job.observers[token] = observer; return
+                }
+                guard count > 0, count <= 16, bytes <= 16 * 1024, self.items + count <= 64, self.bytes + bytes <= 128 * 1024 else { subscriber.putError(.limitExceeded); return }
+                let job = Job(key: key, count: count, bytes: bytes, start: start)
+                job.observers[token] = observer
+                self.jobs[key] = job; self.waiting.append(key); self.items += count; self.bytes += bytes
+                let timer = DispatchWorkItem { [weak self, weak job] in
+                    guard let self, let job else { return }
+                    self.finish(job, value: nil, error: .generic)
+                }
+                job.timer = timer; self.queue.asyncAfter(deadline: .now() + 30.0, execute: timer)
+                self.pump()
+            }
+            return ActionDisposable {
+                self.queue.async {
+                    guard let job = self.jobs[key] else { return }
+                    job.observers.removeValue(forKey: token)
+                    if job.observers.isEmpty { self.finish(job, value: nil, error: nil) }
+                }
+            }
+        }
+    }
+    private func pump() {
+        while active < 2 && !waiting.isEmpty {
+            let key = waiting.removeFirst()
+            guard let job = jobs[key] else { continue }
+            job.running = true; active += 1
+            job.transport.set(job.start().start(next: { value in
+                self.queue.async { self.finish(job, value: value, error: nil) }
+            }, error: { error in
+                self.queue.async { self.finish(job, value: nil, error: error) }
+            }, completed: {
+                self.queue.async { self.finish(job, value: nil, error: .generic) }
+            }))
+        }
+    }
+    private func finish(_ job: Job, value: JerkgramTranslatedTexts?, error: TranslationError?) {
+        guard jobs[job.key] === job else { return }
+        jobs.removeValue(forKey: job.key); waiting.removeAll(where: { $0 == job.key })
+        job.timer?.cancel(); job.timer = nil
+        job.transport.dispose()
+        items -= job.count; bytes -= job.bytes
+        if job.running { active -= 1 }
+        if let value {
+            if let size = jerkgramTranslationPayloadBytes(value), size <= 1024 * 1024 {
+                cache[job.key] = (value, size); cacheBytes += size; lru.append(job.key)
+                while lru.count > 256 || cacheBytes > 1024 * 1024 {
+                    if let old = cache.removeValue(forKey: lru.removeFirst()) { cacheBytes -= old.1 }
+                }
+            }
+        }
+        for observer in job.observers.values { observer(value, error) }
+        job.observers.removeAll(); pump()
+    }
+}
+
+private func jerkgramEnhancedTexts(account: Account, texts: JerkgramTranslatedTexts, fromLang: String?, toLang: String, allowLocalDownloads: Bool, localOnly: Bool) -> Signal<JerkgramTranslatedTexts, TranslationError> {
+    let generation = JerkgramTranslationSettings.generation(accountPeerId: account.peerId.toInt64())
+    guard jerkgramPolicyIsCurrent(account: account, generation: generation) else { return .fail(.generic) }
+    guard !texts.isEmpty, texts.count <= 16 else { return .fail(.textTooLong) }
+    guard texts.allSatisfy({ jerkgramValidTranslatedEntities($0.0, $0.1) }) else { return .fail(.textIsEmpty) }
+    guard let bytes = jerkgramTranslationPayloadBytes(texts), bytes <= 16 * 1024 else { return .fail(.textTooLong) }
+    let encoder = PostboxEncoder()
+    for (index, text) in texts.enumerated() { encoder.encodeString(text.0, forKey: "t\(index)"); encoder.encodeObjectArray(text.1, forKey: "e\(index)") }
+    let digest = sha256Digest(encoder.makeData()).map { String(format: "%02x", $0) }.joined()
+    let key = "\(account.peerId.toInt64()):\(generation):\(JerkgramTranslationSettings.policyVersion):\(toLang):\(fromLang ?? ""):\(localOnly):\(allowLocalDownloads):\(digest)"
+    let local: () -> Signal<JerkgramTranslatedTexts, TranslationError> = {
+        guard jerkgramPolicyIsCurrent(account: account, generation: generation) else { return .fail(.generic) }
+        guard let service = engineExperimentalInternalTranslationService else { return .fail(.generic) }
+        var mapped: [AnyHashable: String] = [:]
+        for (index, text) in texts.enumerated() { mapped[AnyHashable(index)] = text.0 }
+        // Existing explicit manual action owns model-download consent.
+        // Automatic fallback detects this message's language rather than using
+        // chat-majority prediction, and always passes allowDownloads: false.
+        return service.translate(texts: mapped, fromLang: allowLocalDownloads ? (fromLang ?? "") : "", toLang: toLang, allowDownloads: allowLocalDownloads)
+        |> castError(TranslationError.self)
+        |> mapToSignal { result -> Signal<JerkgramTranslatedTexts, TranslationError> in
+            guard let result, result.count == texts.count else { return .fail(.generic) }
+            var values: JerkgramTranslatedTexts = []
+            for index in texts.indices {
+                guard let text = result[AnyHashable(index)], let entities = jerkgramLocalTranslatedEntities(source: texts[index], translated: text) else { return .fail(.generic) }
+                values.append((text, entities))
+            }
+            return .single(values)
+        }
+    }
+    return JerkgramTranslationAdmission.shared.request(key: key, count: texts.count, bytes: bytes, start: {
+        guard jerkgramPolicyIsCurrent(account: account, generation: generation) else { return .fail(.generic) }
+        if localOnly { return local() }
+        return _internal_translateTexts(network: account.network, texts: texts, toLang: toLang)
+        |> mapToSignal { results -> Signal<JerkgramTranslatedTexts, TranslationError> in
+            guard results.count == texts.count, results.allSatisfy({ jerkgramValidTranslatedEntities($0.0, $0.1) }) else { return .fail(.generic) }
+            return .single(results)
+        }
+        |> `catch` { error -> Signal<JerkgramTranslatedTexts, TranslationError> in
+            switch error { case .generic, .tryAlternative: return local(); default: return .fail(error) }
+        }
+    })
+    |> mapToSignal { results -> Signal<JerkgramTranslatedTexts, TranslationError> in
+        guard jerkgramPolicyIsCurrent(account: account, generation: generation) else { return .fail(.generic) }
+        return .single(results)
+    }
+}
+
+func _internal_jerkgramEnhancedTranslate(account: Account, text: String, entities: [MessageTextEntity], fromLang: String?, toLang: String, allowLocalDownloads: Bool, localOnly: Bool) -> Signal<(String, [MessageTextEntity])?, TranslationError> {
+    return jerkgramEnhancedTexts(account: account, texts: [(text, entities)], fromLang: fromLang, toLang: toLang, allowLocalDownloads: allowLocalDownloads, localOnly: localOnly)
+    |> map { $0.first }
+}
 
 public enum ComposedRichMessage: Equatable {
     /// Structured content → a rich message (`RichTextMessageAttribute(instantPage:)`, sent with `text: ""`).
@@ -146,7 +436,8 @@ func _internal_composeRichMessageWithAI(account: Account, instantPage: InstantPa
     var inputRichMessage: Api.InputRichMessage?
     if let instantPage {
         flags |= (1 << 4)
-        inputRichMessage = RichTextMessageAttribute(instantPage: instantPage, fullInstantPage: nil).apiInputRichMessage()
+        // No `users`: this page is rewritten and handed back, not sent; the send that follows lists them.
+        inputRichMessage = RichTextMessageAttribute(instantPage: instantPage, fullInstantPage: nil).apiInputRichMessage(users: [])
     }
 
     return account.network.request(Api.functions.messages.composeRichMessageWithAI(flags: flags, text: inputRichMessage, translateToLang: translateToLang, tone: changeTone))
@@ -216,10 +507,10 @@ func _internal_translateTexts(network: Network, texts: [(String, [MessageTextEnt
     }
 }
 
-func _internal_translateMessages(account: Account, messageIds: [EngineMessage.Id], fromLang: String?, toLang: String, enableLocalIfPossible: Bool, tone: TranslationTone = .neutral) -> Signal<Never, TranslationError> {
+func _internal_translateMessages(account: Account, messageIds: [EngineMessage.Id], fromLang: String?, toLang: String, enableLocalIfPossible: Bool, enhanced: Bool = false, tone: TranslationTone = .neutral) -> Signal<Never, TranslationError> {
     var signals: [Signal<Void, TranslationError>] = []
     for (peerId, messageIds) in messagesIdsGroupedByPeerId(messageIds) {
-        signals.append(_internal_translateMessagesByPeerId(account: account, peerId: peerId, messageIds: messageIds, fromLang: fromLang, toLang: toLang, enableLocalIfPossible: enableLocalIfPossible, tone: tone))
+        signals.append(_internal_translateMessagesByPeerId(account: account, peerId: peerId, messageIds: messageIds, fromLang: fromLang, toLang: toLang, enableLocalIfPossible: enableLocalIfPossible, enhanced: enhanced, tone: tone))
     }
     return combineLatest(signals)
     |> ignoreValues
@@ -227,6 +518,14 @@ func _internal_translateMessages(account: Account, messageIds: [EngineMessage.Id
 
 public protocol ExperimentalInternalTranslationService: AnyObject {
     func translate(texts: [AnyHashable: String], fromLang: String, toLang: String) -> Signal<[AnyHashable: String]?, NoError>
+    func translate(texts: [AnyHashable: String], fromLang: String, toLang: String, allowDownloads: Bool) -> Signal<[AnyHashable: String]?, NoError>
+}
+
+public extension ExperimentalInternalTranslationService {
+    func translate(texts: [AnyHashable: String], fromLang: String, toLang: String, allowDownloads: Bool) -> Signal<[AnyHashable: String]?, NoError> {
+        // Existing conformers without explicit download support stay installed-only.
+        return self.translate(texts: texts, fromLang: fromLang, toLang: toLang)
+    }
 }
 
 public var engineExperimentalInternalTranslationService: ExperimentalInternalTranslationService?
@@ -280,12 +579,114 @@ func _internal_translateRichMessages(account: Account, inputPeer: Api.InputPeer,
     }
 }
 
-private func _internal_translateMessagesByPeerId(account: Account, peerId: EnginePeer.Id, messageIds: [EngineMessage.Id], fromLang: String?, toLang: String, enableLocalIfPossible: Bool, tone: TranslationTone = .neutral) -> Signal<Void, TranslationError> {
+// JG174 source fingerprint begin
+// Content-only identity; poll vote counters and unrelated message statistics do
+// not invalidate a translation. The same key is checked after edits and reloads.
+public func jerkgramTranslationSourceFingerprint(_ message: Message) -> String {
+    let encoder = PostboxEncoder()
+    encoder.encodeString(message.text, forKey: "text")
+    encoder.encodeObjectArray(message.textEntitiesAttribute?.entities ?? [], forKey: "entities")
+    encoder.encodeBool(message.attributes.contains(where: { $0 is RichTextMessageAttribute }), forKey: "rich")
+    if let poll = message.media.first(where: { $0 is TelegramMediaPoll }) as? TelegramMediaPoll {
+        encoder.encodeString(poll.text, forKey: "poll")
+        encoder.encodeObjectArray(poll.textEntities, forKey: "pollEntities")
+        encoder.encodeObjectArray(poll.options, forKey: "options")
+        if let solution = poll.results.solution {
+            encoder.encodeString(solution.text, forKey: "solution")
+            encoder.encodeObjectArray(solution.entities, forKey: "solutionEntities")
+        }
+    }
+    if let audio = message.attributes.first(where: { $0 is AudioTranscriptionMessageAttribute }) as? AudioTranscriptionMessageAttribute {
+        encoder.encodeString(audio.text, forKey: "audio")
+        encoder.encodeBool(audio.isPending, forKey: "pending")
+    }
+    encoder.encodeBool((message.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted ?? false, forKey: "deleted")
+    return "source-v2:" + sha256Digest(encoder.makeData()).map { String(format: "%02x", $0) }.joined()
+}
+
+public func jerkgramLocalTranslationIsCurrent(_ translation: TranslationMessageAttribute, message: Message, toLang: String, accountPeerId: Int64? = nil) -> Bool {
+    return translation.toLang == toLang && !translation.jerkgramUnavailable && translation.jerkgramSourceFingerprint != nil && translation.isValidForMessage(message, accountPeerId: accountPeerId)
+}
+public func jerkgramLocalTranslationUnavailable(_ message: Message, toLang: String?, accountPeerId: Int64? = nil) -> Bool {
+    guard let toLang,
+          let translation = message.attributes.first(where: { $0 is TranslationMessageAttribute }) as? TranslationMessageAttribute else { return false }
+    return translation.jerkgramUnavailable && translation.toLang == toLang && translation.isValidForMessage(message, accountPeerId: accountPeerId)
+}
+// JG174 source fingerprint end
+
+private func jerkgramEnhancedMessageTexts(_ message: Message) -> JerkgramTranslatedTexts? {
+    if message.attributes.contains(where: { $0 is RichTextMessageAttribute }) { return nil }
+    if let poll = message.media.first(where: { $0 is TelegramMediaPoll }) as? TelegramMediaPoll {
+        var texts: JerkgramTranslatedTexts = [(poll.text, poll.textEntities)] + poll.options.map { ($0.text, $0.entities) }
+        if let solution = poll.results.solution { texts.append((solution.text, solution.entities)) }
+        return texts
+    }
+    if let audio = message.attributes.first(where: { $0 is AudioTranscriptionMessageAttribute }) as? AudioTranscriptionMessageAttribute, !audio.isPending, !audio.text.isEmpty {
+        guard message.text.isEmpty else { return nil }
+        return [(audio.text, [])]
+    }
+    guard !message.text.isEmpty else { return nil }
+    return [(message.text, message.textEntitiesAttribute?.entities ?? [])]
+}
+
+public func jerkgramTranslationSourceMatches(_ original: Message, _ current: Message) -> Bool {
+    if original === current { return true }
+    guard original.id == current.id, original.threadId == current.threadId else { return false }
+    return jerkgramTranslationSourceFingerprint(original) == jerkgramTranslationSourceFingerprint(current)
+}
+
+private func jerkgramTranslateEnhancedMessages(account: Account, messages: [Message], fromLang: String?, toLang: String, localOnly: Bool) -> Signal<Void, TranslationError> {
+    guard messages.count <= 64 else { return .fail(.textTooLong) }
+    let generation = JerkgramTranslationSettings.generation(accountPeerId: account.peerId.toInt64())
+    let signals: [Signal<Bool, NoError>] = messages.map { original in
+        let cancelled = Atomic(value: false)
+        let request: Signal<JerkgramTranslatedTexts?, NoError>
+        if let texts = jerkgramEnhancedMessageTexts(original) {
+            request = jerkgramEnhancedTexts(account: account, texts: texts, fromLang: fromLang, toLang: toLang, allowLocalDownloads: false, localOnly: localOnly)
+            |> map(Optional.init)
+            |> `catch` { _ -> Signal<JerkgramTranslatedTexts?, NoError> in .single(nil) }
+        } else { request = .single(nil) }
+        return request
+        |> mapToSignal { translated -> Signal<Bool, NoError> in
+            return account.postbox.transaction { transaction -> Bool in
+                guard !cancelled.with({ $0 }), jerkgramPolicyIsCurrent(account: account, generation: generation) else { return false }
+                var stored = false
+                transaction.updateMessage(original.id, update: { current in
+                    guard !cancelled.with({ $0 }), jerkgramPolicyIsCurrent(account: account, generation: generation), jerkgramTranslationSourceMatches(original, current) else { return .skip }
+                    var additional: [TranslationMessageAttribute.Additional] = []
+                    var solution: TranslationMessageAttribute.Additional?
+                    if let translated, let poll = original.media.first(where: { $0 is TelegramMediaPoll }) as? TelegramMediaPoll {
+                        for index in poll.options.indices { additional.append(.init(text: translated[index + 1].0, entities: translated[index + 1].1)) }
+                        if poll.results.solution != nil, let last = translated.last { solution = .init(text: last.0, entities: last.1) }
+                    }
+                    var attributes = current.attributes.filter { !($0 is TranslationMessageAttribute) }
+                    attributes.append(TranslationMessageAttribute(text: translated?.first?.0 ?? "", entities: translated?.first?.1 ?? [], additional: additional, pollSolution: solution, toLang: toLang, jerkgramSourceFingerprint: jerkgramTranslationSourceFingerprint(original), jerkgramUnavailable: translated == nil, jerkgramPolicyVersion: JerkgramTranslationSettings.policyVersion))
+                    stored = translated != nil
+                    return .update(StoreMessage(id: current.id, customStableId: nil, globallyUniqueId: current.globallyUniqueId, groupingKey: current.groupingKey, threadId: current.threadId, timestamp: current.timestamp, flags: StoreMessageFlags(current.flags), tags: current.tags, globalTags: current.globalTags, localTags: current.localTags, forwardInfo: current.forwardInfo.flatMap(StoreMessageForwardInfo.init), authorId: current.author?.id, text: current.text, attributes: attributes, media: current.media))
+                })
+                return stored
+            }
+        }
+        |> afterDisposed { _ = cancelled.swap(true) }
+    }
+    if signals.isEmpty { return .single(Void()) }
+    return combineLatest(signals)
+    |> castError(TranslationError.self)
+    |> mapToSignal { outcomes -> Signal<Void, TranslationError> in
+        outcomes.allSatisfy({ $0 }) ? .single(Void()) : .fail(.generic)
+    }
+}
+
+
+private func _internal_translateMessagesByPeerId(account: Account, peerId: EnginePeer.Id, messageIds: [EngineMessage.Id], fromLang: String?, toLang: String, enableLocalIfPossible: Bool, enhanced: Bool = false, tone: TranslationTone = .neutral) -> Signal<Void, TranslationError> {
     return account.postbox.transaction { transaction -> (Api.InputPeer?, [Message]) in
         return (transaction.getPeer(peerId).flatMap(apiInputPeer), messageIds.compactMap({ transaction.getMessage($0) }))
     }
     |> castError(TranslationError.self)
     |> mapToSignal { (inputPeer, messages) -> Signal<Void, TranslationError> in
+        if enhanced {
+            return jerkgramTranslateEnhancedMessages(account: account, messages: messages, fromLang: fromLang, toLang: toLang, localOnly: peerId.namespace == Namespaces.Peer.SecretChat)
+        }
         guard let inputPeer = inputPeer else {
             return .never()
         }
@@ -955,7 +1356,8 @@ func _internal_composeAIMessage(account: Account, text: ComposedRichMessage, mod
         }
     case let .rich(instantPage):
         flags |= (1 << 4)
-        let inputText = RichTextMessageAttribute(instantPage: instantPage, fullInstantPage: nil).apiInputRichMessage()
+        // No `users`: this page is rewritten and handed back, not sent; the send that follows lists them.
+        let inputText = RichTextMessageAttribute(instantPage: instantPage, fullInstantPage: nil).apiInputRichMessage(users: [])
         return account.network.request(Api.functions.messages.composeRichMessageWithAI(flags: flags, text: inputText, translateToLang: translateToLang, tone: changeTone))
         |> `catch` { error -> Signal<Api.messages.ComposedRichMessageWithAI, TelegramAIComposeMessageError> in
             if error.errorDescription == "AICOMPOSE_FLOOD_PREMIUM" {

@@ -33,6 +33,34 @@ struct ChatHistoryEntriesForViewState {
     }
 }
 
+/// Whether `message` is the root of the forum topic `location` shows, which the topic's history does not display: its
+/// `topicCreated` action, or the `groupCreated` one in a monoforum channel's or a forum bot's topic.
+func isUndisplayedForumTopicRoot(_ message: Message, location: ChatLocation, additionalData: [AdditionalMessageHistoryViewDataEntry]) -> Bool {
+    guard case let .replyThread(replyThreadMessage) = location, replyThreadMessage.isForumPost else {
+        return false
+    }
+    for media in message.media {
+        if let action = media as? TelegramMediaAction {
+            if case .topicCreated = action.action {
+                return true
+            } else if case .groupCreated = action.action {
+                var chatPeer: Peer?
+                for entry in additionalData {
+                    if case let .peer(_, peer) = entry {
+                        chatPeer = peer
+                    }
+                }
+                if let channel = chatPeer as? TelegramChannel, channel.isMonoForum {
+                    return true
+                } else if let user = chatPeer as? TelegramUser, user.isForum {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
 func chatHistoryEntriesForView(
     currentState: ChatHistoryEntriesForViewState,
     context: AccountContext,
@@ -140,6 +168,16 @@ func chatHistoryEntriesForView(
         }
     }
     
+    // One preference snapshot per mapping, rather than one locked lookup per entry.
+    let ghostBaseShowDeleted = ((JerkgramHotSettings.object(forKey: "jerkgram.Messages.ShowDeleted") as? Bool) ?? true)
+    let ghostBaseProtectedContentEnabled = ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true)
+    let ghostBaseOneTimeSaveEnabled = ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false)
+
+    let blockedMessageFilter = JerkgramBlockedReactionPolicy.messageFilterSnapshot(
+        accountPeerId: context.account.peerId,
+        chatPeer: chatPeer
+    )
+
     var count = 0
     loop: for entry in view.entries {
         var message = entry.message.withAppliedEphemeralReplacementMessage()
@@ -156,33 +194,13 @@ func chatHistoryEntriesForView(
         
         // Presentation-only filtering: Postbox contents stay untouched, so
         // switching the option off restores the messages immediately.
-        if JerkgramBlockedReactionPolicy.isMessageHidden(
-            accountPeerId: context.account.peerId,
-            chatPeer: chatPeer,
-            message: message
-        ) {
+        if blockedMessageFilter?.isHidden(authorId: message.author?.id) ?? false {
             continue loop
         }
         
         if case let .replyThread(replyThreadMessage) = location, replyThreadMessage.isForumPost {
-            for media in message.media {
-                if let action = media as? TelegramMediaAction {
-                    if case .topicCreated = action.action {
-                        continue loop
-                    } else if case .groupCreated = action.action {
-                        var chatPeer: Peer?
-                        for entry in view.additionalData {
-                            if case let .peer(_, peer) = entry {
-                                chatPeer = peer
-                            }
-                        }
-                        if let channel = chatPeer as? TelegramChannel, channel.isMonoForum {
-                            continue loop
-                        } else if let user = chatPeer as? TelegramUser, user.isForum {
-                            continue loop
-                        }
-                    }
-                }
+            if isUndisplayedForumTopicRoot(message, location: location, additionalData: view.additionalData) {
+                continue loop
             }
         } else if case .peer = location {
             for media in message.media {
@@ -224,22 +242,20 @@ func chatHistoryEntriesForView(
         }
         
         if skipViewOnceMedia, let minAutoremoveOrClearTimeout = message.minAutoremoveOrClearTimeout {
-            let ghostBaseOT2KeepViewOnceVisible = (((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true) && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.OneTimeSave") as? Bool) ?? false) && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
+            let ghostBaseOT2KeepViewOnceVisible = (ghostBaseProtectedContentEnabled && ghostBaseOneTimeSaveEnabled && message.id.peerId.namespace != Namespaces.Peer.SecretChat)
             if minAutoremoveOrClearTimeout <= 60 {
-                if ghostBaseOT2KeepViewOnceVisible {
-                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "jerkgram.OT2.ViewOnceVisibleKeep.Count") + 1, forKey: "jerkgram.OT2.ViewOnceVisibleKeep.Count")
-                    UserDefaults.standard.set("\(message.id)", forKey: "jerkgram.OT2.LastViewOnceVisibleId")
-                } else {
+                if !ghostBaseOT2KeepViewOnceVisible {
                     continue loop
                 }
             }
         }
         
-        let ghostBaseShowDeleted = ((JerkgramHotSettings.object(forKey: "jerkgram.Messages.ShowDeleted") as? Bool) ?? true)
-        let ghostBaseIsDeleted = ((message.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false
+        if !ghostBaseShowDeleted {
+            let ghostBaseIsDeleted = ((message.attributes.first(where: { $0 is GhostBaseMessageAttribute }) as? GhostBaseMessageAttribute)?.isDeleted) ?? false
 
-        if !ghostBaseShowDeleted && ghostBaseIsDeleted {
-            continue loop
+            if ghostBaseIsDeleted {
+                continue loop
+            }
         }
         
         var contentTypeHint: ChatMessageEntryContentType = .generic
@@ -297,6 +313,8 @@ func chatHistoryEntriesForView(
                         
                         var currentMessages: [(Message, Bool, ChatHistoryMessageSelection, ChatMessageEntryAttributes, MessageHistoryEntryLocation?)] = []
                         
+                        var currentAttributes = currentAttributes
+                        currentAttributes.groupStableId = nil
                         currentMessages.append((currentMessage, currentIsRead, currentSelection, currentAttributes, currentLocation))
                         if reverseGroupedMessages {
                             currentMessages.insert((message, isRead, selection, attributes, entry.location), at: 0)
@@ -318,6 +336,12 @@ func chatHistoryEntriesForView(
                     }
                 }
                 if !found {
+                    var attributes = attributes
+                    if groupMessages {
+                        // Alone so far: keep the identity of the album entry it becomes once another of
+                        // the album's messages loads. Not when albums are split into messages below.
+                        attributes.groupStableId = groupStableId
+                    }
                     entries.append(.MessageEntry(message, presentationData, isRead, entry.location, selection, attributes))
                 }
             } else {

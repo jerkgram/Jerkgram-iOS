@@ -68,6 +68,7 @@ public class ItemListDisclosureItem: ListViewItem, ItemListItem, ListItemCompone
     public let sectionId: ItemListSectionId
     let style: ItemListStyle
     let disclosureStyle: ItemListDisclosureStyle
+    let minimumLabelSpacing: CGFloat?
     let noInsets: Bool
     let action: (() -> Void)?
     let clearHighlightAutomatically: Bool
@@ -95,6 +96,7 @@ public class ItemListDisclosureItem: ListViewItem, ItemListItem, ListItemCompone
         sectionId: ItemListSectionId,
         style: ItemListStyle,
         disclosureStyle: ItemListDisclosureStyle = .arrow,
+        minimumLabelSpacing: CGFloat? = nil,
         noInsets: Bool = false,
         action: (() -> Void)?,
         clearHighlightAutomatically: Bool = true,
@@ -121,6 +123,7 @@ public class ItemListDisclosureItem: ListViewItem, ItemListItem, ListItemCompone
         self.sectionId = sectionId
         self.style = style
         self.disclosureStyle = disclosureStyle
+        self.minimumLabelSpacing = minimumLabelSpacing
         self.noInsets = noInsets
         self.action = action
         self.clearHighlightAutomatically = clearHighlightAutomatically
@@ -468,10 +471,7 @@ public class ItemListDisclosureItemNode: ListViewItemNode, ItemListItemNode {
             
             let labelFont: UIFont
             let labelBadgeColor: UIColor
-            var labelConstrain: CGFloat = params.width - params.rightInset - leftInset - 40.0 - titleLayout.size.width - 10.0
-            if item.iconPeer != nil {
-                labelConstrain -= 6.0
-            }
+            var labelConstrain: CGFloat = itemListDisclosureLabelConstrainedWidth(width: params.width, rightInset: params.rightInset, labelRightInset: rightInset, leftInset: leftInset, titleWidth: titleLayout.size.width, hasIconPeer: item.iconPeer != nil, minimumSpacing: item.minimumLabelSpacing)
             
             switch item.labelStyle {
             case .badge:
@@ -717,7 +717,7 @@ public class ItemListDisclosureItemNode: ListViewItemNode, ItemListItemNode {
                         
                         strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
                         strongSelf.highlightNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
-                        strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
+                        strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
                         strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: separatorHeight))
                         strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - params.rightInset - bottomStripeInset - separatorRightInset, height: separatorHeight))
                     }

@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 private enum AccountKind {
@@ -187,6 +187,7 @@ private var declaredEncodables: Void = {
     declareEncodable(SynchronizeAppLogEventsOperation.self, f: { SynchronizeAppLogEventsOperation(decoder: $0) })
     declareEncodable(TelegramMediaPoll.self, f: { TelegramMediaPoll(decoder: $0) })
     declareEncodable(TelegramMediaUnsupported.self, f: { TelegramMediaUnsupported(decoder: $0) })
+    declareEncodable(TelegramMediaWidget.self, f: { TelegramMediaWidget(decoder: $0) })
     declareEncodable(EmojiKeywordCollectionInfo.self, f: { EmojiKeywordCollectionInfo(decoder: $0) })
     declareEncodable(EmojiKeywordItem.self, f: { EmojiKeywordItem(decoder: $0) })
     declareEncodable(SynchronizeEmojiKeywordsOperation.self, f: { SynchronizeEmojiKeywordsOperation(decoder: $0) })
@@ -368,7 +369,9 @@ public func currentAccount(allocateIfNotExists: Bool, networkArguments: NetworkI
 
 public func logoutFromAccount(id: AccountRecordId, accountManager: AccountManager<TelegramAccountManagerTypes>, alreadyLoggedOutRemotely: Bool) -> Signal<Void, NoError> {
     Logger.shared.log("AccountManager", "logoutFromAccount \(id)")
-    return accountManager.transaction { transaction -> Void in
+    return Signal { subscriber in
+        BotBridgeDiagnosticRegistry.shared.notify(namespace: accountManager, record: id.int64, kind: alreadyLoggedOutRemotely ? .remoteLogout : .localLogout)
+        return (accountManager.transaction { transaction -> Void in
         transaction.updateRecord(id, { current in
             if alreadyLoggedOutRemotely {
                 return nil
@@ -389,6 +392,7 @@ public func logoutFromAccount(id: AccountRecordId, accountManager: AccountManage
                 return nil
             }
         })
+        }).start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
     }
 }
 
@@ -406,6 +410,7 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
             }
         }).start()
         let disposable = accountManager.accountRecords().start(next: { view in
+            BotBridgeDiagnosticRegistry.shared.reconcile(namespace: accountManager, records: Set(view.records.map { $0.id.int64 }))
             var disposeList: [(AccountRecordId, MetaDisposable)] = []
             var beginList: [(AccountRecordId, [TelegramAccountManagerTypes.Attribute], MetaDisposable)] = []
             let _ = loggedOutAccounts.modify { disposables in
@@ -445,8 +450,12 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
                 disposable.dispose()
             }
             for (id, attributes, disposable) in beginList {
+                let diagnosticTarget = BotBridgeDiagnosticRegistry.shared.target(namespace: accountManager, record: id.int64)
+                BotBridgeDiagnosticRegistry.shared.notify(target: diagnosticTarget, kind: .cleanupStart)
                 Logger.shared.log("managedCleanupAccounts", "cleanup \(id), current is \(String(describing: view.currentRecord?.id))")
-                disposable.set(cleanupAccount(networkArguments: networkArguments, accountManager: accountManager, id: id, encryptionParameters: encryptionParameters, attributes: attributes, rootPath: rootPath, auxiliaryMethods: auxiliaryMethods).start())
+                disposable.set(cleanupAccount(networkArguments: networkArguments, accountManager: accountManager, id: id, encryptionParameters: encryptionParameters, attributes: attributes, rootPath: rootPath, auxiliaryMethods: auxiliaryMethods).start(completed: {
+                    BotBridgeDiagnosticRegistry.shared.notify(target: diagnosticTarget, kind: .cleanupResult)
+                }))
             }
             
             var validPaths = Set<String>()
@@ -460,13 +469,12 @@ public func managedCleanupAccounts(networkArguments: NetworkInitializationArgume
                 validPaths.insert("\(accountRecordIdPathName(record.id))")
             }
             
+            let deletionTargets = BotBridgeDiagnosticRegistry.shared.targets(namespace: accountManager)
             DispatchQueue.global(qos: .utility).async {
                 if let files = try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: rootPath), includingPropertiesForKeys: [], options: []) {
                     for url in files {
-                        if url.lastPathComponent.hasPrefix("account-") {
-                            if !validPaths.contains(url.lastPathComponent) {
-                                try? FileManager.default.removeItem(at: url)
-                            }
+                        if botBridgeScheduleAccountDirectoryDeletion(directoryName: url.lastPathComponent, validPaths: validPaths, targets: deletionTargets) {
+                            try? FileManager.default.removeItem(at: url)
                         }
                     }
                 }

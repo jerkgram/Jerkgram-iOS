@@ -1,6 +1,6 @@
 import Foundation
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 
 
@@ -34,6 +34,10 @@ func _internal_applyMaxReadMessageIdInteractively(postbox: Postbox, stateManager
         guard messageId.peerId.namespace != Namespaces.Peer.SecretChat else {
             return false
         }
+        // A channel the account is not a member of has no read state to apply to.
+        guard jerkgramIsRetainedExcludedChat(transaction.getPeer(messageId.peerId)) || peerKeepsReadState(transaction.getPeer(messageId.peerId)) else {
+            return false
+        }
         let index = transaction.getMessage(messageId)?.index ?? MessageIndex(id: messageId, timestamp: 0)
         _internal_applyMaxReadIndexInteractively(transaction: transaction, stateManager: stateManager, index: index)
         return true
@@ -41,6 +45,20 @@ func _internal_applyMaxReadMessageIdInteractively(postbox: Postbox, stateManager
 }
 
 func _internal_applyMaxReadIndexInteractively(transaction: Transaction, stateManager: AccountStateManager, index: MessageIndex) {
+    // Retained history has a local read position, while membership stays kicked/removed.
+    // Use the noninteractive update, then discard any validation it may request for holes.
+    // Do not queue a receipt, notify the state manager, or touch secret-chat countdowns.
+    if jerkgramIsRetainedExcludedChat(transaction.getPeer(index.id.peerId)) {
+        transaction.applyIncomingReadMaxId(index.id)
+        transaction.applyMarkUnread(peerId: index.id.peerId, namespace: index.id.namespace, value: false, interactive: false)
+        transaction.confirmSynchronizedIncomingReadState(index.id.peerId)
+        return
+    }
+    // A channel the account is not a member of has no read state on the server
+    // (NonMemberChannelReadState.swift): nothing moves locally and no push is queued.
+    guard peerKeepsReadState(transaction.getPeer(index.id.peerId)) else {
+        return
+    }
     let messageIds = transaction.applyInteractiveReadMaxIndex(index)
     
     if let peer = transaction.getPeer(index.id.peerId), peer.isForumOrMonoForum {
@@ -327,11 +345,7 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
         
         if hasUnread {
             if setToValue == nil || !(setToValue!) {
-                if let index = transaction.getTopPeerMessageIndex(peerId: peerId) {
-                    let _ = transaction.applyInteractiveReadMaxIndex(index)
-                } else {
-                    transaction.applyMarkUnread(peerId: peerId, namespace: principalNamespace, value: false, interactive: true)
-                }
+                _internal_readPeerHistoryToTopInteractively(transaction: transaction, peer: peer, principalNamespace: principalNamespace)
                 viewTracker.updateMarkAllMentionsSeen(peerId: peerId, threadId: nil)
             }
         } else {
@@ -340,6 +354,37 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
             }
         }
     }
+}
+
+/// Marks a whole chat read from the chat list (the swipe, "Mark as Read", reading a folder), up to the server's newest
+/// message: the newest stored message, or the dialog's `top_message` when this device never stored that one. The read
+/// state remembers the latter as `maxKnownId` (every dialog fetch, channel difference and validation writes it there),
+/// and the count it holds includes that message.
+///
+/// Reading only up to the newest stored message left such a message unread on the server, which then answered with
+/// it still unread (the push's `updateReadChannelInbox` with `still_unread_count`, or the validation that follows,
+/// since the local count no longer matched), so the chat returned to the list unread a moment after it left.
+func _internal_readPeerHistoryToTopInteractively(transaction: Transaction, peer: Peer, principalNamespace: MessageId.Namespace) {
+    guard let topIndex = transaction.getTopPeerMessageIndex(peerId: peer.id) else {
+        transaction.applyMarkUnread(peerId: peer.id, namespace: principalNamespace, value: false, interactive: true)
+        return
+    }
+    var readIndex = topIndex
+    // A channel the account is not a member of holds `nonMemberChannelReadState`, whose `maxKnownId` means
+    // "everything", not a message.
+    if principalNamespace == Namespaces.Message.Cloud, peerKeepsReadState(peer), let states = transaction.getPeerReadStates(peer.id) {
+        for (namespace, state) in states where namespace == Namespaces.Message.Cloud {
+            if case let .idBased(maxIncomingReadId, _, maxKnownId, _, _) = state, maxKnownId < Int32.max - 1 {
+                // Never below the current mark: a read lower than it would move the mark back.
+                let serverTopId = max(maxKnownId, maxIncomingReadId)
+                let topStoredId = transaction.getTopPeerMessageIndex(peerId: peer.id, namespace: Namespaces.Message.Cloud)?.id.id ?? 0
+                if serverTopId > topStoredId {
+                    readIndex = MessageIndex(id: MessageId(peerId: peer.id, namespace: Namespaces.Message.Cloud, id: serverTopId), timestamp: topIndex.timestamp)
+                }
+            }
+        }
+    }
+    let _ = transaction.applyInteractiveReadMaxIndex(readIndex)
 }
 
 public func clearPeerUnseenPersonalMessagesInteractively(account: Account, peerId: PeerId, threadId: Int64?) -> Signal<Never, NoError> {

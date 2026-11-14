@@ -21,7 +21,14 @@ use mtproto_engine::{
     TransportPreference, WebEndpoint,
 };
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 5;
+
+/// `MTEvent.flags` of `MTEventKindReleased`: the request may have reached the server.
+pub const RELEASED_MAY_HAVE_RUN: u32 = 1 << 0;
+
+/// `MTEvent.flags` of `MTEventKindAuthKeyCreated`: exactly one is set.
+pub const AUTH_KEY_CREATED_TEMPORARY: u32 = 1 << 0;
+pub const AUTH_KEY_CREATED_PERMANENT: u32 = 1 << 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -322,12 +329,15 @@ impl EngineCallbacks for Bridge {
                 event.code = code;
                 self.emit(session, event, None);
             }
-            EngineEvent::AuthKeyCreated { key, salt, time_difference, expires_at } => {
+            EngineEvent::AuthKeyCreated { key, salt, time_difference, expires_at, dc_id } => {
                 let mut event = blank(21);
                 event.integer1 = salt;
                 event.integer2 = expires_at.map(i64::from).unwrap_or(0);
                 event.value1 = time_difference;
-                self.emit_secret(session, event, key);
+                event.code = dc_id;
+                event.flags =
+                    if expires_at.is_some() { AUTH_KEY_CREATED_TEMPORARY } else { AUTH_KEY_CREATED_PERMANENT };
+                self.emit_secret(session, event, key.into_vec());
             }
             EngineEvent::AuthKeyCreationFailed { reason } => {
                 let mut event = blank(22);
@@ -515,6 +525,13 @@ impl Bridge {
                 event.text2 = string_ref(&flood_text);
                 event.integer1 = flood_wait_seconds;
                 event.integer2 = i64::from(server_errors);
+                self.emit(session, event, None);
+            }
+            RpcEvent::Released { id, may_have_run, retry_after } => {
+                let mut event = blank(36);
+                event.request_id = id.0;
+                event.flags = if may_have_run { RELEASED_MAY_HAVE_RUN } else { 0 };
+                event.value1 = retry_after;
                 self.emit(session, event, None);
             }
         }
@@ -1157,6 +1174,13 @@ pub unsafe extern "C" fn mt_session_set_time_difference(pointer: *mut MTEngine, 
 pub unsafe extern "C" fn mt_session_destroy_auth_key(pointer: *mut MTEngine, session: u64) {
     if let Some(engine) = unsafe { engine(pointer) } {
         engine.destroy_auth_key(SessionHandle(session));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_session_drain(pointer: *mut MTEngine, session: u64, deadline: f64) {
+    if let Some(engine) = unsafe { engine(pointer) } {
+        engine.drain(SessionHandle(session), deadline);
     }
 }
 

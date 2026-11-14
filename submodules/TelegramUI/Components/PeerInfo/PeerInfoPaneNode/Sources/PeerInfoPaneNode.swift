@@ -112,6 +112,7 @@ public protocol PeerInfoPaneNode: ASDisplayNode {
     var externalDataUpdated: ((ContainedViewLayoutTransition) -> Void)? { get set }
     
     func update(size: CGSize, topInset: CGFloat, sideInset: CGFloat, bottomInset: CGFloat, deviceMetrics: DeviceMetrics, visibleHeight: CGFloat, isScrollingLockedAtTop: Bool, expandProgress: CGFloat, navigationHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition)
+    func updateJerkgramVisualState(glassEnabled: Bool, revision: UInt64)
     func scrollToTop() -> Bool
     func transferVelocity(_ velocity: CGFloat)
     func cancelPreviewGestures()
@@ -124,6 +125,9 @@ public protocol PeerInfoPaneNode: ASDisplayNode {
 }
 
 public extension PeerInfoPaneNode {
+    func updateJerkgramVisualState(glassEnabled: Bool, revision: UInt64) {
+    }
+
     var navigationContentNode: PeerInfoPanelNodeNavigationContentNode? {
         return nil
     }

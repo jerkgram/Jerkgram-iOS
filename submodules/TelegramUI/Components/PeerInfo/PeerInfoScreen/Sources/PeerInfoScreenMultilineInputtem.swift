@@ -72,11 +72,7 @@ final class PeerInfoScreenMultilineInputItemNode: PeerInfoScreenItemNode {
             // `systemStyle` only controls corners/insets. Supply an explicit
             // tint for this one profile-bio field so the generic `.blocks`
             // renderer cannot replace it with Telegram's opaque list card.
-            backgroundColor: GhostBaseGlassStyle.isEnabled
-                ? (presentationData.theme.overallDarkAppearance
-                    ? UIColor.white.withAlphaComponent(0.025)
-                    : UIColor.black.withAlphaComponent(0.018))
-                : nil,
+            backgroundColor: (GhostBaseGlassStyle.isEnabled && GhostBaseGlassStyle.allowsTransparentSurfaces) ? .clear : nil,
             text: item.text, placeholder: item.placeholder, maxLength: item.maxLength.flatMap { ItemListMultilineInputItemTextLimit(value: $0, display: true) }, sectionId: 0, style: .blocks, returnKeyType: .done, textUpdated: { updatedText in
             item.textUpdated(updatedText)
         }, action: {
@@ -127,7 +123,7 @@ final class PeerInfoScreenMultilineInputItemNode: PeerInfoScreenItemNode {
         // translucent bio editor its filler remains visible as lower-corner
         // triangles. The section container already owns the rounded clipping,
         // so glass must not draw a second corner layer here.
-        if GhostBaseGlassStyle.isEnabled {
+        if (GhostBaseGlassStyle.isEnabled && GhostBaseGlassStyle.allowsTransparentSurfaces) {
             self.maskNode.image = nil
         } else {
             self.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: true) : nil

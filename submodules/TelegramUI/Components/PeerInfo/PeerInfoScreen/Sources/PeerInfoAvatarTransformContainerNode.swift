@@ -18,6 +18,15 @@ import EmojiStatusComponent
 import GalleryUI
 import HierarchyTrackingLayer
 
+// Same paired override as chat capture; native protection remains authoritative when off.
+enum JerkgramProfileCapturePolicy {
+    static func isProtected(nativeProtected: Bool) -> Bool {
+        let allowCapture = ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenshots") as? Bool) ?? true)
+            && ((JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.AllowScreenRecording") as? Bool) ?? true)
+        return nativeProtected && !allowCapture
+    }
+}
+
 final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
     weak var performanceProbe: JerkgramProfilePerformanceProbe?
     let context: AccountContext
@@ -30,6 +39,7 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
     var markupNode: AvatarVideoNode?
     var iconView: ComponentView<Empty>?
     private var videoContent: NativeVideoContent?
+    private var videoCaptureProtected = false
     private var videoStartTimestamp: Double?
     
     private let hierarchyTrackingLayer = HierarchyTrackingLayer()
@@ -49,11 +59,17 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
     
     private var isFirstAvatarLoading = true
     var item: PeerInfoAvatarListItem?
+    /// The avatar's corner radius over its side, as last laid out: 0.5 round, 0.25 a forum's rounded square.
+    private(set) var cornerFraction: CGFloat = 0.5
     
     private let playbackStartDisposable = MetaDisposable()
     
     var storyData: (totalCount: Int, unseenCount: Int, hasUnseenCloseFriends: Bool, hasLiveItems: Bool)?
     var storyProgress: Float?
+    
+    /// VoiceOver: the avatar as one button (the tap opens the photos), over the whole avatar; the image, video, emoji
+    /// markup and story ring under it are not separate elements.
+    private let accessibilityArea = AccessibilityAreaNode()
     
     init(context: AccountContext) {
         self.context = context
@@ -68,6 +84,17 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
         self.containerNode.addSubnode(self.avatarNode)
         self.containerNode.frame = CGRect(origin: CGPoint(x: -50.0, y: -50.0), size: CGSize(width: 100.0, height: 100.0))
         self.avatarNode.frame = self.containerNode.bounds
+        
+        self.accessibilityArea.accessibilityTraits = [.button, .image]
+        self.accessibilityArea.activate = { [weak self] in
+            guard let self, let tapped = self.tapped else {
+                return false
+            }
+            tapped()
+            return true
+        }
+        self.containerNode.addSubnode(self.accessibilityArea)
+        self.accessibilityArea.frame = self.containerNode.bounds
         
         let tapGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(self.tapGesture(_:)))
         self.avatarNode.view.addGestureRecognizer(tapGestureRecognizer)
@@ -89,9 +116,16 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
             if value {
                 self.updateFromParams()
             } else {
-                self.videoNode?.removeFromSupernode()
-                self.videoNode = nil
-                self.videoContent = nil
+                // A move to another superview (the chat ↔ profile expansion lends the avatar, then returns it) leaves the
+                // hierarchy and re-enters it in one turn: the video goes only if the avatar stays out.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.hierarchyTrackingLayer.isInHierarchy else {
+                        return
+                    }
+                    self.videoNode?.removeFromSupernode()
+                    self.videoNode = nil
+                    self.videoContent = nil
+                }
             }
         }
         self.layer.addSublayer(self.hierarchyTrackingLayer)
@@ -170,6 +204,62 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
             inactiveLineWidth: 1.5,
             forceRoundedRect: isForum
         ), transition: ComponentTransition(transition))
+    }
+    
+    override var accessibilityElements: [Any]? {
+        get {
+            if self.containerNode.isHidden || self.containerNode.alpha < 0.01 {
+                return []
+            }
+            // The collapsed header moves the avatar above the screen: it is not read there.
+            let areaView = self.accessibilityArea.view
+            if let window = areaView.window, !window.bounds.intersects(areaView.convert(areaView.bounds, to: window)) {
+                return []
+            }
+            self.updateAccessibilityArea()
+            return [areaView]
+        } set(value) {
+        }
+    }
+    
+    private var accessibilityStrings: (label: String, moreLabel: String)?
+    private var accessibilityMoreAction: UIAccessibilityCustomAction?
+    
+    /// The avatar's VoiceOver label and the name of its long-press menu action. Only stores the words (called on every
+    /// header update); the element is configured when an accessibility client asks (`accessibilityElements`).
+    func updateAccessibility(label: String, moreLabel: String) {
+        if let current = self.accessibilityStrings, current.label == label, current.moreLabel == moreLabel {
+            return
+        }
+        self.accessibilityStrings = (label, moreLabel)
+        self.accessibilityMoreAction = nil
+    }
+    
+    /// Configures the area at query time: the label, and "More" (the long-press menu) only while that gesture is enabled
+    /// (it is off on the Settings avatar and while photos are shown).
+    private func updateAccessibilityArea() {
+        guard let strings = self.accessibilityStrings else {
+            return
+        }
+        self.accessibilityArea.accessibilityLabel = strings.label
+        if self.contextAction != nil && self.containerNode.isGestureEnabled {
+            let action: UIAccessibilityCustomAction
+            if let current = self.accessibilityMoreAction {
+                action = current
+            } else {
+                action = UIAccessibilityCustomAction(name: strings.moreLabel, actionHandler: { [weak self] _ in
+                    guard let self, self.containerNode.isGestureEnabled, let contextAction = self.contextAction else {
+                        return false
+                    }
+                    contextAction(self.containerNode, nil)
+                    return true
+                })
+                self.accessibilityMoreAction = action
+            }
+            self.accessibilityArea.view.accessibilityCustomActions = [action]
+        } else {
+            self.accessibilityArea.view.accessibilityCustomActions = nil
+        }
     }
     
     @objc private func tapGesture(_ recognizer: UITapGestureRecognizer) {
@@ -355,6 +445,7 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
             } else {
                 avatarCornerRadius = avatarSize / 2.0
             }
+            self.cornerFraction = isForum ? 0.25 : 0.5
             if self.avatarNode.layer.cornerRadius != 0.0 {
                 ContainedViewLayoutTransition.animated(duration: 0.3, curve: .easeInOut).updateCornerRadius(layer: self.avatarNode.contentNode.layer, cornerRadius: avatarCornerRadius)
             } else {
@@ -366,6 +457,7 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
             
             self.containerNode.frame = CGRect(origin: CGPoint(x: -avatarSize / 2.0, y: -avatarSize / 2.0), size: CGSize(width: avatarSize, height: avatarSize))
             self.avatarNode.frame = self.containerNode.bounds
+            self.accessibilityArea.frame = self.containerNode.bounds
             self.avatarNode.font = avatarPlaceholderFont(size: floor(avatarSize * 16.0 / 37.0))
 
             if let item = item {
@@ -425,8 +517,9 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
                     markupNode.updateVisibility(true)
                 } else if threadInfo == nil, let video = videoRepresentations.last, let peerReference = PeerReference(peer) {
                     let videoFileReference = FileMediaReference.avatarList(peer: peerReference, media: TelegramMediaFile(fileId: EngineMedia.Id(namespace: Namespaces.Media.LocalFile, id: 0), partialReference: nil, resource: video.representation.resource, previewRepresentations: representations.map { $0.representation }, videoThumbnails: [], immediateThumbnailData: immediateThumbnailData, mimeType: "video/mp4", size: nil, attributes: [.Animated, .Video(duration: 0, size: video.representation.dimensions, flags: [], preloadSize: nil, coverTime: nil, videoCodec: nil)], alternativeRepresentations: []))
-                    let videoContent = NativeVideoContent(id: .profileVideo(videoId, nil), userLocation: .other, fileReference: videoFileReference, streamVideo: isMediaStreamable(resource: video.representation.resource) ? .conservative : .none, loopVideo: true, enableSound: false, fetchAutomatically: true, onlyFullSizeThumbnail: false, useLargeThumbnail: true, autoFetchFullSizeThumbnail: true, startTimestamp: video.representation.startTimestamp, continuePlayingWithoutSoundOnLostAudioSession: false, placeholderColor: .clear, captureProtected: peer.isCopyProtectionEnabled, storeAfterDownload: nil)
-                    if videoContent.id != self.videoContent?.id {
+                    let captureProtected = JerkgramProfileCapturePolicy.isProtected(nativeProtected: peer.isCopyProtectionEnabled)
+                    let videoContent = NativeVideoContent(id: .profileVideo(videoId, peer.isCopyProtectionEnabled && !captureProtected ? "jerkgram-capture-allowed" : nil), userLocation: .other, fileReference: videoFileReference, streamVideo: isMediaStreamable(resource: video.representation.resource) ? .conservative : .none, loopVideo: true, enableSound: false, fetchAutomatically: true, onlyFullSizeThumbnail: false, useLargeThumbnail: true, autoFetchFullSizeThumbnail: true, startTimestamp: video.representation.startTimestamp, continuePlayingWithoutSoundOnLostAudioSession: false, placeholderColor: .clear, captureProtected: captureProtected, storeAfterDownload: nil)
+                    if videoContent.id != self.videoContent?.id || self.videoCaptureProtected != captureProtected {
                         self.videoNode?.removeFromSupernode()
                         
                         if self.hierarchyTrackingLayer.isInHierarchy {
@@ -463,6 +556,7 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
                             }
                             
                             self.videoContent = videoContent
+                            self.videoCaptureProtected = captureProtected
                             self.videoNode = videoNode
                             
                             let maskPath: UIBezierPath

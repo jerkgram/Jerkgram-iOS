@@ -1,7 +1,82 @@
 import Foundation
 import UIKit
 
+// JG170 settings policy begin
+public enum JerkgramSettingsSurfacePolicy {
+    public static func active(isSettings: Bool, accepts: Bool, master: Bool, enabled: Bool, hasBackdrop: Bool) -> Bool {
+        return isSettings && accepts && master && enabled && hasBackdrop
+    }
+}
+// JG170 settings policy end
+
+// JGC material policy begin
+public enum JerkgramSettingsMaterialPolicy {
+    public static func active(optIn: Bool, master: Bool, enabled: Bool, reduceTransparency: Bool) -> Bool {
+        return optIn && master && enabled && !reduceTransparency
+    }
+    public static func itemAlpha(isDark: Bool) -> Double { return isDark ? 0.34 : 0.26 }
+    public static func cardAlpha(isDark: Bool) -> Double { return isDark ? 0.60 : 0.70 }
+}
+// JGC material policy end
+
+// JG176 pure policy begin
+public enum JerkgramVisualPolicy {
+    public static func allowsTransparency(reduceTransparency: Bool) -> Bool { return !reduceTransparency }
+    public static func allowsMotion(lowPower: Bool, reduceTransparency: Bool) -> Bool { return !lowPower && !reduceTransparency }
+    public static func shouldReconcile(visible: Bool, applied: UInt64?, current: UInt64, dirty: Bool) -> Bool {
+        return visible && (applied != current || dirty)
+    }
+}
+// JG176 pure policy end
+
 public enum GhostBaseGlassStyle {
+    public static let settingsTranslucencyKey = "jerkgram.Settings.Translucency"
+    public static let settingsStyleDidChange = Notification.Name("jerkgram.SettingsSurfaceDidChange")
+    private static var settingsTranslucencyValue = UserDefaults.standard.object(forKey: settingsTranslucencyKey) as? Bool ?? false
+
+    private static var revision: UInt64 = 0
+    private static var environment = (UIAccessibility.isReduceTransparencyEnabled, ProcessInfo.processInfo.isLowPowerModeEnabled)
+    private static var themeIdentity: ObjectIdentifier?
+    public static func invalidateVisualEnvironment() {
+        let updated = (UIAccessibility.isReduceTransparencyEnabled, ProcessInfo.processInfo.isLowPowerModeEnabled)
+        self.enabledLock.lock()
+        let changed = self.environment.0 != updated.0 || self.environment.1 != updated.1
+        if changed { self.environment = updated; self.revision &+= 1 }
+        self.enabledLock.unlock()
+        if changed { self.notifySettingsStyleChanged() }
+    }
+    public static func publishThemeChange(identity: ObjectIdentifier) {
+        self.enabledLock.lock()
+        let previous = self.themeIdentity
+        self.themeIdentity = identity
+        let changed = previous != nil && previous != identity
+        if changed { self.revision &+= 1 }
+        self.enabledLock.unlock()
+        if changed { self.notifySettingsStyleChanged() }
+    }
+    public static var visualRevision: UInt64 {
+        self.enabledLock.lock(); defer { self.enabledLock.unlock() }
+        return self.revision
+    }
+    private static func notifySettingsStyleChanged() {
+        JerkgramWave1Instrumentation.add("visualPublications")
+        DispatchQueue.main.async { NotificationCenter.default.post(name: self.settingsStyleDidChange, object: nil) }
+    }
+    public static var settingsTranslucencyEnabled: Bool {
+        self.enabledLock.lock()
+        defer { self.enabledLock.unlock() }
+        return self.settingsTranslucencyValue
+    }
+    public static func setSettingsTranslucencyEnabled(_ value: Bool) {
+        self.enabledLock.lock()
+        guard self.settingsTranslucencyValue != value else { self.enabledLock.unlock(); return }
+        self.settingsTranslucencyValue = value
+        self.preferenceGeneration &+= 1
+        self.revision &+= 1
+        self.enabledLock.unlock()
+        self.notifySettingsStyleChanged()
+    }
+
     public static let enabledKey = "jerkgram.Glass.Enabled"
 
     private static let enabledLock = NSLock()
@@ -29,6 +104,7 @@ public enum GhostBaseGlassStyle {
         self.enabledLock.unlock()
         let defaults = UserDefaults.standard
         let enabled = defaults.object(forKey: self.enabledKey) as? Bool ?? true
+        let settingsTranslucency = defaults.object(forKey: self.settingsTranslucencyKey) as? Bool ?? false
         let animated = defaults.object(forKey: "jerkgram.ProfileBlur.Animated") as? Bool ?? true
         let avatar = defaults.object(forKey: "jerkgram.ProfileBlur.Avatar") as? Bool ?? true
         let tint = defaults.object(forKey: "jerkgram.ProfileBlur.Tint") as? Bool ?? true
@@ -37,12 +113,17 @@ public enum GhostBaseGlassStyle {
         self.enabledLock.lock()
         defer { self.enabledLock.unlock() }
         guard self.preferenceGeneration == generation else { return }
+        let changed = self.enabledValue != enabled || self.settingsTranslucencyValue != settingsTranslucency || self.profileAnimatedValue != animated || self.profileAvatarValue != avatar || self.profileTintValue != tint || self.profileReducedValue != reduced || self.profileHideOwnPhoneValue != hideOwnPhone
+        guard changed else { return }
+        self.revision &+= 1
         self.enabledValue = enabled
+        self.settingsTranslucencyValue = settingsTranslucency
         self.profileAnimatedValue = animated
         self.profileAvatarValue = avatar
         self.profileTintValue = tint
         self.profileReducedValue = reduced
         self.profileHideOwnPhoneValue = hideOwnPhone
+        self.notifySettingsStyleChanged()
     }
 
     public static var profileBlurSettings: GhostBaseProfileBlurSettings? {
@@ -69,9 +150,13 @@ public enum GhostBaseGlassStyle {
         return self.profileHideOwnPhoneValue
     }
 
-    public static func setProfilePlaybackSettings(glassEnabled: Bool, animatedBackgroundEnabled: Bool, avatarBlurInProfile: Bool? = nil, tintEnabled: Bool? = nil, reducedBlur: Bool? = nil, hideOwnPhone: Bool? = nil) {
+    public static func setProfilePlaybackSettings(glassEnabled: Bool, animatedBackgroundEnabled: Bool, avatarBlurInProfile: Bool? = nil, tintEnabled: Bool? = nil, reducedBlur: Bool? = nil, hideOwnPhone: Bool? = nil, settingsTranslucencyEnabled: Bool? = nil, forceVisualChange: Bool = false) {
         // Controller projects profile and phone keys before atomic publication.
         self.enabledLock.lock()
+        let changed = forceVisualChange || self.enabledValue != glassEnabled || self.profileAnimatedValue != animatedBackgroundEnabled || avatarBlurInProfile.map { $0 != self.profileAvatarValue } == true || tintEnabled.map { $0 != self.profileTintValue } == true || reducedBlur.map { $0 != self.profileReducedValue } == true || hideOwnPhone.map { $0 != self.profileHideOwnPhoneValue } == true || settingsTranslucencyEnabled.map { $0 != self.settingsTranslucencyValue } == true
+        guard changed else { self.enabledLock.unlock(); return }
+        self.revision &+= 1
+        if let settingsTranslucencyEnabled { self.settingsTranslucencyValue = settingsTranslucencyEnabled }
         self.enabledValue = glassEnabled
         self.profileAnimatedValue = animatedBackgroundEnabled
         if let avatarBlurInProfile { self.profileAvatarValue = avatarBlurInProfile }
@@ -80,6 +165,7 @@ public enum GhostBaseGlassStyle {
         if let hideOwnPhone { self.profileHideOwnPhoneValue = hideOwnPhone }
         self.preferenceGeneration &+= 1
         self.enabledLock.unlock()
+        self.notifySettingsStyleChanged()
     }
 
     public static var isEnabled: Bool {
@@ -88,6 +174,10 @@ public enum GhostBaseGlassStyle {
         return self.enabledValue
     }
 
+    public static var allowsTransparentSurfaces: Bool { return JerkgramVisualPolicy.allowsTransparency(reduceTransparency: UIAccessibility.isReduceTransparencyEnabled) }
+    public static var allowsMaterial: Bool { return JerkgramVisualPolicy.allowsMotion(lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled, reduceTransparency: UIAccessibility.isReduceTransparencyEnabled) }
+    public static var allowsVideo: Bool { return self.allowsMaterial }
+
     public static var usesReducedEffects: Bool {
         return UIAccessibility.isReduceTransparencyEnabled || ProcessInfo.processInfo.isLowPowerModeEnabled
     }
@@ -95,9 +185,12 @@ public enum GhostBaseGlassStyle {
     public static func setEnabled(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: self.enabledKey)
         self.enabledLock.lock()
+        guard self.enabledValue != value else { self.enabledLock.unlock(); return }
         self.enabledValue = value
         self.preferenceGeneration &+= 1
+        self.revision &+= 1
         self.enabledLock.unlock()
+        self.notifySettingsStyleChanged()
     }
 
     // Pure compatibility tokens for the existing lightweight settings/gifts
@@ -170,5 +263,25 @@ public struct GhostBaseProfileBlurSettings: Equatable {
     // Defaults bootstrap is once; explicit account/import refresh stays supported.
     public static func loadEnabled() -> GhostBaseProfileBlurSettings? {
         return GhostBaseGlassStyle.profileBlurSettings
+    }
+}
+
+// Default OFF. No timers, observers, formatting or telemetry.
+public enum JerkgramWave1Instrumentation {
+#if JERKGRAM_PERF_AUDIT
+    private static let lock = NSLock()
+    private static var counters: [String: Int] = [:]
+#endif
+    @inline(__always) public static func add(_ counter: String, _ delta: Int = 1) {
+#if JERKGRAM_PERF_AUDIT
+        lock.lock(); counters[counter, default: 0] += delta; lock.unlock()
+#endif
+    }
+    public static func snapshot() -> [String: Int] {
+#if JERKGRAM_PERF_AUDIT
+        lock.lock(); defer { lock.unlock() }; return counters
+#else
+        return [:]
+#endif
     }
 }

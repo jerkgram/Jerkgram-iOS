@@ -56,15 +56,24 @@ public struct JerkgramRetentionPolicy: Codable, Equatable {
     public var historyDuration: JerkgramHistoryDuration
     public var mediaByteLimit: JerkgramMediaByteLimit
     public var archiveSecretChats: Bool
+    public var retainExcludedChats: Bool
 
-    public init(
-        historyDuration: JerkgramHistoryDuration = .days30,
-        mediaByteLimit: JerkgramMediaByteLimit = .gigabytes1,
-        archiveSecretChats: Bool = false
-    ) {
+    public init(historyDuration: JerkgramHistoryDuration = .days30, mediaByteLimit: JerkgramMediaByteLimit = .gigabytes1, archiveSecretChats: Bool = false, retainExcludedChats: Bool = false) {
         self.historyDuration = historyDuration
         self.mediaByteLimit = mediaByteLimit
         self.archiveSecretChats = archiveSecretChats
+        self.retainExcludedChats = retainExcludedChats
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case historyDuration, mediaByteLimit, archiveSecretChats, retainExcludedChats
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.historyDuration = try values.decode(JerkgramHistoryDuration.self, forKey: .historyDuration)
+        self.mediaByteLimit = try values.decode(JerkgramMediaByteLimit.self, forKey: .mediaByteLimit)
+        self.archiveSecretChats = try values.decode(Bool.self, forKey: .archiveSecretChats)
+        self.retainExcludedChats = try values.decodeIfPresent(Bool.self, forKey: .retainExcludedChats) ?? false
     }
 }
 
@@ -120,7 +129,8 @@ public struct JerkgramRetentionConfiguration: Codable, Equatable {
             JerkgramRetentionPolicy(
                 historyDuration: override.historyDuration ?? self.accountPolicy.historyDuration,
                 mediaByteLimit: override.mediaByteLimit ?? self.accountPolicy.mediaByteLimit,
-                archiveSecretChats: override.archiveSecretChats ?? self.accountPolicy.archiveSecretChats
+                archiveSecretChats: override.archiveSecretChats ?? self.accountPolicy.archiveSecretChats,
+                retainExcludedChats: self.accountPolicy.retainExcludedChats
             )
         )
     }
@@ -197,7 +207,8 @@ public enum JerkgramRetentionRuntime {
                 JerkgramRetentionPolicy(
                     historyDuration: override.historyDuration ?? self.configuration.accountPolicy.historyDuration,
                     mediaByteLimit: override.mediaByteLimit ?? self.configuration.accountPolicy.mediaByteLimit,
-                    archiveSecretChats: override.archiveSecretChats ?? self.configuration.accountPolicy.archiveSecretChats
+                    archiveSecretChats: override.archiveSecretChats ?? self.configuration.accountPolicy.archiveSecretChats,
+                retainExcludedChats: self.configuration.accountPolicy.retainExcludedChats
                 )
             )
         }
@@ -239,6 +250,15 @@ public enum JerkgramRetentionRuntime {
         configuration = value
         self.snapshots[accountPeerId] = Snapshot(configuration: configuration)
         return configuration
+    }
+
+    public static func shouldRetainExcludedHistory(accountPeerId: Int64, chatPeerId: Int64, userDefaults: UserDefaults = .standard) -> Bool {
+        self.lock.lock()
+        let cached = self.snapshots[accountPeerId]
+        self.lock.unlock()
+        let snapshot = cached ?? Snapshot(configuration: self.configuration(accountPeerId: accountPeerId, userDefaults: userDefaults))
+        let (enabled, policy) = snapshot.effectivePolicy(chatPeerId: chatPeerId)
+        return enabled && policy.retainExcludedChats
     }
 
     public static func shouldCapture(
@@ -408,3 +428,11 @@ public enum JerkgramRetentionEngine {
         try eventStore.replaceAtomically(accountPeerId: accountPeerId, events: retained)
     }
 }
+
+// JG170 retained chat policy begin
+public enum JerkgramRetainedChatPolicy {
+    public static func keep(excluded: Bool, wasMember: Bool, wasRetained: Bool, enabled: Bool) -> Bool {
+        return excluded && (wasRetained || (wasMember && enabled))
+    }
+}
+// JG170 retained chat policy end

@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
@@ -1573,6 +1573,7 @@ public func ghostBaseAuthorizeBot(
                         }
                     )
                     transaction.setState(state)
+                    jerkgramRenewBotBridgeGeneration(transaction: transaction, recordId: authorizedAccount.id.int64, user: user, testing: authorizedAccount.testingEnvironment)
 
                     UserDefaults.standard.set(
                         true,

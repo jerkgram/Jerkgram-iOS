@@ -25,10 +25,12 @@ use mtproto_core::rpc::{ApiEnvironment, RequestId, RpcRequest, SessionRole, Veri
 
 pub use clock::{monotonic_seconds, now, unix_seconds};
 pub use host_stream::{HOST_READ_WINDOW, HOST_WRITE_WINDOW, StreamHost, StreamId, StreamTarget};
+#[cfg(feature = "fuzzing")]
+pub use route_hints::{NETWORKS_REMEMBERED, RouteHints};
 pub use types::{
     AuthKeyMaterial, BoundTemporaryKey, ConnectionState, DcAddress, DropReason, EngineCallbacks, EngineConfig,
-    EngineEvent, KeyGeneration, LogLevel, PfsSetup, ProxyConfig, SessionHandle, SessionSetup, TransportPreference,
-    WebEndpoint,
+    EngineEvent, KeyGeneration, LogLevel, PfsSetup, ProxyConfig, SecretBytes, SessionHandle, SessionSetup,
+    TransportPreference, WebEndpoint,
 };
 use uploads::Uploads;
 use worker::{Command, WAKER_TOKEN, Worker};
@@ -139,7 +141,10 @@ impl Engine {
         }
     }
 
-    pub fn create_session(&self, setup: SessionSetup) -> SessionHandle {
+    pub fn create_session(&self, mut setup: SessionSetup) -> SessionHandle {
+        if !setup.time_difference.is_finite() {
+            setup.time_difference = 0.0;
+        }
         let count = self.inner.workers.len();
         let worker = if count == 1 || setup.role == SessionRole::Main {
             0
@@ -240,12 +245,23 @@ impl Engine {
         self.post(handle, Command::InvalidateInitialization(handle));
     }
 
+    /// A difference that is not a finite number is ignored: the session would compute no salt valid
+    /// and send nothing until a salt request came back, a minute later.
     pub fn set_time_difference(&self, handle: SessionHandle, difference: f64) {
-        self.post(handle, Command::SetTimeDifference(handle, difference));
+        if difference.is_finite() {
+            self.post(handle, Command::SetTimeDifference(handle, difference));
+        }
     }
 
     pub fn destroy_auth_key(&self, handle: SessionHandle) {
         self.post(handle, Command::DestroyAuthKey(handle));
+    }
+
+    /// Hands the session's requests back for another session without running any twice
+    /// (`session_drain.rs`): `RpcEvent::Released` for each, then `EngineEvent::Closed`, within
+    /// `deadline` seconds (extended while answers arrive, 30 s at most).
+    pub fn drain(&self, handle: SessionHandle, deadline: f64) {
+        self.post(handle, Command::Drain(handle, deadline));
     }
 
     pub fn set_network_available(&self, available: bool) {

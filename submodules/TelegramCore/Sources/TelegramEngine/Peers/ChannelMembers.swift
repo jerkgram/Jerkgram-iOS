@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
@@ -22,6 +22,14 @@ public enum ChannelMembersCategory {
 
 func _internal_channelMembers(postbox: Postbox, network: Network, accountPeerId: PeerId, peerId: PeerId, category: ChannelMembersCategory = .recent(.all), offset: Int32 = 0, limit: Int32 = 64, hash: Int64 = 0) -> Signal<[RenderedChannelParticipant]?, NoError> {
     return postbox.transaction { transaction -> Signal<[RenderedChannelParticipant]?, NoError> in
+        if jerkgramIsRetainedExcludedChat(transaction.getPeer(peerId)) {
+            switch category {
+            case .recent(.all):
+                return .single(jerkgramRetainedChannelMembers(transaction: transaction, peerId: peerId, offset: offset, limit: limit))
+            default:
+                return .single([])
+            }
+        }
         if let peer = transaction.getPeer(peerId), let inputChannel = apiInputChannel(peer) {
             if let channel = peer as? TelegramChannel {
                 if case .broadcast = channel.info {
@@ -108,7 +116,11 @@ func _internal_channelMembers(postbox: Postbox, network: Network, accountPeerId:
                                 }
                             }
                             
-                            for participant in CachedChannelParticipants(apiParticipants: participants).participants {
+                            let knownParticipants = CachedChannelParticipants(apiParticipants: participants).participants
+                            if case .recent(.all) = category {
+                                jerkgramSaveKnownChannelMembers(transaction: transaction, accountPeerId: accountPeerId, peerId: peerId, participants: knownParticipants)
+                            }
+                            for participant in knownParticipants {
                                 if let peer = parsedPeers.get(participant.peerId) {
                                     var renderedPresences: [PeerId: PeerPresence] = [:]
                                     if let presence = transaction.getPeerPresence(peerId: participant.peerId) {

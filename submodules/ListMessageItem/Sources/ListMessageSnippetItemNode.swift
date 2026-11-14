@@ -465,7 +465,7 @@ public final class ListMessageSnippetItemNode: ListMessageNode {
                                         
                                         if messageTextUrl != rawUrlString, !item.isGlobalSearchResult {
                                             var messageText = message.text
-                                            if !messageText.isEmpty, let translation = message.attributes.first(where: { $0 is TranslationMessageAttribute }) as? TranslationMessageAttribute, !translation.text.isEmpty, item.translateToLanguage == translation.toLang {
+                                            if !messageText.isEmpty, let translation = message.attributes.first(where: { $0 is TranslationMessageAttribute }) as? TranslationMessageAttribute, !translation.text.isEmpty, item.translateToLanguage == translation.toLang, translation.isValidForMessage(message, accountPeerId: item.context.account.peerId.toInt64()) {
                                                 messageText = translation.text
                                             }
                                             
@@ -501,7 +501,7 @@ public final class ListMessageSnippetItemNode: ListMessageNode {
                                 case let .TextUrl(url):
                                     var messageText = message.text
                                     var entity = entity
-                                    if let translation = message.attributes.first(where: { $0 is TranslationMessageAttribute }) as? TranslationMessageAttribute, !translation.text.isEmpty, item.translateToLanguage == translation.toLang {
+                                    if let translation = message.attributes.first(where: { $0 is TranslationMessageAttribute }) as? TranslationMessageAttribute, !translation.text.isEmpty, item.translateToLanguage == translation.toLang, translation.isValidForMessage(message, accountPeerId: item.context.account.peerId.toInt64()) {
                                         messageText = translation.text
                                         if entities.count == translation.entities.count, let index = entities.firstIndex(of: entity), index < translation.entities.count {
                                             entity = translation.entities[index]
@@ -720,6 +720,7 @@ public final class ListMessageSnippetItemNode: ListMessageNode {
                     strongSelf.currentMedia = selectedMedia
                     strongSelf.currentPrimaryUrl = primaryUrl
                     strongSelf.currentIsInstantView = isInstantView
+                    strongSelf.applyListMessageAccessibility(label: listMessageAccessibilityText([title?.string, descriptionText?.string, linkText?.string, authorString]), value: dateText, item: item, contextSourceNode: strongSelf.contextSourceNode, isContextMenuEnabled: strongSelf.containerNode.isGestureEnabled)
                     
                     if let _ = updatedTheme {
                         strongSelf.separatorNode.backgroundColor = item.presentationData.theme.theme.list.itemPlainSeparatorColor

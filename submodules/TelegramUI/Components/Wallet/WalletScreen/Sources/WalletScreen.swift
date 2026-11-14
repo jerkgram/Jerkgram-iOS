@@ -9,7 +9,7 @@ import TelegramStringFormatting
 import TextFormat
 import ComponentFlow
 import ViewControllerComponent
-import ChatListHeaderComponent
+import NavigationBarComponent
 import BundleIconComponent
 import QrCodeUI
 import ContextUI
@@ -22,7 +22,6 @@ import EdgeEffect
 import ButtonComponent
 import ListSectionComponent
 import ListActionItemComponent
-import WalletCollectibleItemComponent
 import WalletTransactionItemComponent
 import WalletTransactionScreen
 import InfoParagraphComponent
@@ -40,7 +39,6 @@ import Markdown
 private let walletSectionOverscan: CGFloat = 100.0
 private let walletTransactionItemHeight: CGFloat = 79.0
 private let walletCollectibleTransactionItemHeight: CGFloat = 132.0
-private let walletCollectibleItemHeight: CGFloat = 58.0
 
 private struct WalletItemsLayout {
     let itemOffsets: [CGFloat]
@@ -695,15 +693,18 @@ private final class WalletScreenComponent: Component {
     let context: AccountContext
     let updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)
     let walletContext: WalletContext
+    let opensCollectibles: Bool
 
     init(
         context: AccountContext,
         updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>),
-        walletContext: WalletContext
+        walletContext: WalletContext,
+        opensCollectibles: Bool
     ) {
         self.context = context
         self.updatedPresentationData = updatedPresentationData
         self.walletContext = walletContext
+        self.opensCollectibles = opensCollectibles
     }
 
     static func ==(lhs: WalletScreenComponent, rhs: WalletScreenComponent) -> Bool {
@@ -711,6 +712,7 @@ private final class WalletScreenComponent: Component {
             && lhs.updatedPresentationData.initial === rhs.updatedPresentationData.initial
             && lhs.updatedPresentationData.signal === rhs.updatedPresentationData.signal
             && lhs.walletContext === rhs.walletContext
+            && lhs.opensCollectibles == rhs.opensCollectibles
     }
 
     private final class ScrollView: UIScrollView {
@@ -727,6 +729,22 @@ private final class WalletScreenComponent: Component {
     }
 
     final class View: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+        /// VoiceOver: the bar (Back, Scan QR Code, More), the title, the collapsed balance while it shows, the card (one
+        /// summary and its QR button), then the content. The balance copies drawn over the card and the bar for its
+        /// collapse animation are not read: the card's summary and the bar's Balance button say it.
+        override var accessibilityElements: [Any]? {
+            get {
+                let candidates: [UIView?] = [self.header, self.navigationTitle.view, self.navigationBalanceButton, self.cardContainerView, self.scrollView]
+                return candidates.compactMap { view -> UIView? in
+                    guard let view, view.superview === self, !view.isHidden, view.alpha >= 0.01 else {
+                        return nil
+                    }
+                    return view
+                }
+            } set(value) {
+            }
+        }
+        
         private enum SelectedSection: Equatable {
             case transactions
             case collectibles
@@ -739,7 +757,11 @@ private final class WalletScreenComponent: Component {
         private let scrollView: ScrollView
         private let topContentContainerView = UIView()
         private let topEdgeEffectView: EdgeEffectView
-        private let header = ComponentView<Empty>()
+        private let header = WalletNavigationHeaderView()
+        /// The header bar, for navigation transitions.
+        var navigationTransitionHeader: WalletNavigationHeaderView {
+            return self.header
+        }
         private let navigationTitle = ComponentView<Empty>()
         private let navigationBalance = ComponentView<Empty>()
         private let navigationBalanceButton = UIButton(type: .custom)
@@ -776,14 +798,19 @@ private final class WalletScreenComponent: Component {
         private var transferMotionObserver: NSObjectProtocol?
         private var isUpdatingTransferAnimations = false
 
-        private let collectiblesSection = LazySectionView()
+        private let collectiblesSection = WalletCollectiblesGridView()
+        private let collectiblesFooter = ComponentView<Empty>()
+        private lazy var giftStickers = WalletGiftStickerCoordinator(host: self, scrollView: self.scrollView, grid: self.collectiblesSection)
         private let emptyTransactionsInfo = ComponentView<Empty>()
         private let emptyTransactionsFooter = ComponentView<Empty>()
+        private let emptyTransactionsSurfaceView = UIView()
         private let accountProtectionIcon = renderSettingsIcon(
             name: "Item List/Icons/Warning",
             backgroundColors: [UIColor(rgb: 0xff453a)]
         )
 
+        private var localGramObservers: [NSObjectProtocol] = []
+        private var localGramVisualBalance: Int64?
         private var component: WalletScreenComponent?
         private var environment: EnvironmentType?
         private var componentState: EmptyComponentState?
@@ -828,6 +855,7 @@ private final class WalletScreenComponent: Component {
         private var gramTooltipWalletAddress: String?
         private var isResolvingSigningAccess = false
         private var selectedSection: SelectedSection = .transactions
+        private var pendingCollectiblesSection = false
         private var cardExpandedFrame: CGRect?
         private var cardTransitionStart: CGFloat = 0.0
 
@@ -915,6 +943,11 @@ private final class WalletScreenComponent: Component {
             self.transferMotionObserver = NotificationCenter.default.addObserver(forName: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 self?.updatePendingTransferAnimations()
             }
+            for name in [JerkgramLocalGramBalance.changed, Notification.Name("JerkgramSettingsDidImport")] {
+                self.localGramObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                    self?.refreshLocalGramBalance(notification: notification)
+                })
+            }
             self.collectiblesSection.layer.anchorPoint = CGPoint(x: 0.5, y: 0.0)
         }
 
@@ -924,6 +957,7 @@ private final class WalletScreenComponent: Component {
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
+            if self.window == nil { self.giftStickers.cancel() }
             self.updatePendingTransferAnimations()
 
             if self.window == nil {
@@ -952,6 +986,7 @@ private final class WalletScreenComponent: Component {
         }
 
         deinit {
+            for observer in self.localGramObservers { NotificationCenter.default.removeObserver(observer) }
             self.transferDisplayLink?.invalidate()
             self.transferForegroundDisposable.dispose()
             if let observer = self.transferMotionObserver { NotificationCenter.default.removeObserver(observer) }
@@ -1163,6 +1198,55 @@ private final class WalletScreenComponent: Component {
             self.isOpeningWaltBalance = false
             self.isWaitingForWaltBalanceUrl = false
             self.waltBalanceBotAppDisposable.set(nil)
+        }
+
+        private func presentStickerTutorialToast() {
+            guard self.environment?.isVisible == true, let component = self.component, let controller = self.environment?.controller() else { return }
+            let data = self.currentPresentationData(for: component)
+            controller.present(UndoOverlayController(
+                presentationData: data.initial,
+                content: .info(title: nil, text: data.initial.strings.Wallet_Sticker_TutorialDone, timeout: nil, customUndoText: nil),
+                position: .bottom,
+                action: { _ in false }
+            ), in: .current)
+        }
+
+        private func presentStickerLimitError() {
+            guard self.environment?.isVisible == true, let component = self.component, let controller = self.environment?.controller() else { return }
+            let data = self.currentPresentationData(for: component)
+            controller.present(UndoOverlayController(
+                presentationData: data.initial,
+                content: .info(title: nil, text: data.initial.strings.Wallet_Sticker_LimitError("\(WalletGiftStickerCoordinator.maxStickers)").string, timeout: nil, customUndoText: nil),
+                position: .bottom,
+                action: { _ in false }
+            ), in: .current)
+        }
+
+        private func presentCardSaveError(_ error: WalletCardUpdateError) {
+            guard self.environment?.isVisible == true else { return }
+            guard let component = self.component, let controller = self.environment?.controller() else { return }
+            let data = self.currentPresentationData(for: component)
+            let strings = data.initial.strings
+            let text: String?
+            switch error {
+            case .limitExceeded: text = strings.Wallet_Sticker_LimitError("\(WalletGiftStickerCoordinator.maxStickers)").string
+            case .savedInProfile: text = strings.Wallet_Sticker_ProfileError
+            case .backgroundNotAllowed: text = strings.Wallet_Sticker_BackgroundNotAllowedError
+            case .invalidSticker, .notOwned, .duplicate, .invalidAddress, .invalidNft: text = strings.Wallet_Sticker_InvalidError
+            case .unavailable, .generic: text = strings.Login_UnknownError
+            case .floodWait: text = nil
+            }
+            controller.present(UndoOverlayController(
+                presentationData: data.initial,
+                content: .info(
+                    title: text == nil ? nil : strings.Wallet_Sticker_SaveErrorTitle,
+                    text: text ?? strings.Wallet_Sticker_SaveErrorTitle,
+                    timeout: nil,
+                    customUndoText: nil
+                ),
+                position: .bottom,
+                action: { _ in false }
+            ), in: .current)
         }
 
         private func presentWaltBalanceError() {
@@ -1416,6 +1500,21 @@ private final class WalletScreenComponent: Component {
                 .offsetBy(dx: -sectionFrame.minX, dy: -sectionFrame.minY)
         }
 
+        private func collectiblesVisibleBounds(for frame: CGRect, viewportSize: CGSize) -> CGRect {
+            return CGRect(origin: self.scrollView.contentOffset, size: viewportSize)
+                .offsetBy(dx: -frame.minX, dy: -frame.minY)
+        }
+
+        private func hideSection(_ section: WalletCollectiblesGridView, transition: ComponentTransition) {
+            section.isUserInteractionEnabled = false
+            section.accessibilityElementsHidden = true
+            transition.setTransform(view: section, transform: CATransform3DMakeTranslation(UIAccessibility.isReduceMotionEnabled ? 0.0 : 28.0, 0.0, 0.0))
+            transition.setAlpha(view: section, alpha: 0.0, completion: { [weak section] _ in
+                guard let section, section.alpha == 0.0 else { return }
+                section.removeFromSuperview()
+            })
+        }
+
         private func updateVisibleSections(transition: ComponentTransition) {
             switch self.selectedSection {
             case .transactions:
@@ -1428,7 +1527,7 @@ private final class WalletScreenComponent: Component {
             case .collectibles:
                 if self.collectiblesSection.superview != nil {
                     self.collectiblesSection.updateVisibleBounds(
-                        self.visibleBounds(for: self.collectiblesSection.frame, viewportSize: self.scrollView.bounds.size),
+                        self.collectiblesVisibleBounds(for: self.collectiblesSection.frame, viewportSize: self.scrollView.bounds.size),
                         transition: transition
                     )
                 }
@@ -1440,6 +1539,9 @@ private final class WalletScreenComponent: Component {
                 section.clearVisibleItems()
                 return
             }
+            section.isUserInteractionEnabled = false
+            section.accessibilityElementsHidden = true
+            transition.setTransform(view: section, transform: CATransform3DMakeTranslation(UIAccessibility.isReduceMotionEnabled ? 0.0 : -28.0, 0.0, 0.0))
             transition.setAlpha(view: section, alpha: 0.0, completion: { [weak section] _ in
                 guard let section, section.alpha == 0.0 else {
                     return
@@ -1471,8 +1573,12 @@ private final class WalletScreenComponent: Component {
             )
             if !wasVisible {
                 section.alpha = 1.0
+                ComponentTransition.immediate.setTransform(view: section, transform: CATransform3DMakeTranslation(UIAccessibility.isReduceMotionEnabled ? 0.0 : -28.0, 0.0, 0.0))
                 self.scrollView.addSubview(section)
             }
+            section.isUserInteractionEnabled = true
+            section.accessibilityElementsHidden = false
+            transition.setTransform(view: section, transform: CATransform3DIdentity)
             if !wasVisible && !transition.animation.isImmediate {
                 section.layer.allowsGroupOpacity = true
                 transition.animateAlpha(view: section, from: 0.0, to: 1.0, completion: { [weak section] _ in
@@ -1506,7 +1612,27 @@ private final class WalletScreenComponent: Component {
             })
         }
 
+        private func refreshLocalGramBalance(notification: Notification? = nil) {
+            guard let component = self.component else {
+                self.localGramVisualBalance = nil
+                return
+            }
+            let accountPeerId = component.context.account.peerId.toInt64()
+            if let notification {
+                guard let changedAccountPeerId = notification.userInfo?["accountPeerId"] as? NSNumber,
+                    changedAccountPeerId.int64Value == accountPeerId else { return }
+            }
+            self.localGramVisualBalance = JerkgramLocalGramBalance.visualBalance(accountPeerId: accountPeerId)
+            if notification != nil {
+                self.componentState?.updated(transition: .immediate)
+            }
+        }
+
         private var displayBalance: Int64? {
+            // Layout only reads this View's account-scoped presentation snapshot.
+            if let local = self.localGramVisualBalance {
+                return local
+            }
             guard let balance = self.walletState?.balance.currentValue else {
                 return nil
             }
@@ -1618,7 +1744,13 @@ private final class WalletScreenComponent: Component {
             }
             let tooltipSize = tooltip.update(
                 transition: .immediate,
-                component: AnyComponent(WalletTooltipComponent(text: environment.strings.Wallet_GramTooltip)),
+                component: AnyComponent(WalletTooltipComponent(
+                    text: environment.strings.Wallet_GramTooltip,
+                    colors: (
+                        cardView.giftStyled(WalletTooltipComponent.defaultColors.0) ?? WalletTooltipComponent.defaultColors.0,
+                        cardView.giftStyled(WalletTooltipComponent.defaultColors.1) ?? WalletTooltipComponent.defaultColors.1
+                    )
+                )),
                 environment: {},
                 containerSize: CGSize(width: min(614.0, availableWidth), height: 10000.0)
             )
@@ -1630,7 +1762,7 @@ private final class WalletScreenComponent: Component {
                 cardView.addSubview(tooltipView)
             }
             tooltipView.isHidden = cardView.gramIconFrame.isEmpty
-            let sourceFrame = cardView.gramIconFrame.offsetBy(dx: 0.0, dy: -4.0)
+            let sourceFrame = cardView.gramIconFrame.offsetBy(dx: 0.0, dy: 4.0)
             let availableFrame = cardView.convert(CGRect(x: leftInset, y: 0.0, width: availableWidth, height: 0.0), from: self)
             let tooltipFrame = CGRect(
                 origin: CGPoint(
@@ -1773,9 +1905,10 @@ private final class WalletScreenComponent: Component {
                             )),
                             badge: nil,
                             action: { [weak self] in
-                                guard let self, self.selectedSection != .transactions else {
+                                guard let self, self.selectedSection != .transactions, !self.giftStickers.isDragging else {
                                     return
                                 }
+                                self.pendingCollectiblesSection = false
                                 self.selectedSection = .transactions
                                 self.componentState?.updated(transition: .easeInOut(duration: 0.25))
                             }
@@ -1789,9 +1922,10 @@ private final class WalletScreenComponent: Component {
                             )),
                             badge: nil,
                             action: { [weak self] in
-                                guard let self, self.selectedSection != .collectibles else {
+                                guard let self, self.selectedSection != .collectibles, !self.giftStickers.isDragging else {
                                     return
                                 }
+                                self.pendingCollectiblesSection = false
                                 self.selectedSection = .collectibles
                                 self.componentState?.updated(transition: .easeInOut(duration: 0.25))
                             }
@@ -1807,7 +1941,7 @@ private final class WalletScreenComponent: Component {
             )
             let tabsFrame = CGRect(
                 origin: CGPoint(
-                    x: floorToScreenPixels((availableWidth - tabsSize.width) / 2.0),
+                    x: environment.safeInsets.left + floorToScreenPixels((availableWidth - environment.safeInsets.left - environment.safeInsets.right - tabsSize.width) / 2.0),
                     y: originY
                 ),
                 size: tabsSize
@@ -1860,6 +1994,7 @@ private final class WalletScreenComponent: Component {
         }
 
         func setTransferAnimationsVisible(_ visible: Bool) {
+            if !visible { self.giftStickers.cancel() }
             self.transferScreenVisible = visible
             if visible { self.isReturningForTransfer = false }
             self.updatePendingTransferAnimations()
@@ -1881,9 +2016,9 @@ private final class WalletScreenComponent: Component {
             self.newTransferPresentationIds.formIntersection(transactions.keys)
             for transaction in state.transactions.items where transaction.status == .pending && transaction.currency == .ton
                 && transaction.direction == .outgoing && transaction.kind != .deployContract && transaction.kind != .keyChange
-                && transaction.collectible == nil && transaction.isVisibleInWalletHistory {
+                && transaction.isVisibleInWalletHistory {
                 guard self.pendingTransferAnimations[transaction.presentationId] == nil else { continue }
-                self.pendingTransferAnimations[transaction.presentationId] = WalletPendingTransferAnimation(id: transaction.presentationId)
+                self.pendingTransferAnimations[transaction.presentationId] = WalletPendingTransferAnimation(id: transaction.presentationId, isCollectible: transaction.collectible != nil)
                 if let previous = self.walletState, !previous.transactions.items.contains(where: { $0.presentationId == transaction.presentationId }) {
                     self.newTransferPresentationIds.insert(transaction.presentationId)
                 }
@@ -1895,7 +2030,7 @@ private final class WalletScreenComponent: Component {
                   let transaction = self.walletState?.transactions.items.first(where: { $0.presentationId == id }),
                   transaction.status != .failed, transaction.isVisibleInWalletHistory else { return false }
             if let source, source.window == nil { return false }
-            let animation = self.pendingTransferAnimations[id] ?? WalletPendingTransferAnimation(id: id)
+            let animation = self.pendingTransferAnimations[id] ?? WalletPendingTransferAnimation(id: id, isCollectible: transaction.collectible != nil)
             animation.isPending = transaction.status == .pending
             self.pendingTransferAnimations[id] = animation
             self.pendingTransferToReveal = id
@@ -2677,6 +2812,7 @@ private final class WalletScreenComponent: Component {
                 context: component.context,
                 walletContext: walletContext,
                 collectible: collectible,
+                stickerHost: self.giftStickers,
                 collectibleSent: { [weak self, weak walletContext] address in
                     guard let self, let walletContext, self.walletContext === walletContext else {
                         return
@@ -2846,7 +2982,7 @@ private final class WalletScreenComponent: Component {
             }
             let contextController = makeContextController(
                 presentationData: presentationData,
-                source: .reference(WalletContextReferenceContentSource(sourceView: sourceView)),
+                source: .reference(WalletContextReferenceContentSource(sourceView: self.header.barView?.navigationButtonContextContainer(sourceView: sourceView) ?? sourceView)),
                 items: menuItems,
                 gesture: nil
             )
@@ -2860,69 +2996,54 @@ private final class WalletScreenComponent: Component {
             environment: EnvironmentType,
             transition: ComponentTransition
         ) -> (originY: CGFloat, size: CGSize) {
-            let leftButton: AnyComponentWithIdentity<NavigationButtonComponentEnvironment> = AnyComponentWithIdentity(
+            // iPhone Duo: the controller shows back in the side strip instead (WalletScreen.containerLayoutUpdated).
+            let backButtonInSideColumn = (environment.controller() as? WalletScreen)?.backButtonInSideColumn ?? false
+            let leftButton: NavigationBarComponent.Button? = backButtonInSideColumn ? nil : NavigationBarComponent.Button(
                 id: "back",
-                component: AnyComponent(NavigationButtonComponent(
-                    content: .icon(imageName: environment.metrics.widthClass == .regular ? "Navigation/Close" : "Navigation/Back"),
-                    pressed: { [weak self] _ in
-                        self?.dismiss()
-                    }
-                ))
+                content: .icon(imageName: environment.metrics.widthClass == .regular ? "Navigation/Close" : "Navigation/Back"),
+                action: { [weak self] _ in
+                    self?.dismiss()
+                }
             )
-            let rightButtons: [AnyComponentWithIdentity<NavigationButtonComponentEnvironment>] = [
-                AnyComponentWithIdentity(
+            let rightButtons: [NavigationBarComponent.Button] = [
+                NavigationBarComponent.Button(
                     id: "more",
-                    component: AnyComponent(NavigationButtonComponent(
-                        content: .more,
-                        pressed: { [weak self] sourceView in
-                            self?.openContextMenu(sourceView: sourceView)
-                        }
-                    ))
+                    content: .more,
+                    action: { [weak self] sourceView in
+                        self?.openContextMenu(sourceView: sourceView)
+                    }
                 ),
-                AnyComponentWithIdentity(
+                NavigationBarComponent.Button(
                     id: "scanQr",
-                    component: AnyComponent(NavigationButtonComponent(
-                        content: .icon(imageName: "Navigation/ScanQr"),
-                        pressed: { [weak self] _ in
-                            self?.openQrCodeScanner()
-                        }
-                    ))
+                    content: .icon(imageName: "Navigation/ScanQr"),
+                    action: { [weak self] _ in
+                        self?.openQrCodeScanner()
+                    },
+                    accessibilityLabel: environment.strings.Contacts_ScanQrCode
                 )
             ]
-            let primaryContent = ChatListHeaderComponent.Content(
-                title: "",
-                navigationBackTitle: nil,
-                titleComponent: nil,
-                chatListTitle: nil,
+
+            let primaryContent = NavigationBarComponent.Content(
+                title: .text(""),
+                back: nil,
                 leftButton: leftButton,
                 rightButtons: rightButtons,
-                backPressed: nil
+                backPressed: {}
             )
 
             let headerSize = self.header.update(
-                transition: transition,
-                component: AnyComponent(ChatListHeaderComponent(
+                component: NavigationBarComponent(
+                    theme: NavigationBarTheme(rootControllerTheme: environment.theme),
+                    strings: NavigationBarStrings(presentationStrings: environment.strings),
                     leftInset: 16.0 + environment.safeInsets.left,
                     rightInset: 16.0 + environment.safeInsets.right,
+                    trailingButtonsInset: environment.navigationBarTrailingButtonsInset,
                     primaryContent: primaryContent,
                     secondaryContent: nil,
-                    secondaryTransition: 0.0,
-                    networkStatus: nil,
-                    storySubscriptions: nil,
-                    storiesIncludeHidden: false,
-                    storiesFraction: 0.0,
-                    storiesUnlocked: false,
-                    uploadProgress: [:],
-                    context: component.context,
-                    theme: environment.theme,
-                    strings: environment.strings,
-                    openStatusSetup: { _ in
-                    },
-                    toggleIsLocked: {
-                    }
-                )),
-                environment: {},
-                containerSize: CGSize(width: availableSize.width, height: 44.0)
+                    secondaryTransition: 0.0
+                ),
+                width: availableSize.width,
+                transition: transition
             )
             let headerOriginY: CGFloat
             if environment.metrics.widthClass == .regular {
@@ -2932,18 +3053,16 @@ private final class WalletScreenComponent: Component {
             } else {
                 headerOriginY = environment.statusBarHeight + 10.0
             }
-            if let headerView = self.header.view {
-                if headerView.superview == nil {
-                    self.insertSubview(headerView, aboveSubview: self.cardBalanceClippingView)
-                }
-                transition.setFrame(
-                    view: headerView,
-                    frame: CGRect(
-                        origin: CGPoint(x: 0.0, y: headerOriginY),
-                        size: headerSize
-                    )
-                )
+            if self.header.superview == nil {
+                self.insertSubview(self.header, aboveSubview: self.cardBalanceClippingView)
             }
+            transition.setFrame(
+                view: self.header,
+                frame: CGRect(
+                    origin: CGPoint(x: 0.0, y: headerOriginY),
+                    size: headerSize
+                )
+            )
 
             self.navigationTitle.parentState = state
             let navigationTitleSize = self.navigationTitle.update(
@@ -2959,13 +3078,14 @@ private final class WalletScreenComponent: Component {
             if let navigationTitleView = self.navigationTitle.view {
                 if navigationTitleView.superview == nil {
                     navigationTitleView.isUserInteractionEnabled = false
+                    navigationTitleView.accessibilityTraits = .header
                     self.insertSubview(navigationTitleView, belowSubview: self.cardContainerView)
                 }
                 transition.setFrame(
                     view: navigationTitleView,
                     frame: CGRect(
                         origin: CGPoint(
-                            x: floor((availableSize.width - navigationTitleSize.width) * 0.5),
+                            x: floor(environment.safeInsets.left + (availableSize.width - environment.safeInsets.left - environment.safeInsets.right - navigationTitleSize.width) * 0.5),
                             y: headerOriginY + floor((headerSize.height - navigationTitleSize.height) * 0.5)
                         ),
                         size: navigationTitleSize
@@ -2992,7 +3112,7 @@ private final class WalletScreenComponent: Component {
             if let navigationBalanceView = self.navigationBalance.view {
                 let navigationBalanceFrame = CGRect(
                     origin: CGPoint(
-                        x: floor((availableSize.width - navigationBalanceSize.width) * 0.5),
+                        x: floor(environment.safeInsets.left + (availableSize.width - environment.safeInsets.left - environment.safeInsets.right - navigationBalanceSize.width) * 0.5),
                         y: headerOriginY + floor((headerSize.height - navigationBalanceSize.height) * 0.5)
                     ),
                     size: navigationBalanceSize
@@ -3022,7 +3142,7 @@ private final class WalletScreenComponent: Component {
                     view: self.navigationBalanceButton,
                     frame: CGRect(
                         origin: CGPoint(
-                            x: floor((availableSize.width - hitSize.width) * 0.5),
+                            x: floor(environment.safeInsets.left + (availableSize.width - environment.safeInsets.left - environment.safeInsets.right - hitSize.width) * 0.5),
                             y: headerOriginY + floor((headerSize.height - hitSize.height) * 0.5)
                         ),
                         size: hitSize
@@ -3068,7 +3188,14 @@ private final class WalletScreenComponent: Component {
             } else if !environment.isVisible {
                 self.dismissGramTooltip(animated: false)
             }
+            if self.component == nil && component.opensCollectibles {
+                self.pendingCollectiblesSection = true
+            }
+            let localGramIdentityChanged = self.component?.context !== component.context || self.component?.walletContext !== component.walletContext
             self.component = component
+            if localGramIdentityChanged {
+                self.refreshLocalGramBalance()
+            }
             self.environment = environment
             self.componentState = state
             let previousContentOffset = self.scrollView.contentOffset
@@ -3120,7 +3247,9 @@ private final class WalletScreenComponent: Component {
                     }
                     self.updateSuppressedCollectibles(walletState)
                     self.observePendingTransfers(walletState)
+                    let newCardError = walletState.cardStickerSaveError != self.walletState?.cardStickerSaveError
                     self.walletState = walletState
+                    if newCardError, let error = walletState.cardStickerSaveError { self.presentCardSaveError(error) }
                     if previousPhase != walletState.phase || previousWalletAddress != walletState.walletAddress {
                         if previousWalletAddress != walletState.walletAddress {
                             self.previousWalletsBalance = 0
@@ -3217,10 +3346,18 @@ private final class WalletScreenComponent: Component {
             let collectibles = (self.walletState?.collectibles.items ?? []).filter {
                 !self.suppressedCollectibleAddresses.contains($0.address)
             }
+            if self.pendingCollectiblesSection && !collectibles.isEmpty {
+                self.pendingCollectiblesSection = false
+                self.selectedSection = .collectibles
+            }
             if collectibles.isEmpty && self.selectedSection == .collectibles {
                 self.selectedSection = .transactions
             }
             let hasEmptyTransactions = self.selectedSection == .transactions && transactions.isEmpty
+            let hasEmptyTransactionsSurface = hasEmptyTransactions && (environment.controller()?.jerkgramSettingsSurfaceActive ?? false)
+            if !hasEmptyTransactionsSurface {
+                self.emptyTransactionsSurfaceView.removeFromSuperview()
+            }
 
             let headerLayout = self.updateHeader(
                 component: component,
@@ -3269,7 +3406,8 @@ private final class WalletScreenComponent: Component {
                     },
                     qrPressed: { [weak self] in
                         self?.openReceive()
-                    }
+                    },
+                    qrAccessibilityLabel: environment.strings.Wallet_Receive_ShowQR
                 )),
                 environment: {},
                 containerSize: CGSize(width: cardWidth, height: availableSize.height)
@@ -3491,6 +3629,20 @@ private final class WalletScreenComponent: Component {
                 self.transactionTabsBackgroundView.removeFromSuperview()
             }
 
+            if self.selectedSection == .transactions && !collectibles.isEmpty {
+                let collectiblesFrame = CGRect(x: environment.safeInsets.left + sideInset,
+                    y: contentHeight + 12.0, width: cardWidth, height: 0.0)
+                let _ = self.collectiblesSection.update(
+                    context: component.context,
+                    theme: environment.theme,
+                    items: collectibles,
+                    width: cardWidth,
+                    visibleBounds: self.collectiblesVisibleBounds(for: collectiblesFrame, viewportSize: availableSize),
+                    transition: .immediate,
+                    openCollectible: { [weak self] collectible in self?.openCollectible(collectible) }
+                )
+            }
+
             if self.selectedSection == .transactions && !transactions.isEmpty {
                 self.hideSection(self.collectiblesSection, transition: transition)
 
@@ -3573,50 +3725,63 @@ private final class WalletScreenComponent: Component {
                 }
                 self.hideEmptyTransactionsFooter(transition: transition)
 
-                let itemContext = component.context
-                let itemTheme = environment.theme
-                let items: [LazySectionView.Item] = collectibles.map { collectible in
-                    return LazySectionView.Item(
-                        id: AnyHashable(collectible.address),
-                        height: walletCollectibleItemHeight,
-                        component: { [weak self] in
-                            return AnyComponent(ListActionItemComponent(
-                                theme: itemTheme,
-                                style: .glass,
-                                title: AnyComponent(WalletCollectibleItemComponent(
-                                    context: itemContext,
-                                    theme: itemTheme,
-                                    collectible: collectible
-                                )),
-                                contentInsets: UIEdgeInsets(top: 9.0, left: 0.0, bottom: 9.0, right: 0.0),
-                                separatorInset: 60.0,
-                                icon: nil,
-                                accessory: nil,
-                                action: { [weak self] _ in
-                                    self?.openCollectible(collectible)
-                                },
-                                highlighting: .default
-                            ))
-                        }
-                    )
-                }
-
                 let collectiblesOriginY = contentHeight + 12.0
                 let collectiblesFrame = CGRect(
                     origin: CGPoint(x: environment.safeInsets.left + sideInset, y: collectiblesOriginY),
                     size: CGSize(width: cardWidth, height: 0.0)
                 )
-                let collectiblesSectionSize = self.updateSection(
-                    self.collectiblesSection,
+                let wasVisible = self.collectiblesSection.superview != nil
+                let gridTransition: ComponentTransition = wasVisible ? contentLayoutTransition : .immediate
+                let collectiblesSectionSize = self.collectiblesSection.update(
+                    context: component.context,
                     theme: environment.theme,
-                    state: state,
-                    items: items,
-                    footer: nil,
-                    frame: collectiblesFrame,
-                    viewportSize: availableSize,
-                    transition: contentLayoutTransition
+                    items: collectibles,
+                    width: cardWidth,
+                    visibleBounds: self.collectiblesVisibleBounds(for: collectiblesFrame, viewportSize: availableSize),
+                    transition: gridTransition,
+                    openCollectible: { [weak self] collectible in
+                        self?.openCollectible(collectible)
+                    }
                 )
+                if !wasVisible {
+                    self.collectiblesSection.alpha = 0.0
+                    ComponentTransition.immediate.setTransform(view: self.collectiblesSection, transform: CATransform3DMakeTranslation(UIAccessibility.isReduceMotionEnabled ? 0.0 : 28.0, 0.0, 0.0))
+                    self.scrollView.addSubview(self.collectiblesSection)
+                }
+                self.collectiblesSection.isUserInteractionEnabled = true
+                self.collectiblesSection.accessibilityElementsHidden = false
+                contentLayoutTransition.setTransform(view: self.collectiblesSection, transform: CATransform3DIdentity)
+                contentLayoutTransition.setAlpha(view: self.collectiblesSection, alpha: 1.0)
+                gridTransition.setPosition(view: self.collectiblesSection, position: CGPoint(x: collectiblesFrame.midX, y: collectiblesFrame.minY))
+                gridTransition.setBounds(view: self.collectiblesSection, bounds: CGRect(origin: .zero, size: collectiblesSectionSize))
                 contentHeight = collectiblesOriginY + collectiblesSectionSize.height
+                var isOwnWallet = false
+                if case .wallet? = self.walletState?.phase { isOwnWallet = true }
+                if isOwnWallet, collectibles.contains(where: { $0.kind == .gift }) {
+                    let footerSize = self.collectiblesFooter.update(
+                        transition: .immediate,
+                        component: AnyComponent(MultilineTextComponent(
+                            text: .plain(NSAttributedString(string: environment.strings.Wallet_Sticker_GridFooter, font: Font.regular(13.0), textColor: environment.theme.list.freeTextColor)),
+                            horizontalAlignment: .center,
+                            maximumNumberOfLines: 0,
+                            lineSpacing: 0.1
+                        )),
+                        environment: {},
+                        containerSize: CGSize(width: max(0.0, cardWidth - 32.0), height: 1000.0)
+                    )
+                    if let footerView = self.collectiblesFooter.view {
+                        var footerTransition = gridTransition
+                        if footerView.superview !== self.collectiblesSection {
+                            footerView.isUserInteractionEnabled = false
+                            self.collectiblesSection.addSubview(footerView)
+                            footerTransition = .immediate
+                        }
+                        footerTransition.setFrame(view: footerView, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((cardWidth - footerSize.width) / 2.0), y: collectiblesSectionSize.height + 16.0), size: footerSize))
+                    }
+                    contentHeight += 16.0 + footerSize.height
+                } else {
+                    self.collectiblesFooter.view?.removeFromSuperview()
+                }
 
                 transition.setBackgroundColor(view: self, color: environment.theme.list.blocksBackgroundColor)
             } else {
@@ -3624,12 +3789,16 @@ private final class WalletScreenComponent: Component {
                     self.transactionTabsBackgroundView.removeFromSuperview()
                 }
                 self.collectiblesSection.removeFromSuperview()
-                self.collectiblesSection.clearVisibleItems()
+                if collectibles.isEmpty {
+                    self.collectiblesSection.clearVisibleItems()
+                }
                 self.hideSection(self.transactionsSection, transition: transition)
 
-                let titleColor = environment.theme.actionSheet.primaryTextColor
-                let textColor = environment.theme.actionSheet.secondaryTextColor
-                let accentColor = environment.theme.list.itemAccentColor
+                // The inherited Settings theme clears the page background. Give
+                // only the benefits and terms an opaque surface over that image.
+                let titleColor = hasEmptyTransactionsSurface ? UIColor(rgb: 0xffffff) : environment.theme.actionSheet.primaryTextColor
+                let textColor = hasEmptyTransactionsSurface ? UIColor(rgb: 0xd1d1d6) : environment.theme.actionSheet.secondaryTextColor
+                let accentColor = hasEmptyTransactionsSurface ? UIColor(rgb: 0x64b5ff) : environment.theme.list.itemAccentColor
                 let emptyItems: [AnyComponentWithIdentity<Empty>] = [
                     AnyComponentWithIdentity(
                         id: "instantTransfers",
@@ -3696,7 +3865,7 @@ private final class WalletScreenComponent: Component {
                     layoutTransition.setFrame(
                         view: emptyTransactionsInfoView,
                         frame: CGRect(
-                            origin: CGPoint(x: floor((availableSize.width - emptyTransactionsInfoSize.width) / 2.0), y: emptyTransactionsOriginY),
+                            origin: CGPoint(x: floor(environment.safeInsets.left + (availableSize.width - environment.safeInsets.left - environment.safeInsets.right - emptyTransactionsInfoSize.width) / 2.0), y: emptyTransactionsOriginY),
                             size: emptyTransactionsInfoSize
                         )
                     )
@@ -3731,7 +3900,7 @@ private final class WalletScreenComponent: Component {
                         }
                     )),
                     environment: {},
-                    containerSize: CGSize(width: cardWidth, height: 10000.0)
+                    containerSize: CGSize(width: max(0.0, cardWidth - (hasEmptyTransactionsSurface ? 32.0 : 0.0)), height: 10000.0)
                 )
                 let emptyTransactionsFooterOriginY = max(
                     contentHeight + 24.0,
@@ -3754,7 +3923,7 @@ private final class WalletScreenComponent: Component {
                         view: emptyTransactionsFooterView,
                         frame: CGRect(
                             origin: CGPoint(
-                                x: floor((availableSize.width - emptyTransactionsFooterSize.width) * 0.5),
+                                x: floor(environment.safeInsets.left + (availableSize.width - environment.safeInsets.left - environment.safeInsets.right - emptyTransactionsFooterSize.width) * 0.5),
                                 y: emptyTransactionsFooterOriginY
                             ),
                             size: emptyTransactionsFooterSize
@@ -3762,6 +3931,27 @@ private final class WalletScreenComponent: Component {
                     )
                 }
                 contentHeight = emptyTransactionsFooterOriginY + emptyTransactionsFooterSize.height
+
+                if hasEmptyTransactionsSurface {
+                    self.emptyTransactionsSurfaceView.isUserInteractionEnabled = false
+                    self.emptyTransactionsSurfaceView.layer.cornerRadius = 24.0
+                    let surfaceTransition: ComponentTransition = self.emptyTransactionsSurfaceView.superview == nil ? .immediate : contentLayoutTransition
+                    if self.emptyTransactionsSurfaceView.superview == nil {
+                        self.scrollView.insertSubview(self.emptyTransactionsSurfaceView, at: 0)
+                    }
+                    surfaceTransition.setBackgroundColor(view: self.emptyTransactionsSurfaceView, color: UIColor(rgb: 0x1c1c1e).withAlphaComponent(0.45))
+                    // Wallet empty surface frame
+                    surfaceTransition.setFrame(
+                        view: self.emptyTransactionsSurfaceView,
+                        frame: CGRect(
+                            x: environment.safeInsets.left + sideInset,
+                            y: emptyTransactionsOriginY - 20.0,
+                            width: cardWidth,
+                            height: contentHeight - emptyTransactionsOriginY + 36.0
+                        )
+                    )
+                    contentHeight += 16.0
+                }
                 
                 transition.setBackgroundColor(view: self, color: environment.theme.list.plainBackgroundColor)
             }
@@ -3771,7 +3961,7 @@ private final class WalletScreenComponent: Component {
                 frame: CGRect(origin: CGPoint(), size: availableSize)
             )
             contentHeight += (hasEmptyTransactions ? 16.0 : 24.0) + environment.safeInsets.bottom
-            self.scrollView.isScrollEnabled = !hasEmptyTransactions || contentHeight > availableSize.height + UIScreenPixel
+            self.scrollView.isScrollEnabled = !self.giftStickers.isDragging && (!hasEmptyTransactions || contentHeight > availableSize.height + UIScreenPixel)
             let minimumContentHeight = hasEmptyTransactions ? availableSize.height : availableSize.height + self.cardTransitionStart + self.cardTransitionDistance + 1.0
             let contentSize = CGSize(
                 width: availableSize.width,
@@ -3784,7 +3974,7 @@ private final class WalletScreenComponent: Component {
             if compensateAdditionalBalancesOffset {
                 contentOffset.y = max(0.0, contentOffset.y + self.cardTransitionStart - previousCardTransitionStart)
             }
-            if !self.scrollView.isScrollEnabled {
+            if !self.scrollView.isScrollEnabled && !self.giftStickers.isDragging {
                 contentOffset = .zero
             } else if !self.scrollView.isTracking && !self.scrollView.isDecelerating {
                 contentOffset.y = min(contentOffset.y, max(0.0, contentSize.height - availableSize.height))
@@ -3812,6 +4002,72 @@ private final class WalletScreenComponent: Component {
 
             self.revealPendingTransferIfNeeded()
             self.updatePendingTransferAnimations()
+            self.giftStickers.limitReached = { [weak self] in self?.presentStickerLimitError() }
+            self.giftStickers.showMenu = { [weak self] source, onCard, styled, canStyle, placementAction, styleAction, dismissed, passthrough in
+                guard let self, let component = self.component, let controller = self.environment?.controller() else { return nil }
+                let presentationData = component.context.sharedContext.currentPresentationData.with { $0 }
+                let strings = presentationData.strings
+                var items: [ContextMenuItem] = []
+                if canStyle || styled {
+                    items.append(.action(ContextMenuActionItem(
+                        text: styled ? strings.Wallet_Sticker_RemoveColor : strings.Wallet_Sticker_ApplyColor,
+                        icon: { theme in generateTintedImage(image: UIImage(bundleImageName: styled ? "Media Editor/Erase" : "Chat/Context Menu/Palette"), color: theme.contextMenu.primaryColor) },
+                        action: { _, dismiss in dismiss(.default); styleAction() }
+                    )))
+                }
+                items.append(.action(ContextMenuActionItem(
+                    text: onCard ? strings.Wallet_Sticker_RemoveFromCard : strings.Wallet_Sticker_AddToCard,
+                    icon: { theme in generateTintedImage(image: onCard ? UIImage(bundleImageName: "Chat/Context Menu/Clear") : UIImage(bundleImageName: "Chat/Context Menu/Card"), color: theme.contextMenu.primaryColor) },
+                    action: { _, dismiss in dismiss(.default); placementAction() }
+                )))
+                // ContextUI adds 7 pt; add 10 pt in the enlarged cell's coordinates
+                // for the reference's 17 pt gap below the preview.
+                let menu = makeContextController(presentationData: presentationData,
+                    source: .reference(WalletContextReferenceContentSource(sourceView: source, bottomInset: -10.0 / 1.15)),
+                    items: .single(ContextController.Items(content: .list(items))), gesture: nil)
+                menu.dismissed = dismissed
+                menu.passthroughHitTest = passthrough
+                controller.presentInGlobalOverlay(menu)
+                return { [weak menu] in menu?.dismiss(completion: nil) }
+            }
+            let tutorialStrings = environment.strings
+            self.giftStickers.tutorialTexts = (tutorialStrings.Wallet_Sticker_TutorialTile, tutorialStrings.Wallet_Sticker_TutorialCard)
+            self.giftStickers.tutorialAvailable = { [weak self] completion in
+                guard let self, let component = self.component else { return }
+                let _ = (ApplicationSpecificNotice.getWalletCardStickersTutorial(accountManager: component.context.sharedContext.accountManager)
+                |> deliverOnMainQueue).startStandalone(next: { shown in
+                    completion(!shown)
+                })
+            }
+            self.giftStickers.tutorialStarted = { [weak self] in
+                guard let self, let component = self.component else { return }
+                let _ = ApplicationSpecificNotice.setWalletCardStickersTutorial(accountManager: component.context.sharedContext.accountManager).startStandalone()
+            }
+            self.giftStickers.presentTooltip = { [weak self] tooltip in
+                self?.environment?.controller()?.present(tooltip, in: .current)
+            }
+            self.giftStickers.tutorialFinished = { [weak self] in
+                self?.presentStickerTutorialToast()
+            }
+            if let cardView = self.card.view as? WalletCardComponent.View {
+                let buttons = [self.addFundsButton.view, self.sendButton.view].compactMap { $0 as? ButtonComponent.View }
+                var waveBounds = cardView.stickerSurface.bounds
+                for button in buttons {
+                    waveBounds = waveBounds.union(button.convert(button.bounds, to: cardView.stickerSurface))
+                }
+                cardView.giftStyleWaveSize = CGSize(width: waveBounds.maxX, height: waveBounds.maxY)
+                cardView.giftButtonDefaultColor = environment.theme.list.itemCheckColors.fillColor
+                cardView.giftStyleUpdated = { [weak self, weak cardView] from, to, origin, radius, progress, fade in
+                    guard let self, let cardView else { return }
+                    for case let button as ButtonComponent.View in [self.addFundsButton.view, self.sendButton.view].compactMap({ $0 }) {
+                        button.setBackgroundReveal(from: from, to: to,
+                            origin: cardView.stickerSurface.convert(origin, to: button), radius: radius,
+                            progress: progress, fade: fade)
+                    }
+                }
+            }
+            self.giftStickers.update(context: component.context, wallet: component.walletContext,
+                state: self.walletState, card: self.card.view as? WalletCardComponent.View, visible: environment.isVisible)
             return availableSize
         }
     }
@@ -3839,12 +4095,25 @@ private final class WalletScreenComponent: Component {
 
 public final class WalletScreen: ViewControllerComponentContainer {
     private let walletContext: WalletContext
+    /// iPhone Duo: whether back is the side strip's circle (drawn by the navigation bar's side column button,
+    /// docs/iphone-duo-layout.md) rather than the header's own.
+    fileprivate private(set) var backButtonInSideColumn = false
     private var walletScreenUpdatesDisposable: Disposable?
     private var didAppear = false
 
+    /// Draws its own header (its Display bar only holds the iPhone Duo side column's back); it takes part in navigation
+    /// transitions itself.
+    override public var navigationBarTransitionSource: NavigationBarTransitionSource? {
+        guard self.isNodeLoaded else {
+            return nil
+        }
+        return (self.node.hostView.componentView as? WalletScreenComponent.View)?.navigationTransitionHeader
+    }
+
     public init(
         context: AccountContext,
-        walletContext: WalletContext
+        walletContext: WalletContext,
+        opensCollectibles: Bool = false
     ) {
         self.walletContext = walletContext
         let updatedPresentationData = presentationDataWithDefaultAccent((
@@ -3856,7 +4125,8 @@ public final class WalletScreen: ViewControllerComponentContainer {
             component: WalletScreenComponent(
                 context: context,
                 updatedPresentationData: updatedPresentationData,
-                walletContext: walletContext
+                walletContext: walletContext,
+                opensCollectibles: opensCollectibles
             ),
             navigationBarAppearance: .transparent,
             statusBarStyle: .default,
@@ -3876,6 +4146,38 @@ public final class WalletScreen: ViewControllerComponentContainer {
             }
             componentView.scrollToTop()
         }
+    }
+
+    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        // The header draws its own back and an empty left item hides the bar's; with a side strip the bar's
+        // back moves into the strip instead, so the empty item goes and the header drops its button.
+        let backButtonInSideColumn = layout.sideColumnNavigationButtonFrame != nil
+        if self.backButtonInSideColumn != backButtonInSideColumn {
+            self.backButtonInSideColumn = backButtonInSideColumn
+            self.navigationItem.setLeftBarButton(backButtonInSideColumn ? nil : UIBarButtonItem(customView: UIView()), animated: false)
+        }
+        super.containerLayoutUpdated(layout, transition: transition)
+    }
+
+    override public func present(_ controller: ViewController, in context: PresentationContextType, with arguments: Any? = nil, blockInteraction: Bool = false, completion: @escaping () -> Void = {}) {
+        if controller is UndoOverlayController {
+            self.dismissAllTooltips()
+        }
+        super.present(controller, in: context, with: arguments, blockInteraction: blockInteraction, completion: completion)
+    }
+
+    private func dismissAllTooltips() {
+        self.window?.forEachController({ controller in
+            if let controller = controller as? UndoOverlayController {
+                controller.dismiss()
+            }
+        })
+        self.forEachController({ controller in
+            if let controller = controller as? UndoOverlayController {
+                controller.dismiss()
+            }
+            return true
+        })
     }
 
     override public func preferredContentSizeForLayout(_ layout: ContainerViewLayout) -> CGSize? {
@@ -3902,6 +4204,11 @@ public final class WalletScreen: ViewControllerComponentContainer {
         componentView.setTransferAnimationsVisible(true)
         componentView.refreshTwoStepAuth()
         componentView.reloadPreviousWallets()
+    }
+
+    override public func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        (self.node.hostView.componentView as? WalletScreenComponent.View)?.setTransferAnimationsVisible(true)
     }
 
     override public func viewWillDisappear(_ animated: Bool) {
@@ -3931,17 +4238,20 @@ public final class WalletScreen: ViewControllerComponentContainer {
 
 private final class WalletContextReferenceContentSource: ContextReferenceContentSource {
     private let sourceView: UIView
+    private let bottomInset: CGFloat
 
     let forceDisplayBelowKeyboard = true
 
-    init(sourceView: UIView) {
+    init(sourceView: UIView, bottomInset: CGFloat = 0) {
         self.sourceView = sourceView
+        self.bottomInset = bottomInset
     }
 
     func transitionInfo() -> ContextControllerReferenceViewInfo? {
         return ContextControllerReferenceViewInfo(
             referenceView: self.sourceView,
-            contentAreaInScreenSpace: UIScreen.main.bounds,
+            contentAreaInScreenSpace: mainWindowScreenBounds,
+            insets: UIEdgeInsets(top: 0, left: 0, bottom: self.bottomInset, right: 0),
             actionsPosition: .bottom
         )
     }

@@ -1,5 +1,8 @@
 mod dedupe;
+mod handover;
 mod salts;
+#[cfg(test)]
+mod sec_audit_replay_tests;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -35,6 +38,8 @@ pub const MAX_NESTING_DEPTH: usize = 8;
 pub const MAX_AWAITED_ANSWERS: usize = 1024;
 pub const MAX_MESSAGES_PER_PACKET: usize = 4 * 1024;
 pub const MAX_CONTAINER_MESSAGES_OUT: usize = 1024;
+/// Queries sent and not answered yet, as tdlib's MAX_INFLIGHT_QUERIES: more wait until one is answered.
+pub const MAX_INFLIGHT_QUERIES: usize = 1024;
 pub const CONTAINER_RESERVED_SLOTS: usize = 2;
 pub const MAX_UNPACKED_PER_PACKET: usize = 64 * 1024 * 1024;
 pub const CLOCK_JUMP_THRESHOLD: f64 = 1.0;
@@ -110,6 +115,7 @@ pub const HTTP_ANSWER_REQUEST_BYTES: usize = 16 * 1024;
 /// HTTP: packets tracked for loss; beyond it the oldest are forgotten (their queries then wait for
 /// the usual state requests).
 pub const MAX_TRACKED_HTTP_PACKETS: usize = 256;
+pub const MAX_QUERY_TRACE: usize = 256;
 /// HTTP: a response proves the server read the request, and it acknowledges the queries in it in
 /// that response or soon after; one neither acknowledged nor answered this long after goes again.
 pub const HTTP_ACK_GRACE: f64 = 3.0;
@@ -168,6 +174,16 @@ pub enum SessionEvent {
     Pong { rtt: f64 },
     DroppedAnswerTooLarge { total: usize },
     DestroyAuthKey { outcome: DestroyAuthKeyOutcome },
+    Released { id: QueryId, may_have_run: bool },
+}
+
+/// What happened to a query on the wire, for the host's log: the server knows a request only by its
+/// msg_id. A `Sent` with `again` repeats the same msg_id; otherwise `previous_msg_id` is the one it
+/// replaces, 0 on the first send. `container_id` is 0 when the message went alone.
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueryTrace {
+    Sent { id: QueryId, msg_id: i64, seq_no: i32, container_id: i64, previous_msg_id: i64, again: bool },
+    Answered { id: QueryId, msg_id: i64, response_msg_id: i64, error: Option<(i32, String)> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +315,8 @@ struct Query {
     options: QueryOptions,
     state: QueryState,
     msg_id: i64,
+    /// The msg_id the query last went under before it went back to the queue, for the trace.
+    previous_msg_id: i64,
     seq_no: i32,
     container_id: i64,
     invoke_after_msg_id: i64,
@@ -310,6 +328,10 @@ struct Query {
     rejections: u32,
     server_resends: u32,
     may_have_arrived: bool,
+    /// An earlier copy of the query may have run: it went back to the queue without the server saying
+    /// it never got it (a new server session, a local reset, msgs_state_info "nothing known").
+    /// Sticky, for a handover (`Session::may_have_run`).
+    maybe_ran_before: bool,
     retransmit_refused: bool,
     /// The packet that carried the query under its current msg_id on this connection. None once the
     /// query is retransmitted, as its answer may then be for a transmission on an earlier connection.
@@ -372,7 +394,8 @@ struct PacketContext {
     budget: usize,
     messages: usize,
     deferred_resends: Vec<(QueryId, i64)>,
-    updates_lost: bool,
+    /// The newest msg_id of an update this packet could not deliver.
+    updates_lost: Option<i64>,
     unknown_queries_stuck: bool,
     structure_error: Option<TlError>,
 }
@@ -384,7 +407,7 @@ impl PacketContext {
             budget,
             messages: 0,
             deferred_resends: Vec::new(),
-            updates_lost: false,
+            updates_lost: None,
             unknown_queries_stuck: false,
             structure_error: None,
         }
@@ -429,6 +452,9 @@ pub struct Session {
     /// session's, and the server saying it has none of it does not fail the call (the new session runs
     /// it, or it was sent again).
     server_session_since: i64,
+    /// The host was last told to fetch the difference when the newest message received had this msg_id:
+    /// an update the server sent before it is in that fetch, so losing it again asks for nothing more.
+    updates_lost_covered: i64,
     force_send_at: Option<f64>,
 
     received: DuplicateChecker,
@@ -513,8 +539,11 @@ pub struct Session {
     bind: Option<(QueryId, BindRequest)>,
     /// The key is temporary and not bound yet: nothing but the bind query goes out.
     bind_gate: bool,
+    /// The queries go to another session: see `handover.rs`.
+    handover: bool,
 
     events: VecDeque<SessionEvent>,
+    trace: VecDeque<QueryTrace>,
 }
 
 impl Session {
@@ -561,6 +590,7 @@ impl Session {
             recent_sent: VecDeque::new(),
             recent_unique_ids: VecDeque::new(),
             server_session_since: 0,
+            updates_lost_covered: 0,
             force_send_at: None,
             received: DuplicateChecker::new(1000),
             updates: DuplicateChecker::new(1000),
@@ -618,7 +648,9 @@ impl Session {
             http_receiving_until: 0.0,
             bind: None,
             bind_gate: false,
+            handover: false,
             events: VecDeque::new(),
+            trace: VecDeque::new(),
         }
     }
 
@@ -937,6 +969,14 @@ impl Session {
         self.queries.get(&id).is_some_and(|query| query.state != QueryState::Pending || query.may_have_arrived)
     }
 
+    /// The query is out under its msg_id, or an earlier copy of it may have run: moved to another
+    /// session it could run twice.
+    pub fn may_have_run(&self, id: QueryId) -> bool {
+        self.queries
+            .get(&id)
+            .is_some_and(|query| query.state != QueryState::Pending || query.may_have_arrived || query.maybe_ran_before)
+    }
+
     pub fn set_online(&mut self, online: bool, now: Now) {
         let need_ping = online || !self.online;
         self.online = online;
@@ -953,6 +993,9 @@ impl Session {
     }
 
     pub fn set_time_difference(&mut self, difference: f64) {
+        if (difference - self.time_difference).abs() > CLOCK_JUMP_THRESHOLD {
+            self.last_future_salts_at = None;
+        }
         self.time_difference = difference;
         self.server_offset = difference + self.wall_offset;
     }
@@ -1350,6 +1393,7 @@ impl Session {
                 options,
                 state: QueryState::Pending,
                 msg_id: 0,
+                previous_msg_id: 0,
                 seq_no: 0,
                 container_id: 0,
                 invoke_after_msg_id: 0,
@@ -1361,6 +1405,7 @@ impl Session {
                 rejections: 0,
                 server_resends: 0,
                 may_have_arrived: false,
+                maybe_ran_before: false,
                 retransmit_refused: false,
                 arrival_seq: None,
             },
@@ -1371,9 +1416,13 @@ impl Session {
     }
 
     pub fn cancel(&mut self, id: QueryId) -> CancelOutcome {
+        let was_full = self.in_flight_is_full();
         let Some(query) = self.queries.remove(&id) else {
             return CancelOutcome::NotFound;
         };
+        if was_full && query.state != QueryState::Pending {
+            self.slot_freed();
+        }
         Self::count_transition(&mut self.pending_queries, &mut self.unknown_queries, Some(query.state), None);
         self.to_retransmit.retain(|other| *other != id);
         match query.state {
@@ -1537,6 +1586,7 @@ impl Session {
         self.recent_sent.clear();
         self.recent_unique_ids.clear();
         self.server_session_since = 0;
+        self.updates_lost_covered = 0;
         self.pending_pings.clear();
         self.received.clear();
         self.updates.clear();
@@ -1583,6 +1633,7 @@ impl Session {
             Some(QueryState::Pending),
         );
         query.state = QueryState::Pending;
+        query.previous_msg_id = query.msg_id;
         query.msg_id = 0;
         query.container_id = 0;
         query.invoke_after_msg_id = 0;
@@ -1596,9 +1647,29 @@ impl Session {
     }
 
     fn requeue_front(&mut self, id: QueryId) {
+        if self.handover && self.hand_back(id, true) {
+            return;
+        }
+        self.note_maybe_ran(id);
         if self.release_query_message(id).is_some() {
             self.pending.push_front(id);
         }
+    }
+
+    /// A sent copy of the query goes back to the queue without the server saying it never got it.
+    fn note_maybe_ran(&mut self, id: QueryId) {
+        if let Some(query) = self.queries.get_mut(&id).filter(|query| query.state != QueryState::Pending) {
+            query.maybe_ran_before = true;
+        }
+    }
+
+    /// The server answered a state question about the query without saying it got it: with status 1
+    /// ("nothing known", the msg_id may be too old for it to remember) it may have run it.
+    fn resend_unconfirmed(&mut self, id: QueryId, may_have_run: bool, now: Now) {
+        if may_have_run {
+            self.note_maybe_ran(id);
+        }
+        self.resend_query(id, now);
     }
 
     fn resend_query(&mut self, id: QueryId, now: Now) {
@@ -1607,10 +1678,13 @@ impl Session {
         else {
             return;
         };
+        if self.handover && self.hand_back(id, false) {
+            return;
+        }
         let position = self
             .pending
             .iter()
-            .position(|other| self.queries.get(other).is_some_and(|other| other.msg_id > msg_id))
+            .position(|other| self.queries.get(other).is_some_and(|other| other.seq_no == 0 || other.msg_id > msg_id))
             .unwrap_or(self.pending.len());
         if self.release_query_message(id).is_some() {
             self.pending.insert(position.min(self.pending.len()), id);
@@ -1950,11 +2024,19 @@ impl Session {
         now: Now,
         rng: &mut impl SecureRandom,
     ) -> Result<(), SessionError> {
-        if context.updates_lost {
+        if let Some(lost) = context.updates_lost
+            && lost > self.updates_lost_covered
+        {
+            let ceiling = msg_id_for_time(self.server_time(now) + MSG_ID_MAX_FUTURE_SECONDS);
+            self.updates_lost_covered = self.received.newest().unwrap_or(lost).min(ceiling).max(lost);
             self.events.push_back(SessionEvent::UpdatesLost);
         }
         for (id, msg_id) in context.deferred_resends {
             if self.queries.get(&id).is_some_and(|query| query.state != QueryState::Pending && query.msg_id == msg_id) {
+                if self.handover && self.hand_back(id, true) {
+                    continue;
+                }
+                self.note_maybe_ran(id);
                 self.resend_query(id, now);
             }
         }
@@ -2242,13 +2324,13 @@ impl Session {
             ServiceMessage::HttpWait { .. } | ServiceMessage::Ignored { .. } => {}
             ServiceMessage::Other { body, .. } => {
                 if context.mode == Mode::Replay {
-                    context.updates_lost = true;
+                    context.updates_lost = context.updates_lost.max(Some(msg_id));
                     return;
                 }
                 match self.updates.check(msg_id) {
                     DuplicateCheck::New => self.events.push_back(SessionEvent::Update { body: body.to_vec(), msg_id }),
                     DuplicateCheck::Duplicate => {}
-                    DuplicateCheck::TooOld => context.updates_lost = true,
+                    DuplicateCheck::TooOld => context.updates_lost = context.updates_lost.max(Some(msg_id)),
                 }
             }
         }
@@ -2369,8 +2451,11 @@ impl Session {
     }
 
     fn on_pong(&mut self, context: &mut PacketContext, msg_id: i64, ping_msg_id: i64, ping_id: i64, now: Now) {
-        self.last_pong_at = now.mono;
         let ping = self.pending_pings.remove(&ping_msg_id).or_else(|| self.pending_pings.remove(&ping_id));
+        if ping.is_none() && context.mode == Mode::Replay {
+            return;
+        }
+        self.last_pong_at = now.mono;
         if let Some(ping) = ping {
             self.note_arrived(ping.packet_seq, now);
             let fresh = self.answers_with_current_time(context, msg_id, now);
@@ -2418,7 +2503,7 @@ impl Session {
         now: Now,
     ) {
         let Some(id) = self.by_msg_id.get(&req_msg_id).copied() else {
-            if size > DROPPED_ANSWER_COUNTED_SIZE {
+            if size > DROPPED_ANSWER_COUNTED_SIZE && context.mode == Mode::Process {
                 if now.mono - self.dropped_answer_window_start > DROPPED_ANSWER_WINDOW {
                     self.dropped_answer_window_start = now.mono;
                     self.dropped_answer_bytes = 0;
@@ -2467,12 +2552,21 @@ impl Session {
                 }
             }
         };
+        let error = match &event {
+            SessionEvent::Error { code, message, .. } => Some((*code, message.clone())),
+            _ => None,
+        };
+        self.push_trace(QueryTrace::Answered { id, msg_id: req_msg_id, response_msg_id: msg_id, error });
         self.complete_query(id, req_msg_id);
         self.events.push_back(event);
     }
 
     fn complete_query(&mut self, id: QueryId, msg_id: i64) {
+        let was_full = self.in_flight_is_full();
         if let Some(query) = self.queries.remove(&id) {
+            if was_full && query.state != QueryState::Pending {
+                self.slot_freed();
+            }
             Self::count_transition(&mut self.pending_queries, &mut self.unknown_queries, Some(query.state), None);
             self.by_msg_id.remove(&msg_id);
             self.detach_from_container(query.container_id, msg_id);
@@ -2568,11 +2662,11 @@ impl Session {
             };
             match status & 7 {
                 1..=3 => {
-                    self.resend_query(id, now);
+                    self.resend_unconfirmed(id, status & 7 == 1, now);
                     return;
                 }
                 0 if answer_msg_id.is_none() => {
-                    self.resend_query(id, now);
+                    self.resend_unconfirmed(id, true, now);
                     return;
                 }
                 _ => {
@@ -2734,7 +2828,7 @@ impl Session {
                     .is_some_and(|query| query.state == QueryState::Sent && query.may_have_arrived);
                 match state & 7 {
                     1..=3 if stale => {}
-                    1..=3 => self.resend_query(id, now),
+                    1..=3 => self.resend_unconfirmed(id, state & 7 == 1, now),
                     4 => self.mark_acknowledged(id),
                     _ => {}
                 }
@@ -3078,7 +3172,8 @@ impl Session {
 
     /// Queries are waiting to go out, fresh or again, and may.
     pub fn has_queries_to_send(&self) -> bool {
-        self.pending.iter().chain(self.to_retransmit.iter()).any(|id| !self.is_gated(*id))
+        (!self.handover && self.pending.iter().any(|id| !self.is_gated(*id)))
+            || self.to_retransmit.iter().any(|id| !self.is_gated(*id))
     }
 
     /// The key is temporary and not bound yet: no query goes out until `start_bind`'s does and is
@@ -3109,6 +3204,7 @@ impl Session {
                 options: QueryOptions::default(),
                 state: QueryState::Pending,
                 msg_id: 0,
+                previous_msg_id: 0,
                 seq_no: 0,
                 container_id: 0,
                 invoke_after_msg_id: 0,
@@ -3120,6 +3216,7 @@ impl Session {
                 rejections: 0,
                 server_resends: 0,
                 may_have_arrived: false,
+                maybe_ran_before: false,
                 retransmit_refused: false,
                 arrival_seq: None,
             },
@@ -3150,6 +3247,21 @@ impl Session {
     /// goes while the key is being destroyed (as in tdlib, a destroying session sends no queries).
     fn is_gated(&self, id: QueryId) -> bool {
         (self.bind_gate && self.bind.as_ref().is_none_or(|(bind, _)| *bind != id)) || self.is_destroying_auth_key()
+    }
+
+    fn in_flight_is_full(&self) -> bool {
+        self.queries.len() - self.pending_queries >= MAX_INFLIGHT_QUERIES
+    }
+
+    /// A query waiting for one of the MAX_INFLIGHT_QUERIES slots; the bind never waits.
+    fn waits_for_a_slot(&self, id: QueryId) -> bool {
+        self.in_flight_is_full() && self.bind.as_ref().is_none_or(|(bind, _)| *bind != id)
+    }
+
+    fn slot_freed(&mut self) {
+        if !self.pending.is_empty() {
+            self.send_before(0.0);
+        }
     }
 
     fn bind_body(&self, id: QueryId, msg_id: i64, rng: &mut impl SecureRandom) -> Option<Vec<u8>> {
@@ -3227,6 +3339,7 @@ impl Session {
 
         let mut messages: Vec<OutgoingMessage> = Vec::new();
         let mut query_messages: Vec<(QueryId, usize)> = Vec::new();
+        let mut sent_trace: Vec<(i32, i64, bool)> = Vec::new();
         let mut wants_quick_ack = false;
         let mut force_container = false;
         self.packet_seq += 1;
@@ -3270,6 +3383,7 @@ impl Session {
                 total += body.len();
                 wants_quick_ack |= query.options.quick_ack;
                 query_messages.push((id, messages.len()));
+                sent_trace.push((query.seq_no, query.msg_id, true));
                 messages.push(OutgoingMessage { msg_id: query.msg_id, seq_no: query.seq_no, body });
                 force_container = true;
             }
@@ -3286,13 +3400,18 @@ impl Session {
             let id = self.pending.remove(position).expect("position is valid");
             self.pending.push_front(id);
         }
-        if queries && has_salt && !probe_first && self.to_retransmit.iter().all(|id| self.is_gated(*id)) {
+        if queries
+            && has_salt
+            && !probe_first
+            && !self.handover
+            && self.to_retransmit.iter().all(|id| self.is_gated(*id))
+        {
             let mut sent_now: HashMap<QueryId, i64> = HashMap::new();
             while let Some(&id) = self.pending.front() {
                 if query_messages.len() >= self.config.max_container_queries {
                     break;
                 }
-                if self.is_gated(id) {
+                if self.is_gated(id) || self.waits_for_a_slot(id) {
                     break;
                 }
                 let Some((body_len, invoke_after)) =
@@ -3327,6 +3446,7 @@ impl Session {
                     Some(QueryState::Sent),
                 );
                 query.state = QueryState::Sent;
+                sent_trace.push((seq_no, query.previous_msg_id, false));
                 query.msg_id = msg_id;
                 query.seq_no = seq_no;
                 query.sent_at = now.mono;
@@ -3489,7 +3609,8 @@ impl Session {
             .reduce(f64::min);
         self.to_resend_answer.extend(held_answers);
 
-        let pending_held = self.pending.iter().all(|id| self.is_gated(*id));
+        let pending_held =
+            self.handover || self.pending.iter().all(|id| self.is_gated(*id) || self.waits_for_a_slot(*id));
         let retransmit_held = self.to_retransmit.iter().all(|id| self.is_gated(*id));
         let nothing_left = pending_held
             && self.to_ack.is_empty()
@@ -3539,6 +3660,17 @@ impl Session {
         };
         self.remember_sent(outer_msg_id, now);
 
+        for ((id, index), (seq_no, previous_msg_id, again)) in query_messages.iter().zip(sent_trace) {
+            self.push_trace(QueryTrace::Sent {
+                id: *id,
+                msg_id: message_ids[*index],
+                seq_no,
+                container_id,
+                previous_msg_id: if again { 0 } else { previous_msg_id },
+                again,
+            });
+        }
+
         if container_id != 0 {
             let children: Vec<i64> = query_messages.iter().map(|(_, index)| messages[*index].msg_id).collect();
             let mut moved = Vec::new();
@@ -3564,6 +3696,9 @@ impl Session {
             if ping_msg_id != 0 {
                 services.push(ping_msg_id);
                 self.last_ping_container_id = container_id;
+            }
+            if let Some(msg_id) = future_salts_msg_id {
+                services.push(msg_id);
             }
             if !services.is_empty() {
                 self.service_containers.push_back((container_id, services));
@@ -3663,6 +3798,19 @@ impl Session {
         self.events.drain(..).collect()
     }
 
+    /// The wire history of queries since the last call, oldest first; only the latest
+    /// `MAX_QUERY_TRACE` entries are kept.
+    pub fn take_trace(&mut self) -> VecDeque<QueryTrace> {
+        std::mem::take(&mut self.trace)
+    }
+
+    fn push_trace(&mut self, entry: QueryTrace) {
+        if self.trace.len() >= MAX_QUERY_TRACE {
+            self.trace.pop_front();
+        }
+        self.trace.push_back(entry);
+    }
+
     pub fn shrink(&mut self) {
         if self.queries.is_empty() {
             self.queries.shrink_to(16);
@@ -3705,6 +3853,9 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+mod sec_audit_salt_request_tests;
+
 struct OutgoingMessage {
     msg_id: i64,
     seq_no: i32,
@@ -3721,3 +3872,6 @@ fn take_tail(source: &mut Vec<i64>, limit: usize) -> Vec<i64> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sec_audit_updates_lost_tests;

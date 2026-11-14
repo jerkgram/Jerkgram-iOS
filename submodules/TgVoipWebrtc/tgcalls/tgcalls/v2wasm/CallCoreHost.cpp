@@ -556,7 +556,8 @@ void CallCoreHost::start() {
             [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
                 signalingDataEmitted(data);
             },
-            _encryptionKey.isOutgoing
+            _encryptionKey.isOutgoing,
+            SignalingSctpConnection::Options::fromCustomParameters(_parsedCustomParameters)
         );
     } else {
         _signalingConnection = std::make_unique<ExternalSignalingConnection>(
@@ -897,7 +898,7 @@ void CallCoreHost::executePcCreate(json11::Json const &command) {
     _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
     _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
     _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
-    _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBool(_parsedCustomParameters, "network_reflector_resolve_remote_candidate_ip"));
+    _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBoolDefaultTrue(_parsedCustomParameters, "network_reflector_resolve_remote_candidate_ip"));
 
     webrtc::PeerConnectionDependencies peerConnectionDependencies(nullptr);
     _peerConnectionObserver = std::make_unique<v2wasm_detail::PeerConnectionDelegateAdapter>(std::weak_ptr<CallCoreHost>(shared_from_this()), _threads);

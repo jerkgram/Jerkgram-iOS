@@ -40,6 +40,8 @@ pub const PFS_INVALID_PERMANENT_RETRY: f64 = 60.0;
 pub const PFS_PERMANENT_KEY_IMMUNITY: f64 = 60.0;
 /// Temporary keys the server stopped taking that a host offer cannot bring back.
 const PFS_DROPPED_KEYS_KEPT: usize = 8;
+/// Lifetime of the temporary keys a session without PFS makes to check its permanent key after -404s.
+pub const PFS_KEY_CHECK_LIFETIME: i32 = 86_400;
 
 #[derive(Default)]
 pub(super) struct PfsState {
@@ -66,6 +68,9 @@ pub(super) struct PfsState {
     lost_in_a_row: u32,
     /// Rebinds after AUTH_KEY_PERM_EMPTY with no fresh packet since: a second one replaces the key.
     perm_empty_rebinds: u32,
+    /// Temporary keys dropped after a 401 on a non-main session with no call completed since: a bind
+    /// that succeeds does not reset it, so a server or host that keeps answering 401 meets a backoff.
+    unauthorized_in_a_row: u32,
     /// The key went while the session was idle: the next one is made when there is work for it.
     pub(super) lazy: bool,
     /// `destroy_auth_key` goes under the permanent key, with every request held; once it is answered
@@ -84,6 +89,9 @@ pub(super) struct PfsState {
     /// needs a new key.
     offered: Option<BoundTemporaryKey>,
     dropped: std::collections::VecDeque<u64>,
+    /// PFS runs to check the permanent key after -404s (`check_permanent_key_with_pfs`): binds refused
+    /// with ENCRYPTED_MESSAGE_INVALID report the key as the -404 would have, with `AuthKeyInvalid`.
+    checks_permanent_key: bool,
 }
 
 impl PfsState {
@@ -106,6 +114,20 @@ impl PfsState {
         }
         self.need_regenerate = true;
         self.regenerate_at = now.mono;
+    }
+
+    /// The host turns PFS on while the session runs it only to check its permanent key: the session
+    /// goes on with the host's PFS, and the next temporary key is made with its lifetime and reported.
+    pub(super) fn take_over_key_check(&mut self, setup: crate::types::PfsSetup) -> bool {
+        if !self.checks_permanent_key {
+            return false;
+        }
+        self.checks_permanent_key = false;
+        self.lifetime = setup.lifetime.max(60);
+        self.public_keys = setup.public_keys;
+        self.permanent_key_from_host = setup.permanent_key_from_host;
+        self.offered = setup.temporary_key;
+        true
     }
 
     pub(super) fn forget_offer(&mut self) {
@@ -216,6 +238,20 @@ impl PfsState {
         self.regenerate_at = now.mono + delay;
     }
 
+    /// A non-main session got a 401 under a bound temporary key: another key is made, at once the first
+    /// time, then backing off like a refused key until a call completes.
+    fn regenerate_after_unauthorized(&mut self, now: Now) {
+        let delay = match self.unauthorized_in_a_row {
+            0 => 0.0,
+            count => {
+                (PFS_REGENERATE_BACKOFF_BASE * f64::from(1u32 << (count - 1).min(10))).min(PFS_REGENERATE_BACKOFF_MAX)
+            }
+        };
+        self.unauthorized_in_a_row = self.unauthorized_in_a_row.saturating_add(1);
+        self.need_regenerate = true;
+        self.regenerate_at = now.mono + delay;
+    }
+
     /// The host gave another permanent key: with a session running, the temporary key bound to the old
     /// one goes at once, so that no call made from now on runs under the old authorization.
     pub(super) fn replace_permanent_key(&mut self, perm: AuthKeyMaterial, running: bool, now: Now) {
@@ -243,6 +279,7 @@ impl PfsState {
             public_keys: std::mem::take(&mut self.public_keys),
             permanent_key_from_host: self.permanent_key_from_host,
             dropped: std::mem::take(&mut self.dropped),
+            checks_permanent_key: self.checks_permanent_key,
             ..Self::default()
         };
     }
@@ -267,6 +304,72 @@ impl SessionRuntime {
             temp_key_expires_in: generation.temporary_expires_in,
             public_keys: generation.public_keys.clone(),
         })
+    }
+
+    /// The server answered -404 again on a fresh connection to a session talking under its permanent
+    /// key. A transport error is not authenticated: anything on the path can send one, so it is no
+    /// proof that the server lost the key. As tdlib does, the session moves to PFS: a temporary key
+    /// the server binds to the permanent key proves it, and only binds refused with
+    /// ENCRYPTED_MESSAGE_INVALID, which come encrypted under the temporary key, report it invalid.
+    /// False when the session cannot check: no RSA keys to make a temporary key with, a CDN key (which
+    /// is replaced, not checked), or a key being destroyed.
+    pub(super) fn check_permanent_key_with_pfs(&mut self) -> bool {
+        if self.pfs.is_some() || matches!(self.setup.role, mtproto_core::rpc::SessionRole::Cdn) {
+            return false;
+        }
+        let Some(public_keys) = self
+            .setup
+            .key_generation
+            .as_ref()
+            .filter(|generation| generation.temporary_expires_in.is_none() && !generation.public_keys.is_empty())
+            .map(|generation| generation.public_keys.clone())
+        else {
+            return false;
+        };
+        let Some(rpc) = self.rpc.as_ref().filter(|rpc| !rpc.session().is_destroying_auth_key()) else {
+            return false;
+        };
+        let perm =
+            AuthKeyMaterial { key: rpc.session().auth_key().clone(), salts: rpc.session().salts(), init_hash: None };
+        let setup = crate::types::PfsSetup {
+            lifetime: PFS_KEY_CHECK_LIFETIME,
+            public_keys,
+            permanent_key_from_host: false,
+            temporary_key: None,
+        };
+        let mut state = PfsState::new(setup, Some(perm));
+        state.checks_permanent_key = true;
+        self.pfs = Some(state);
+        self.setup.key_generation = None;
+        true
+    }
+
+    /// The check proved the permanent key gone: the session drops PFS and goes on as before the -404s,
+    /// with the key reported invalid, so that it makes a new permanent key itself.
+    fn end_permanent_key_check(&mut self, registry: &Registry, now: Now) {
+        let Some(pfs) = self.pfs.take() else {
+            return;
+        };
+        self.setup.key_generation =
+            Some(crate::types::KeyGeneration { public_keys: pfs.public_keys, temporary_expires_in: None });
+        self.retire_rpc(now);
+        self.close_connection(registry, now, false);
+        if let Some(http) = &mut self.http {
+            http.forget_opened();
+        }
+        self.next_attempt_at = now.mono;
+    }
+
+    /// Whether the host hears of a key the handshake made, which happens only for a key the session keeps.
+    /// A temporary key made only to check the permanent key stays inside the session: the host runs no PFS
+    /// for it and would take any key it hears of for the session's permanent key. A permanent key made while
+    /// the host gave one during the handshake is dropped (`take_handshake_key`).
+    pub(super) fn reports_created_key(&self, temporary: bool) -> bool {
+        match &self.pfs {
+            Some(pfs) if temporary => !pfs.checks_permanent_key,
+            Some(pfs) => pfs.perm.is_none(),
+            None => true,
+        }
     }
 
     /// The datacenter a new key is made for, as MtProtoKit and tdlib send it: the obfuscation id,
@@ -466,6 +569,7 @@ impl SessionRuntime {
             return;
         };
         rpc.hold_until_bound();
+        rpc.set_stored_init_hash(None);
         rpc.bind_temporary_key(perm.key.clone(), expires_at.floor() as i32, now, rng);
         pfs.binding = true;
         pfs.need_rebind = false;
@@ -475,6 +579,7 @@ impl SessionRuntime {
     /// Notes what a bind answer or a rejected temporary key asks for; `drive_pfs` acts on it. False
     /// when the event is the engine's own business and not the host's.
     pub(super) fn observe_pfs_event(&mut self, event: &RpcEvent, now: Now) -> bool {
+        let main = matches!(self.setup.role, mtproto_core::rpc::SessionRole::Main);
         let Some(pfs) = &mut self.pfs else {
             return true;
         };
@@ -522,6 +627,15 @@ impl SessionRuntime {
                 }
                 true
             }
+            RpcEvent::AuthTokenRequired | RpcEvent::Failed { code: 401, .. } if !main => {
+                let excluded = matches!(event, RpcEvent::Failed { message, .. }
+                    if message == "AUTH_KEY_PERM_EMPTY" || message.contains("SESSION_PASSWORD_NEEDED"));
+                if pfs.bound && !excluded {
+                    pfs.bound = false;
+                    pfs.regenerate_after_unauthorized(now);
+                }
+                true
+            }
             RpcEvent::TemporaryKeyRejected => {
                 if pfs.bound && pfs.perm_empty_rebinds >= 1 {
                     pfs.bound = false;
@@ -566,6 +680,7 @@ impl SessionRuntime {
         if let Some(pfs) = &mut self.pfs {
             pfs.lost_in_a_row = 0;
             pfs.perm_empty_rebinds = 0;
+            pfs.unauthorized_in_a_row = 0;
         }
     }
 
@@ -582,13 +697,17 @@ impl SessionRuntime {
         callbacks: &Arc<dyn EngineCallbacks>,
         rng: &mut OsRandom,
     ) {
+        if self.is_draining() {
+            self.end_drain_for_new_key(now, registry, callbacks);
+            return;
+        }
         if fail_transmitted {
             self.fail_unanswered_requests(registry, now, callbacks);
         }
         if self.rpc.is_none() {
             return;
         }
-        self.retire_rpc();
+        self.retire_rpc(now);
         let idle = !self.setup.keep_connected && self.queued.is_empty();
         if let Some(pfs) = &mut self.pfs {
             pfs.temp_expires_at = None;
@@ -625,6 +744,9 @@ impl SessionRuntime {
         now: Now,
         callbacks: &Arc<dyn EngineCallbacks>,
     ) {
+        if self.is_draining() {
+            return;
+        }
         let transmitted = self.rpc.as_ref().map(mtproto_core::rpc::RpcClient::transmitted_requests).unwrap_or_default();
         if !transmitted.is_empty() {
             let chained = self.rpc.as_ref().map(|rpc| rpc.dependents_of(&transmitted)).unwrap_or_default();
@@ -665,7 +787,7 @@ impl SessionRuntime {
             return;
         };
         self.fail_unanswered_requests(registry, now, callbacks);
-        self.retire_rpc();
+        self.retire_rpc(now);
         let held = std::mem::take(&mut self.queued);
         self.close_connection(registry, now, false);
         if let Some(pfs) = &mut self.pfs {
@@ -691,7 +813,7 @@ impl SessionRuntime {
 
     /// The permanent key is gone: the requests wait for a new one, made with the next call.
     fn start_over_after_destroy(&mut self, registry: &Registry, now: Now, callbacks: &Arc<dyn EngineCallbacks>) {
-        self.retire_rpc();
+        self.retire_rpc(now);
         let idle = !self.setup.keep_connected && self.queued.is_empty();
         if let Some(pfs) = &mut self.pfs {
             pfs.forget_permanent_key();
@@ -756,6 +878,7 @@ impl SessionRuntime {
         }
         if pfs.invalid_in_a_row >= PFS_INVALID_PERMANENT_AFTER {
             let young = pfs.perm_since.is_some_and(|since| now.mono - since < PFS_PERMANENT_KEY_IMMUNITY);
+            let checks = pfs.checks_permanent_key;
             if let Some(pfs) = &mut self.pfs {
                 pfs.invalid_in_a_row = 0;
                 pfs.held_until = now.mono + PFS_INVALID_PERMANENT_RETRY;
@@ -770,7 +893,12 @@ impl SessionRuntime {
                 return;
             }
             self.log(callbacks, LogLevel::Warning, "the server does not know the permanent key");
-            callbacks.on_event(self.handle, EngineEvent::PermanentKeyInvalid);
+            if checks {
+                callbacks.on_event(self.handle, EngineEvent::AuthKeyInvalid { code: -404 });
+                self.end_permanent_key_check(registry, now);
+            } else {
+                callbacks.on_event(self.handle, EngineEvent::PermanentKeyInvalid);
+            }
             return;
         }
         if pfs.need_regenerate {

@@ -291,7 +291,7 @@ public func jerkgramTimeMachineController(
             .header(2, strings.timeMachineResults),
         ]
         let dateFormatter = DateFormatter()
-        dateFormatter.locale = Locale.current
+        dateFormatter.locale = Locale(identifier: presentationData.strings.baseLanguageCode.replacingOccurrences(of: "-raw", with: ""))
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .short
         for (index, event) in results.enumerated() {

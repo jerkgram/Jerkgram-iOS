@@ -14,6 +14,11 @@ import TelegramStringFormatting
 import PeerNameColorItem
 import WalletContext
 
+// Login persists bot identity before account activation; ownPeer can lack botInfo.
+private func jerkgramSettingsIsBotAccount(hasBotInfo: Bool, persistentMarker: Bool) -> Bool {
+    return hasBotInfo || persistentMarker
+}
+
 private func jerkgramMainSettingsIcon(
     _ name: String
 ) -> UIImage? {
@@ -73,6 +78,16 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
         return []
     }
     
+    let hasBotInfo: Bool
+    if case let .user(user) = data.peer {
+        hasBotInfo = user.botInfo != nil
+    } else {
+        hasBotInfo = false
+    }
+    let isBotAccount = jerkgramSettingsIsBotAccount(
+        hasBotInfo: hasBotInfo,
+        persistentMarker: UserDefaults.standard.bool(forKey: "jerkgram.BotAccount.\(context.account.peerId.toInt64())")
+    )
     var items: [SettingsSection: [PeerInfoScreenItem]] = [:]
     for section in SettingsSection.allCases {
         items[section] = []
@@ -206,20 +221,22 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
         }
     )
 )
-    items[.ghostbase]!.append(
-    PeerInfoScreenDisclosureItem(
-        id: 1,
-        text: presentationData.strings.jerkgram.ghostMode,
-        icon: jerkgramMainSettingsIcon("Chat/Context Menu/Eye"),
-        action: {
-            UserDefaults.standard.set(
-                "ghostMode",
-                forKey: "jerkgram.Settings.InitialPage"
-            )
-            interaction.openSettings(.ghostbase)
-        }
+    if !isBotAccount {
+        items[.ghostbase]!.append(
+        PeerInfoScreenDisclosureItem(
+            id: 1,
+            text: presentationData.strings.jerkgram.ghostMode,
+            icon: jerkgramMainSettingsIcon("Chat/Context Menu/Eye"),
+            action: {
+                UserDefaults.standard.set(
+                    "ghostMode",
+                    forKey: "jerkgram.Settings.InitialPage"
+                )
+                interaction.openSettings(.ghostbase)
+            }
+        )
     )
-)
+    }
     items[.ghostbase]!.append(
     PeerInfoScreenDisclosureItem(
         id: 2,
@@ -377,8 +394,15 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
     items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 1, text: presentationData.strings.Settings_SavedMessages, icon: PresentationResourcesSettings.savedMessages, action: {
         interaction.openSettings(.savedMessages)
     }))
-    items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 2, text: presentationData.strings.CallSettings_RecentCalls, icon: PresentationResourcesSettings.recentCalls, action: {
-        interaction.openSettings(.recentCalls)
+    if !isBotAccount {
+        items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 2, text: presentationData.strings.CallSettings_RecentCalls, icon: PresentationResourcesSettings.recentCalls, action: {
+            interaction.openSettings(.recentCalls)
+        }))
+    }
+    // Contacts live here rather than in the tab bar, which News took; so does its tab's "!" for contacts access.
+    let contactsWarning = data.globalSettings?.contactsWarning ?? false
+    items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 21, label: contactsWarning ? .badge("!", presentationData.theme.list.itemDestructiveColor) : .none, text: presentationData.strings.Contacts_Title, icon: PresentationResourcesSettings.contacts, action: {
+        interaction.openSettings(.contacts)
     }))
     
     let devicesLabel: String
@@ -405,7 +429,7 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
     } else {
         notificationsWarning = false
     }
-    items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 0, label: notificationsWarning ? .badge("!", presentationData.theme.list.itemDestructiveColor) : .none, text: presentationData.strings.Settings_NotificationsAndSounds, icon: PresentationResourcesSettings.notifications, action: {
+    items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 0, label: notificationsWarning ? .badge("!", presentationData.theme.list.itemDestructiveColor) : .none, text: presentationData.strings.Settings_NotificationsAndSounds, icon: PresentationResourcesSettings.notifications, labelAccessibilityText: notificationsWarning ? presentationData.strings.VoiceOver_TabBar_AttentionRequired : nil, action: {
         interaction.openSettings(.notificationsAndSounds)
     }))
     items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 1, text: presentationData.strings.Settings_PrivacySettings, icon: PresentationResourcesSettings.security, action: {

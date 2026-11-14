@@ -107,15 +107,31 @@ public final class JerkgramJSONLEventStore: JerkgramEventStore {
         afterSequence: Int64?,
         throughSequence: Int64?
     ) -> [JerkgramTimeMachineIndexRecord] {
-        return records.lazy.filter { record in
-            guard record.chatPeerId == chatPeerId else { return false }
-            if let afterSequence, record.sequence <= afterSequence { return false }
-            if let throughSequence, record.sequence > throughSequence { return false }
-            return true
-        }.sorted { lhs, rhs in
-            if lhs.sequence != rhs.sequence { return lhs.sequence < rhs.sequence }
-            return lhs.eventId < rhs.eventId
+        // All callers pass one account's recordsByChat bucket. Construction,
+        // index reload and append/merge maintain (sequence, eventId) ordering.
+        // Reuse that ordering and avoid rescanning/sorting an unchanged prefix
+        // on every visit-watermark request. Persistent data is untouched.
+        let lower = afterSequence.map { self.sequenceUpperBound(records, $0) } ?? 0
+        let upper = throughSequence.map { self.sequenceUpperBound(records, $0) } ?? records.count
+        guard lower < upper else { return [] }
+        return Array(records[lower..<upper])
+    }
+
+    private func sequenceUpperBound(
+        _ records: [JerkgramTimeMachineIndexRecord],
+        _ sequence: Int64
+    ) -> Int {
+        var lower = 0
+        var upper = records.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if records[middle].sequence <= sequence {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
         }
+        return lower
     }
 
     public func events(accountPeerId: Int64, chatPeerId: Int64?) throws -> [JerkgramCanonicalEvent] {
@@ -687,6 +703,41 @@ public final class JerkgramJSONLEventStore: JerkgramEventStore {
 
 // Transaction boundaries call this lightweight serial recorder. The event id
 // is generated once before enqueueing; equal text never participates in identity.
+// A visit is owned by its visible chat, not by a blocked worker/controller closure.
+public final class JerkgramArchiveVisitRequest {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    public func cancel() {
+        self.lock.lock()
+        self.cancelled = true
+        self.lock.unlock()
+    }
+
+    fileprivate var isCancelled: Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.cancelled
+    }
+
+    fileprivate static func schedule(
+        on queue: DispatchQueue,
+        work: @escaping (JerkgramArchiveVisitRequest) -> JerkgramChangesSinceLastOpening?,
+        completion: @escaping (JerkgramChangesSinceLastOpening) -> Void
+    ) -> JerkgramArchiveVisitRequest {
+        let request = JerkgramArchiveVisitRequest()
+        queue.async { [weak request] in
+            guard let request, !request.isCancelled else { return }
+            guard let result = work(request), !request.isCancelled else { return }
+            DispatchQueue.main.async { [weak request] in
+                guard let request, !request.isCancelled else { return }
+                completion(result)
+            }
+        }
+        return request
+    }
+}
+
 public enum JerkgramCaptureRecorder {
     private static let queueKey = DispatchSpecificKey<Void>()
     private static let queue: DispatchQueue = {
@@ -749,6 +800,26 @@ public enum JerkgramCaptureRecorder {
                 throughSequence: throughSequence
             )
         }
+    }
+
+    public static func requestChangesSinceLastOpening(
+        accountPeerId: Int64,
+        chatPeerId: Int64,
+        completion: @escaping (JerkgramChangesSinceLastOpening) -> Void
+    ) -> JerkgramArchiveVisitRequest {
+        return JerkgramArchiveVisitRequest.schedule(on: self.queue, work: { request in
+            guard !request.isCancelled else { return nil }
+            let watermarkStore = JerkgramVisitWatermarkStore(rootURL: self.rootURL)
+            let previousSequence = watermarkStore.previousSequence(accountPeerId: accountPeerId, chatPeerId: chatPeerId)
+            guard let records = try? self.store.readyIndexRecords(
+                accountPeerId: accountPeerId, chatPeerId: chatPeerId,
+                afterSequence: previousSequence, throughSequence: nil
+            ), !request.isCancelled else { return nil }
+            guard let changes = try? watermarkStore.snapshotChangesSinceLastOpening(
+                accountPeerId: accountPeerId, chatPeerId: chatPeerId, records: records
+            ), changes.deletedCount + changes.editedCount + changes.recoveredMediaCount > 0 else { return nil }
+            return changes
+        }, completion: completion)
     }
 
     public static func record(

@@ -12,6 +12,13 @@ public enum JerkgramStringKey: String, CaseIterable {
     case messages
     case protectedContent
     case mediaAndStories
+    case removeSponsored
+    case removeSponsoredHint
+    case downloadBoost
+    case downloadBoostOff
+    case downloadBoostMedium
+    case downloadBoostMaximum
+    case downloadBoostHint
     case appearance
     case debugResearch
     case about
@@ -172,6 +179,13 @@ public struct JerkgramStrings {
     public var ghostMode: String { self.text(.ghostMode) }
     public var messages: String { self.text(.messages) }
     public var protectedContent: String { self.text(.protectedContent) }
+    public var removeSponsored: String { self.text(.removeSponsored) }
+    public var removeSponsoredHint: String { self.text(.removeSponsoredHint) }
+    public var downloadBoost: String { self.text(.downloadBoost) }
+    public var downloadBoostOff: String { self.text(.downloadBoostOff) }
+    public var downloadBoostMedium: String { self.text(.downloadBoostMedium) }
+    public var downloadBoostMaximum: String { self.text(.downloadBoostMaximum) }
+    public var downloadBoostHint: String { self.text(.downloadBoostHint) }
     public var mediaAndStories: String { self.text(.mediaAndStories) }
     public var appearance: String { self.text(.appearance) }
     public var debugResearch: String { self.text(.debugResearch) }
@@ -387,6 +401,13 @@ public struct JerkgramStrings {
         .ghostMode: "Ghost Mode",
         .messages: "Messages",
         .protectedContent: "Protected Content",
+        .removeSponsored: "Remove Sponsored Messages",
+        .removeSponsoredHint: "Hides Telegram sponsored messages and sponsored search results. This does not change your Telegram Premium status. Reopen the chat or media viewer, or refresh search after changing this setting.",
+        .downloadBoost: "Download Boost",
+        .downloadBoostOff: "Off",
+        .downloadBoostMedium: "Medium",
+        .downloadBoostMaximum: "Maximum",
+        .downloadBoostHint: "Increases client-side download parallelism. It does not bypass Telegram Premium server limits. Applies to new download sessions.",
         .mediaAndStories: "Media & Stories",
         .appearance: "Appearance",
         .debugResearch: "Debug / Research",
@@ -520,6 +541,13 @@ public struct JerkgramStrings {
         .ghostMode: "Режим призрака",
         .messages: "Сообщения",
         .protectedContent: "Защищённый контент",
+        .removeSponsored: "Убирать рекламу",
+        .removeSponsoredHint: "Скрывает рекламные сообщения Telegram и рекламу в поиске. Не изменяет статус Telegram Premium. После изменения переоткройте чат или просмотр медиа либо обновите поиск.",
+        .downloadBoost: "Ускорение загрузки",
+        .downloadBoostOff: "Выкл.",
+        .downloadBoostMedium: "Среднее",
+        .downloadBoostMaximum: "Максимальное",
+        .downloadBoostHint: "Увеличивает параллелизм загрузки на стороне клиента. Не снимает серверные ограничения Telegram Premium. Применяется к новым сеансам загрузки.",
         .mediaAndStories: "Медиа и истории",
         .appearance: "Оформление",
         .debugResearch: "Отладка / Исследования",
@@ -556,7 +584,7 @@ public struct JerkgramStrings {
         .deletedReplies: "Удалённые ответы",
         .portableReply: "Переносимый ответ",
         .saveDeletedMedia: "Сохранять удалённые медиа",
-        .portableReplyHint: "Ответ материализуется только после Send. Медиа хранится только во внутреннем кэше Jerkgram: до 1 ГБ, 30 дней; если bytes недоступны, используется текстовый fallback.",
+        .portableReplyHint: "Ответ создаётся после отправки. Медиа хранится во внутреннем кэше Jerkgram до 30 дней, не более 1 ГБ. Если файл недоступен, отправляется текст.",
 
         .protectionEnabled: "Включить обход защиты",
         .shareFromGallery: "Поделиться из галереи",
@@ -662,7 +690,7 @@ public extension JerkgramStrings {
     var retentionRules: String { self.languageCode == "ru" ? "Правила хранения" : "Retention Rules" }
     var historyDuration: String { self.languageCode == "ru" ? "Хранить историю" : "Keep History" }
     var recoveredMediaLimit: String { self.languageCode == "ru" ? "Лимит восстановленных медиа" : "Recovered Media Limit" }
-    var archiveSecretChats: String { self.languageCode == "ru" ? "Архивировать Secret Chats" : "Archive Secret Chats" }
+    var archiveSecretChats: String { self.languageCode == "ru" ? "Архивировать секретные чаты" : "Archive Secret Chats" }
     var perChatRules: String { self.languageCode == "ru" ? "Правила по чатам" : "Per-Chat Rules" }
     var cleanupExpired: String { self.languageCode == "ru" ? "Очистить истёкшие данные" : "Clean Up Expired Data" }
     var backup: String { self.languageCode == "ru" ? "Резервная копия" : "Backup" }
@@ -714,6 +742,19 @@ public extension JerkgramStrings {
     }
     var change: String {
         self.languageCode == "ru" ? "Изменить" : "Change"
+    }
+    var localGramBalance: String { self.languageCode == "ru" ? "Локальный баланс GRAM" : "Local GRAM Balance" }
+    var gramBalance: String { self.languageCode == "ru" ? "Баланс GRAM" : "GRAM Balance" }
+    func gramOverrideSummary(_ enabled: Bool, _ balance: String) -> String {
+        if self.languageCode == "ru" {
+            return enabled ? "Локально · \(balance) GRAM" : "Реальный баланс"
+        }
+        return enabled ? "Local · \(balance) GRAM" : "Real balance"
+    }
+    var gramEditorHint: String {
+        self.languageCode == "ru"
+            ? "Это только локальное отображение баланса GRAM. Реальный баланс, переводы и история не изменяются."
+            : "This changes only the local displayed GRAM balance. Your real balance, transfers and history are not modified."
     }
     func starsOverrideSummary(_ enabled: Bool, _ balance: String) -> String {
         if self.languageCode == "ru" {
@@ -951,10 +992,10 @@ public extension JerkgramStrings {
 }
 
 public enum JerkgramReleaseIdentity {
-    public static let displayVersion = "1.1.0"
-    public static let technicalVersion = "1.1.0"
-    public static let build = "163"
-    public static let telegramBase = "13.0"
+    public static let displayVersion = "1.2.0 Stable"
+    public static let technicalVersion = "1.2.0"
+    public static let build = "183"
+    public static let telegramBase = "13.2"
 
     public static var aboutText: String {
         return "Jerkgram Version \(displayVersion)\nBuild \(build)\nTelegram Base \(telegramBase)"
@@ -972,4 +1013,48 @@ public extension JerkgramStrings {
     var forwardWithoutAuthor: String {
         return self.languageCode == "ru" ? "Переслать без автора" : "Forward without author"
     }
+}
+
+// Build174: recent features follow Telegram's selected language, including ru-* packs.
+public extension JerkgramStrings {
+    var mutualContact: String { self.languageCode == "ru" ? "Взаимный контакт" : "Mutual Contact" }
+    var profileContact: String { self.languageCode == "ru" ? "Контакт" : "Contact" }
+    var registrationEstimate: String { self.languageCode == "ru" ? "Регистрация (оценка по ID)" : "Registration (ID estimate)" }
+    var translucentSettings: String { self.languageCode == "ru" ? "Полупрозрачность всех настроек" : "Translucent Settings and Sections" }
+    var removedFromChat: String { self.languageCode == "ru" ? "Вы были исключены из этого чата" : "You were removed from this chat" }
+}
+
+public extension JerkgramStrings {
+    var localTranslationUnavailable: String {
+        self.languageCode == "ru"
+            ? "Не удалось перевести. Проверьте соединение и доступность языка или системного языкового пакета. Этот формат сообщения может не поддерживаться."
+            : "Translation failed. Check your connection and language or system language-pack availability. This message format may be unsupported."
+    }
+    var localTranslationRetry: String { self.languageCode == "ru" ? "Повторить перевод" : "Retry Translation" }
+}
+
+public extension JerkgramStrings {
+    var archiveFormat: String { self.languageCode == "ru" ? "Архив v2" : "Archive v2" }
+    var archiveErrorInvalid: String { self.languageCode == "ru" ? "Архив повреждён, имеет неподдерживаемый формат или не прошёл проверку. Выберите другой файл." : "The archive is damaged, unsupported, or failed validation. Choose another file." }
+    var archiveErrorAccount: String { self.languageCode == "ru" ? "Аккаунт из архива не добавлен в Jerkgram. Войдите в него и повторите импорт." : "An account from the archive is not added to Jerkgram. Log in to that account and retry the import." }
+    var archiveErrorConfirmation: String { self.languageCode == "ru" ? "Подтвердите импорт настроек и повторите попытку." : "Confirm settings import and try again." }
+    var archiveErrorConflicts: String { self.languageCode == "ru" ? "В архиве найдены конфликты. Выберите способ объединения и повторите импорт." : "The archive contains conflicts. Choose how to merge them and retry the import." }
+    var archiveErrorGeneric: String { self.languageCode == "ru" ? "Не удалось обработать архив. Проверьте файл, пароль и свободное место, затем повторите попытку." : "Couldn't process the archive. Check the file, password and free storage, then try again." }
+}
+
+// Local Premium groups existing local settings; it does not change entitlement.
+public extension JerkgramStrings {
+    var localPremium: String { self.languageCode == "ru" ? "Локальный Premium" : "Local Premium" }
+    var localPremiumMedia: String { self.languageCode == "ru" ? "Медиа" : "Media" }
+    var localTranslation: String { self.languageCode == "ru" ? "Перевод" : "Translation" }
+    var translationNeedsWork: String { self.languageCode == "ru" ? "Перевод · Требует доработки" : "Translation · Needs work" }
+    var localPremiumScopeHint: String {
+        self.languageCode == "ru"
+            ? "Эти локальные возможности не предоставляют Telegram Premium. Иконки действуют на всём устройстве; остальные настройки относятся к текущему аккаунту."
+            : "These local features do not grant Telegram Premium. App Icons apply to this device; the other settings apply to the current account."
+    }
+}
+
+public extension JerkgramStrings {
+    var localProfileAppearance: String { languageCode.hasPrefix("ru") ? "Оформление профиля" : "Profile Appearance" }
 }

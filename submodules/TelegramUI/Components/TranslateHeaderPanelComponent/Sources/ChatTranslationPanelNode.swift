@@ -179,7 +179,7 @@ final class ChatTranslationPanelNode: ASDisplayNode {
         let closeButtonSize = self.closeButton.measure(CGSize(width: 100.0, height: 100.0))
         self.closeButton.frame = CGRect(origin: CGPoint(x: width - contentRightInset - closeButtonSize.width, y: floorToScreenPixels((panelHeight - closeButtonSize.height) / 2.0)), size: closeButtonSize)
         
-        if info.isPremium {
+        if info.isPremium || jerkgramEnhancedTranslationEnabled(context: self.context) {
             self.moreButton.isHidden = false
             self.closeButton.isHidden = true
         } else {
@@ -213,7 +213,7 @@ final class ChatTranslationPanelNode: ASDisplayNode {
         }
         let isPremium = info.isPremium
         
-        var translationAvailable = isPremium
+        var translationAvailable = isPremium || jerkgramEnhancedTranslationEnabled(context: self.context)
         if case let .channel(channel) = info.peer, channel.flags.contains(.autoTranslateEnabled) {
             translationAvailable = true
         }
@@ -232,7 +232,7 @@ final class ChatTranslationPanelNode: ASDisplayNode {
         
         let isPremium = info.isPremium
         
-        var translationAvailable = isPremium
+        var translationAvailable = isPremium || jerkgramEnhancedTranslationEnabled(context: self.context)
         if case let .channel(channel) = info.peer, channel.flags.contains(.autoTranslateEnabled) {
             translationAvailable = true
         }
@@ -442,7 +442,7 @@ private final class TranslationContextReferenceContentSource: ContextReferenceCo
     }
     
     func transitionInfo() -> ContextControllerReferenceViewInfo? {
-        return ContextControllerReferenceViewInfo(referenceView: self.sourceNode.view, contentAreaInScreenSpace: UIScreen.main.bounds)
+        return ContextControllerReferenceViewInfo(referenceView: self.sourceNode.view, contentAreaInScreenSpace: mainWindowScreenBounds)
     }
 }
 

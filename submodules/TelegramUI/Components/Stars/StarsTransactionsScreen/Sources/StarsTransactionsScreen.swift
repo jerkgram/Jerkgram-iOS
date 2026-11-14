@@ -131,6 +131,20 @@ final class StarsTransactionsScreenComponent: Component {
     }
     
     private final class ScrollViewImpl: UIScrollView {
+        /// VoiceOver: the content top to bottom (the transactions container starts at the top of the content).
+        var accessibilityOrder: (() -> [UIView])?
+        
+        override var accessibilityElements: [Any]? {
+            get {
+                if let accessibilityOrder = self.accessibilityOrder {
+                    return accessibilityOrder().filter { $0.superview === self }
+                }
+                return super.accessibilityElements
+            } set(value) {
+                super.accessibilityElements = value
+            }
+        }
+        
         override func touchesShouldCancel(in view: UIView) -> Bool {
             return true
         }
@@ -180,6 +194,9 @@ final class StarsTransactionsScreenComponent: Component {
         private var component: StarsTransactionsScreenComponent?
         private weak var state: EmptyComponentState?
         private var navigationMetrics: (navigationHeight: CGFloat, titleCenterY: CGFloat)?
+        /// iPhone Duo: the center of the band between the side safe insets (one of them is the side strip), which
+        /// the header and the content are centered on; the full width's center elsewhere.
+        private var bandCenterX: CGFloat?
         private var controller: (() -> ViewController?)?
         
         private var enableVelocityTracking: Bool = false
@@ -194,6 +211,32 @@ final class StarsTransactionsScreenComponent: Component {
         private var revenueStateDisposable: Disposable?
         private var revenueState: StarsRevenueStats?
         
+        private var localGramVisualBalance: Int64?
+        private var localGramObservers: [NSObjectProtocol] = []
+
+        // Both the page header and native balance card share this presentation.
+        // Never pass local values to withdrawal, purchase or transaction owners.
+        private var displayBalance: StarsAmount {
+            guard let component = self.component else { return self.starsState?.balance ?? .zero }
+            if component.starsContext.ton {
+                return self.localGramVisualBalance.map { StarsAmount(value: $0, nanos: 0) } ?? self.starsState?.balance ?? .zero
+            }
+            return ghostBaseLocalStarsAmountForDisplay() ?? self.starsState?.balance ?? .zero
+        }
+
+        private func refreshLocalGramBalance(notification: Notification? = nil) {
+            guard let component = self.component else { self.localGramVisualBalance = nil; return }
+            let accountPeerId = component.context.account.peerId.toInt64()
+            if let notification, (notification.userInfo?["accountPeerId"] as? NSNumber)?.int64Value != accountPeerId { return }
+            let value: Int64?
+            if component.starsContext.ton, component.starsContext === component.context.tonContext {
+                value = JerkgramLocalGramBalance.visualBalance(accountPeerId: accountPeerId)
+            } else { value = nil }
+            guard value != self.localGramVisualBalance else { return }
+            self.localGramVisualBalance = value
+            if !self.isUpdating { self.state?.updated() }
+        }
+
         private var previousBalance: StarsAmount?
         
         private var subscriptionsStateDisposable: Disposable?
@@ -213,6 +256,12 @@ final class StarsTransactionsScreenComponent: Component {
             self.topEdgeEffectView = EdgeEffectView()
                                     
             super.init(frame: frame)
+            for name in [JerkgramLocalGramBalance.changed, Notification.Name("JerkgramSettingsDidImport")] {
+                self.localGramObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                    self?.refreshLocalGramBalance(notification: notification)
+                })
+            }
+
             
             self.scrollView.delaysContentTouches = true
             self.scrollView.canCancelContentTouches = true
@@ -232,6 +281,20 @@ final class StarsTransactionsScreenComponent: Component {
             self.addSubview(self.scrollView)
             
             self.scrollView.addSubview(self.scrollContainerView)
+            self.scrollView.accessibilityOrder = { [weak self] in
+                guard let self else {
+                    return []
+                }
+                return [
+                    self.starView.view,
+                    self.descriptionView.view,
+                    self.proceedsView.view,
+                    self.balanceView.view,
+                    self.earnStarsSection.view,
+                    self.subscriptionsView.view,
+                    self.scrollContainerView
+                ].compactMap { $0 }
+            }
 
             self.topEdgeEffectView.alpha = 0.0
             self.topEdgeEffectView.isUserInteractionEnabled = false
@@ -243,6 +306,7 @@ final class StarsTransactionsScreenComponent: Component {
         }
         
         deinit {
+            for observer in self.localGramObservers { NotificationCenter.default.removeObserver(observer) }
             self.stateDisposable?.dispose()
             self.revenueStateDisposable?.dispose()
             self.subscriptionsStateDisposable?.dispose()
@@ -349,7 +413,7 @@ final class StarsTransactionsScreenComponent: Component {
                 let headerTransition: ComponentTransition = .immediate
                 
                 if let titleView = self.titleView.view {
-                    let titlePosition = CGPoint(x: scrollBounds.width / 2.0, y: max(topInset + 160.0 - titleOffset, navigationMetrics.titleCenterY))
+                    let titlePosition = CGPoint(x: self.bandCenterX ?? scrollBounds.width / 2.0, y: max(topInset + 160.0 - titleOffset, navigationMetrics.titleCenterY))
                     
                     headerTransition.setPosition(view: titleView, position: titlePosition)
                     headerTransition.setScale(view: titleView, scale: titleScale)
@@ -400,8 +464,10 @@ final class StarsTransactionsScreenComponent: Component {
                 self.isUpdating = false
             }
             
+            let localGramIdentityChanged = self.component?.context !== component.context || self.component?.starsContext !== component.starsContext
             self.component = component
             self.state = state
+            if localGramIdentityChanged { self.refreshLocalGramBalance() }
             
             var balanceUpdated = false
             if let starsState = self.starsState {
@@ -470,6 +536,8 @@ final class StarsTransactionsScreenComponent: Component {
                 navigationTitleCenterY = environment.statusBarHeight + (environment.navigationHeight - environment.statusBarHeight) / 2.0
             }
             self.navigationMetrics = (environment.navigationHeight, navigationTitleCenterY)
+            let bandCenterX = environment.safeInsets.left + (availableSize.width - environment.safeInsets.left - environment.safeInsets.right) / 2.0
+            self.bandCenterX = bandCenterX
             
             self.backgroundColor = environment.theme.list.blocksBackgroundColor
 
@@ -568,7 +636,7 @@ final class StarsTransactionsScreenComponent: Component {
                 containerSize: CGSize(width: min(414.0, availableSize.width), height: 220.0)
             )
             let starFrame = CGRect(
-                origin: CGPoint(x: (availableSize.width - starSize.width) / 2.0, y: environment.navigationHeight - 56.0 - 30.0),
+                origin: CGPoint(x: bandCenterX - starSize.width / 2.0, y: environment.navigationHeight - 56.0 - 30.0),
                 size: starSize
             )
             if let starView = self.starView.view {
@@ -604,7 +672,9 @@ final class StarsTransactionsScreenComponent: Component {
             if let titleView = self.titleView.view {
                 if titleView.superview == nil {
                     if let navigationBar = environment.controller()?.navigationBar {
-                        navigationBar.view.insertSubview(titleView, aboveSubview: navigationBar.backgroundView)
+                        // The page title ("Telegram Stars", "Gram Balance").
+                        titleView.accessibilityTraits = .header
+                        navigationBar.customOverBackgroundContentView.insertSubview(titleView, at: 0)
                     }
                 }
                 starTransition.setBounds(view: titleView, bounds: CGRect(origin: .zero, size: titleSize))
@@ -626,9 +696,9 @@ final class StarsTransactionsScreenComponent: Component {
             
             let formattedBalance: String
             if component.starsContext.ton {
-                formattedBalance = formatTonAmountText(self.starsState?.balance.value ?? 0, dateTimeFormat: environment.dateTimeFormat)
+                formattedBalance = formatTonAmountText(self.displayBalance.value, dateTimeFormat: environment.dateTimeFormat)
             } else {
-                formattedBalance = formatStarsAmountText(ghostBaseLocalStarsAmountForDisplay() ?? self.starsState?.balance ?? StarsAmount.zero, dateTimeFormat: environment.dateTimeFormat)
+                formattedBalance = formatStarsAmountText(self.displayBalance, dateTimeFormat: environment.dateTimeFormat)
             }
             let smallLabelFont = Font.regular(11.0)
             let labelFont = Font.semibold(14.0)
@@ -655,30 +725,32 @@ final class StarsTransactionsScreenComponent: Component {
             )
             
             let topBalanceOriginY = navigationTitleCenterY - (topBalanceTitleSize.height + topBalanceValueSize.height) / 2.0
-            let topBalanceTitleFrame = CGRect(origin: CGPoint(x: availableSize.width - topBalanceTitleSize.width - 16.0 - environment.safeInsets.right, y: topBalanceOriginY), size: topBalanceTitleSize)
+            // iPhone Duo, unfolded portrait: the balance sits in the bar's top row, so it moves left of the status island
+            // as the bar's trailing buttons do (0 elsewhere).
+            let topBalanceTitleFrame = CGRect(origin: CGPoint(x: availableSize.width - topBalanceTitleSize.width - 16.0 - environment.safeInsets.right - environment.navigationBarTrailingButtonsInset, y: topBalanceOriginY), size: topBalanceTitleSize)
             if let topBalanceTitleView = self.topBalanceTitleView.view {
                 if topBalanceTitleView.superview == nil {
                     topBalanceTitleView.alpha = 0.0
                     if let navigationBar = environment.controller()?.navigationBar {
                         if let titleView = self.titleView.view, titleView.superview != nil {
-                            navigationBar.view.insertSubview(topBalanceTitleView, aboveSubview: titleView)
+                            navigationBar.customOverBackgroundContentView.insertSubview(topBalanceTitleView, aboveSubview: titleView)
                         } else {
-                            navigationBar.view.insertSubview(topBalanceTitleView, aboveSubview: navigationBar.backgroundView)
+                            navigationBar.customOverBackgroundContentView.insertSubview(topBalanceTitleView, at: 0)
                         }
                     }
                 }
                 starTransition.setFrame(view: topBalanceTitleView, frame: topBalanceTitleFrame)
             }
     
-            let topBalanceValueFrame = CGRect(origin: CGPoint(x: availableSize.width - topBalanceValueSize.width - 16.0 - environment.safeInsets.right, y: topBalanceTitleFrame.maxY), size: topBalanceValueSize)
+            let topBalanceValueFrame = CGRect(origin: CGPoint(x: availableSize.width - topBalanceValueSize.width - 16.0 - environment.safeInsets.right - environment.navigationBarTrailingButtonsInset, y: topBalanceTitleFrame.maxY), size: topBalanceValueSize)
             if let topBalanceValueView = self.topBalanceValueView.view {
                 if topBalanceValueView.superview == nil {
                     topBalanceValueView.alpha = 0.0
                     if let navigationBar = environment.controller()?.navigationBar {
                         if let titleView = self.titleView.view, titleView.superview != nil {
-                            navigationBar.view.insertSubview(topBalanceValueView, aboveSubview: titleView)
+                            navigationBar.customOverBackgroundContentView.insertSubview(topBalanceValueView, aboveSubview: titleView)
                         } else {
-                            navigationBar.view.insertSubview(topBalanceValueView, aboveSubview: navigationBar.backgroundView)
+                            navigationBar.customOverBackgroundContentView.insertSubview(topBalanceValueView, at: 0)
                         }
                     }
                 }
@@ -694,9 +766,9 @@ final class StarsTransactionsScreenComponent: Component {
                     topBalanceIconView.alpha = 0.0
                     if let navigationBar = environment.controller()?.navigationBar {
                         if let titleView = self.titleView.view, titleView.superview != nil {
-                            navigationBar.view.insertSubview(topBalanceIconView, aboveSubview: titleView)
+                            navigationBar.customOverBackgroundContentView.insertSubview(topBalanceIconView, aboveSubview: titleView)
                         } else {
-                            navigationBar.view.insertSubview(topBalanceIconView, aboveSubview: navigationBar.backgroundView)
+                            navigationBar.customOverBackgroundContentView.insertSubview(topBalanceIconView, at: 0)
                         }
                     }
                 }
@@ -718,7 +790,7 @@ final class StarsTransactionsScreenComponent: Component {
                 environment: {},
                 containerSize: CGSize(width: availableSize.width - sideInsets - 8.0, height: 240.0)
             )
-            let descriptionFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - descriptionSize.width) / 2.0), y: contentHeight + 20.0 - floor(descriptionSize.height / 2.0)), size: descriptionSize)
+            let descriptionFrame = CGRect(origin: CGPoint(x: floorToScreenPixels(bandCenterX - descriptionSize.width / 2.0), y: contentHeight + 20.0 - floor(descriptionSize.height / 2.0)), size: descriptionSize)
             if let descriptionView = self.descriptionView.view {
                 if descriptionView.superview == nil {
                     self.scrollView.addSubview(descriptionView)
@@ -769,7 +841,7 @@ final class StarsTransactionsScreenComponent: Component {
                     environment: {},
                     containerSize: CGSize(width: availableSize.width - sideInsets, height: availableSize.height)
                 )
-                let proceedsFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - proceedsSize.width) / 2.0), y: contentHeight), size: proceedsSize)
+                let proceedsFrame = CGRect(origin: CGPoint(x: floorToScreenPixels(bandCenterX - proceedsSize.width / 2.0), y: contentHeight), size: proceedsSize)
                 if let proceedsView = self.proceedsView.view {
                     if proceedsView.superview == nil {
                         self.scrollView.addSubview(proceedsView)
@@ -825,7 +897,7 @@ final class StarsTransactionsScreenComponent: Component {
                             theme: environment.theme,
                             strings: environment.strings,
                             dateTimeFormat: environment.dateTimeFormat,
-                            count: ghostBaseLocalStarsAmountForDisplay() ?? self.starsState?.balance ?? StarsAmount.zero,
+                            count: self.displayBalance,
                             currency: component.starsContext.ton ? .ton : .stars,
                             rate: nil,
                             actionTitle: component.starsContext.ton ? environment.strings.Ton_WithdrawViaFragment : (withdrawAvailable ? environment.strings.Stars_Intro_BuyShort : environment.strings.Stars_Intro_Buy),
@@ -876,7 +948,7 @@ final class StarsTransactionsScreenComponent: Component {
                 environment: {},
                 containerSize: CGSize(width: availableSize.width - sideInsets, height: availableSize.height)
             )
-            let balanceFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - balanceSize.width) / 2.0), y: contentHeight), size: balanceSize)
+            let balanceFrame = CGRect(origin: CGPoint(x: floorToScreenPixels(bandCenterX - balanceSize.width / 2.0), y: contentHeight), size: balanceSize)
             if let balanceView = self.balanceView.view {
                 if balanceView.superview == nil {
                     self.scrollView.addSubview(balanceView)
@@ -902,13 +974,15 @@ final class StarsTransactionsScreenComponent: Component {
                     component: AnyComponent(ListSectionComponent(
                         theme: environment.theme,
                         style: .glass,
+                        // The native ItemList row owns the section fill.
+                        backgroundColor: .clear,
                         header: nil,
                         footer: nil,
                         items: [
                             AnyComponentWithIdentity(id: 0, component: AnyComponent(ListItemComponentAdaptor(
-                                itemGenerator: ItemListDisclosureItem(presentationData: ItemListPresentationData(presentationData), icon: PresentationResourcesSettings.earnStars, title: environment.strings.Monetization_EarnStarsInfo_Title, titleBadge: nil, label: environment.strings.Monetization_EarnStarsInfo_Text, labelStyle: .multilineDetailText, sectionId: 0, style: .blocks, action: {
+                                itemGenerator: ItemListDisclosureItem(presentationData: ItemListPresentationData(presentationData.withUpdated(theme: environment.theme)), icon: PresentationResourcesSettings.earnStars, title: environment.strings.Monetization_EarnStarsInfo_Title, titleBadge: nil, label: environment.strings.Monetization_EarnStarsInfo_Text, labelStyle: .multilineDetailText, sectionId: 0, style: .blocks, action: {
                                 }),
-                                params: ListViewItemLayoutParams(width: availableSize.width, leftInset: 0.0, rightInset: 0.0, availableHeight: 10000.0, isStandalone: true),
+                                params: ListViewItemLayoutParams(width: availableSize.width - sideInsets, leftInset: 0.0, rightInset: 0.0, availableHeight: 10000.0, isStandalone: true),
                                 action: { [weak self] in
                                     guard let self, let component = self.component else {
                                         return
@@ -928,7 +1002,7 @@ final class StarsTransactionsScreenComponent: Component {
                     environment: {},
                     containerSize: CGSize(width: availableSize.width - sideInsets, height: availableSize.height)
                 )
-                let earnStarsSectionFrame = CGRect(origin: CGPoint(x: sideInsets * 0.5, y: contentHeight), size: earnStarsSectionSize)
+                let earnStarsSectionFrame = CGRect(origin: CGPoint(x: bandCenterX - earnStarsSectionSize.width / 2.0, y: contentHeight), size: earnStarsSectionSize)
                 if let earnStarsSectionView = self.earnStarsSection.view {
                     if earnStarsSectionView.superview == nil {
                         self.scrollView.addSubview(earnStarsSectionView)
@@ -1112,7 +1186,7 @@ final class StarsTransactionsScreenComponent: Component {
                     environment: {},
                     containerSize: CGSize(width: availableSize.width - sideInsets, height: availableSize.height)
                 )
-                let subscriptionsFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - subscriptionsSize.width) / 2.0), y: contentHeight), size: subscriptionsSize)
+                let subscriptionsFrame = CGRect(origin: CGPoint(x: floorToScreenPixels(bandCenterX - subscriptionsSize.width / 2.0), y: contentHeight), size: subscriptionsSize)
                 if let subscriptionsView = self.subscriptionsView.view {
                     if subscriptionsView.superview == nil {
                         self.scrollView.addSubview(subscriptionsView)

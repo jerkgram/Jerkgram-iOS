@@ -372,7 +372,7 @@ public final class UniversalVideoNode: ASDisplayNode {
         })
 
         return ActionDisposable {
-            Queue.mainQueue().async {
+            let removeOutput = {
                 GhostBaseUniversalVideoSecondaryOutputRegistry.unregister(
                     manager: manager as AnyObject,
                     contentId: contentId,
@@ -385,6 +385,10 @@ public final class UniversalVideoNode: ASDisplayNode {
 
                 layer.flushAndRemoveImage()
             }
+            // Main-thread rebinding must not leave a queued old unregister
+            // that removes the same layer after its new registration.
+            if Queue.mainQueue().isCurrent() { removeOutput() }
+            else { Queue.mainQueue().async { removeOutput() } }
         }
     }
 

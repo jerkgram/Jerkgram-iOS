@@ -20,7 +20,7 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
     
     private var fontSize: PresentationFontSize?
     private var theme: PresentationTheme?
-    private var currentParams: (width: CGFloat, safeInset: CGFloat)?
+    private var currentParams: (width: CGFloat, leftInset: CGFloat, rightInset: CGFloat)?
     private var currentMeasuredHeight: CGFloat?
     
     var text: String {
@@ -97,8 +97,8 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
         self.updateClearButtonVisibility()
     }
     
-    func update(width: CGFloat, safeInset: CGFloat, isSettings: Bool, hasPrevious: Bool, hasNext: Bool, placeholder: String, isEnabled: Bool, presentationData: PresentationData, updateText: String?) -> CGFloat {
-        self.currentParams = (width, safeInset)
+    func update(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, isSettings: Bool, hasPrevious: Bool, hasNext: Bool, placeholder: String, isEnabled: Bool, presentationData: PresentationData, updateText: String?) -> CGFloat {
+        self.currentParams = (width, leftInset, rightInset)
         
         self.fontSize = presentationData.listsFontSize
         let titleFont = Font.regular(presentationData.listsFontSize.itemListBaseFontSize)
@@ -106,14 +106,7 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
         if self.theme !== presentationData.theme {
             self.theme = presentationData.theme
             
-            // The fullscreen profile scene owns the blur. Editing rows only add
-            // a light readability tint; when Jerkgram Glass is off, preserve
-            // Telegram's stock opaque block background exactly.
-            self.backgroundNode.backgroundColor = GhostBaseGlassStyle.isEnabled
-                ? presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(
-                    presentationData.theme.overallDarkAppearance ? 0.26 : 0.18
-                )
-                : presentationData.theme.list.itemBlocksBackgroundColor
+            self.backgroundNode.backgroundColor = presentationData.theme.list.itemBlocksBackgroundColor
             
             let textColor = presentationData.theme.list.itemPrimaryTextColor
             self.textNode.typingAttributes = [NSAttributedString.Key.font.rawValue: titleFont, NSAttributedString.Key.foregroundColor.rawValue: textColor]
@@ -131,13 +124,15 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
         
         let separatorRightInset: CGFloat = 16.0
         
-        let separatorX = safeInset + (hasPrevious ? 16.0 : 0.0)
-        self.topSeparator.frame = CGRect(origin: CGPoint(x: separatorX, y: 0.0), size: CGSize(width: width - separatorX - safeInset - separatorRightInset, height: UIScreenPixel))
+        let separatorX = leftInset + (hasPrevious ? 16.0 : 0.0)
+        self.topSeparator.frame = CGRect(origin: CGPoint(x: separatorX, y: 0.0), size: CGSize(width: width - separatorX - rightInset - separatorRightInset, height: UIScreenPixel))
         
         let attributedPlaceholderText = NSAttributedString(string: placeholder, font: titleFont, textColor: presentationData.theme.list.itemPlaceholderTextColor)
         if self.textNode.attributedPlaceholderText == nil || !self.textNode.attributedPlaceholderText!.isEqual(to: attributedPlaceholderText) {
             self.textNode.attributedPlaceholderText = attributedPlaceholderText
         }
+        // The field is named by its placeholder, which is hidden once there is text.
+        self.textNode.textView.accessibilityLabel = placeholder
         
         if let updateText = updateText {
             let attributedText = NSAttributedString(string: updateText, font: titleFont, textColor: presentationData.theme.list.itemPrimaryTextColor)
@@ -150,7 +145,7 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
         }
         let attributedMeasureText = NSAttributedString(string: measureText, font: titleFont, textColor: .gray)
         self.measureTextNode.attributedText = attributedMeasureText
-        let measureTextSize = self.measureTextNode.updateLayout(CGSize(width: width - safeInset * 2.0 - 16.0 * 2.0 - 38.0, height: .greatestFiniteMagnitude))
+        let measureTextSize = self.measureTextNode.updateLayout(CGSize(width: width - (leftInset + rightInset) - 16.0 * 2.0 - 38.0, height: .greatestFiniteMagnitude))
         self.measureTextNode.frame = CGRect(origin: CGPoint(), size: measureTextSize)
         self.currentMeasuredHeight = measureTextSize.height
         
@@ -158,103 +153,36 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
         let height = measureTextSize.height + verticalInset * 2.0
         
         let buttonSize = CGSize(width: 38.0, height: height)
-        self.clearButtonNode.frame = CGRect(origin: CGPoint(x: width - safeInset - buttonSize.width, y: 0.0), size: buttonSize)
+        self.clearButtonNode.frame = CGRect(origin: CGPoint(x: width - rightInset - buttonSize.width, y: 0.0), size: buttonSize)
         if let image = self.clearIconNode.image {
-            self.clearIconNode.frame = CGRect(origin: CGPoint(x: width - safeInset - buttonSize.width + floor((buttonSize.width - image.size.width) / 2.0), y: floor((height - image.size.height) / 2.0)), size: image.size)
+            self.clearIconNode.frame = CGRect(origin: CGPoint(x: width - rightInset - buttonSize.width + floor((buttonSize.width - image.size.width) / 2.0), y: floor((height - image.size.height) / 2.0)), size: image.size)
         }
         
-        let textNodeFrame = CGRect(origin: CGPoint(x: safeInset + 16.0, y: 15.0), size: CGSize(width: width - safeInset * 2.0 - 16.0 * 2.0 - 38.0, height: max(height, 1000.0)))
+        let textNodeFrame = CGRect(origin: CGPoint(x: leftInset + 16.0, y: 15.0), size: CGSize(width: width - (leftInset + rightInset) - 16.0 * 2.0 - 38.0, height: max(height, 1000.0)))
         self.textNodeContainer.frame = textNodeFrame
         self.textNode.frame = CGRect(origin: CGPoint(), size: textNodeFrame.size)
         
-        self.backgroundNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: max(1.0, width - safeInset * 2.0), height: height))
+        self.backgroundNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 0.0), size: CGSize(width: max(1.0, width - (leftInset + rightInset)), height: height))
         
-        let hasCorners = safeInset > 0.0 && (!hasPrevious || !hasNext)
+        let hasCorners = (leftInset > 0.0 || rightInset > 0.0) && (!hasPrevious || !hasNext)
         let hasTopCorners = hasCorners && !hasPrevious
         let hasBottomCorners = hasCorners && !hasNext
         
-        // Edit-profile fields must follow the visible profile Glass setting,
-        // not a separate persisted flag which leaves the bio opaque.
-        let ghostBaseGlassEnabled = GhostBaseGlassStyle.isEnabled
-
-        if ghostBaseGlassEnabled {
-            // This is the actual final visual owner. Keep it visibly lighter
-            // than the legacy card so the profile backdrop remains readable.
-            // Keep this node as a tint only. `itemBlocksBackgroundColor`
-            // is an opaque list surface on Telegram 12.9.2 even after alpha is
-            // applied, which is why the bio still looked like a solid black card.
-            self.backgroundNode.isOpaque = false
-            self.backgroundNode.backgroundColor = presentationData.theme.overallDarkAppearance
-                ? UIColor.white.withAlphaComponent(0.025)
-                : UIColor.black.withAlphaComponent(0.018)
-
-            self.maskNode.image = nil
-            self.backgroundNode.cornerRadius =
-                hasCorners
-                ? 16.0
-                : 0.0
-            self.backgroundNode.clipsToBounds =
-                hasCorners
-
-            if hasTopCorners && hasBottomCorners {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = [
-                        .layerMinXMinYCorner,
-                        .layerMaxXMinYCorner,
-                        .layerMinXMaxYCorner,
-                        .layerMaxXMaxYCorner
-                    ]
-            } else if hasTopCorners {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = [
-                        .layerMinXMinYCorner,
-                        .layerMaxXMinYCorner
-                    ]
-            } else if hasBottomCorners {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = [
-                        .layerMinXMaxYCorner,
-                        .layerMaxXMaxYCorner
-                    ]
-            } else {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = []
-            }
-        } else {
-            self.backgroundNode.backgroundColor =
-                presentationData
-                    .theme
-                    .list
-                    .itemBlocksBackgroundColor
-
-            self.backgroundNode.cornerRadius = 0.0
-            self.backgroundNode.clipsToBounds = false
-
-            self.backgroundNode
-                .layer
-                .maskedCorners = [
-                    .layerMinXMinYCorner,
-                    .layerMaxXMinYCorner,
-                    .layerMinXMaxYCorner,
-                    .layerMaxXMaxYCorner
-                ]
-
-            self.maskNode.image =
-                hasCorners
-                ? PresentationResourcesItemList
-                    .cornersImage(
-                        presentationData.theme,
-                        top: hasTopCorners,
-                        bottom: hasBottomCorners,
-                        glass: true
-                    )
-                : nil
+        // JG169 field corners begin
+        // Clip the card itself: a theme-colored corner image paints black over the profile backdrop.
+        self.maskNode.image = nil
+        self.backgroundNode.cornerRadius = hasCorners ? 26.0 : 0.0
+        self.backgroundNode.clipsToBounds = hasCorners
+        var fieldCorners: CACornerMask = []
+        if hasTopCorners {
+            fieldCorners.formUnion([.layerMinXMinYCorner, .layerMaxXMinYCorner])
         }
-        self.maskNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: width - safeInset - safeInset, height: height))
+        if hasBottomCorners {
+            fieldCorners.formUnion([.layerMinXMaxYCorner, .layerMaxXMaxYCorner])
+        }
+        self.backgroundNode.layer.maskedCorners = fieldCorners
+        // JG169 field corners end
+        self.maskNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 0.0), size: CGSize(width: width - leftInset - rightInset, height: height))
         
         return height
     }
@@ -291,14 +219,14 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
     }
     
     func editableTextNodeDidUpdateText(_ editableTextNode: ASEditableTextNode) {
-        if let (width, safeInset) = self.currentParams {
+        if let (width, leftInset, rightInset) = self.currentParams {
             var measureText = self.textNode.attributedText?.string ?? ""
             if measureText.hasSuffix("\n") || measureText.isEmpty {
                measureText += "|"
             }
             let attributedMeasureText = NSAttributedString(string: measureText, font: Font.regular(17.0), textColor: .black)
             self.measureTextNode.attributedText = attributedMeasureText
-            let measureTextSize = self.measureTextNode.updateLayout(CGSize(width: width - safeInset * 2.0 - 16.0 * 2.0 - 38.0, height: .greatestFiniteMagnitude))
+            let measureTextSize = self.measureTextNode.updateLayout(CGSize(width: width - (leftInset + rightInset) - 16.0 * 2.0 - 38.0, height: .greatestFiniteMagnitude))
             if let currentMeasuredHeight = self.currentMeasuredHeight, abs(measureTextSize.height - currentMeasuredHeight) > 0.1 {
                 self.requestUpdateHeight()
             }

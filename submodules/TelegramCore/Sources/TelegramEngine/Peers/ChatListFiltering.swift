@@ -1,8 +1,121 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
+
+// BEGIN JERKGRAM DEFAULT FOLDER FOUNDATION
+public enum JerkgramDefaultFolderSettings {
+    // Retain stored opt-in/order for a future repair; all runtime consumers stay native.
+    public static let runtimeEnabled = false
+    public static let preferenceKey = "jerkgram.UnlockDefaultChatFolder"
+    public static let changed = Notification.Name("JerkgramDefaultFolderPolicyChanged")
+    private static let lock = NSLock()
+    private static var values: [Int64: (Bool, UInt64)] = [:]
+    private static var order: [Int64] = []
+    private static var epoch: UInt64 = 0
+    public static func scopedKey(accountPeerId: Int64) -> String { return "jerkgram.account.\(accountPeerId).setting.\(preferenceKey)" }
+    private static func value(_ id: Int64) -> (Bool, UInt64) {
+        if let value = values[id] { return value }
+        epoch &+= 1
+        let value = (UserDefaults.standard.object(forKey: scopedKey(accountPeerId: id)) as? Bool ?? false, epoch)
+        values[id] = value
+        order.append(id)
+        while order.count > 16 { values.removeValue(forKey: order.removeFirst()) }
+        return value
+    }
+    public static func snapshot(accountPeerId: Int64) -> (enabled: Bool, generation: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        let current = value(accountPeerId)
+        return (runtimeEnabled && current.0, current.1)
+    }
+    public static func enabled(accountPeerId: Int64) -> Bool { return snapshot(accountPeerId: accountPeerId).enabled }
+    public static func generation(accountPeerId: Int64) -> UInt64 { return snapshot(accountPeerId: accountPeerId).generation }
+    public static func update(accountPeerId: Int64, enabled: Bool) {
+        lock.lock()
+        guard value(accountPeerId).0 != enabled else { lock.unlock(); return }
+        epoch &+= 1
+        values[accountPeerId] = (enabled, epoch)
+        lock.unlock()
+        NotificationCenter.default.post(name: changed, object: accountPeerId)
+    }
+}
+
+// Pure policy is shared by presentation, both reorder surfaces and transaction cleanup.
+public enum JerkgramFolderOrder {
+    public static func startupReady(enabled: Bool, premium: Bool?, localRead: Bool) -> Bool {
+        return localRead && (!JerkgramDefaultFolderSettings.runtimeEnabled || !enabled || premium != nil)
+    }
+    public static func bounded(_ ids: [Int32]) -> [Int32] {
+        var result: [Int32] = []
+        var seen = Set<Int32>()
+        for id in ids.prefix(256) where id >= 0 {
+            if seen.insert(id).inserted { result.append(id) }
+        }
+        if !seen.contains(0) {
+            if result.count == 256 { result.removeLast() }
+            result.append(0)
+        }
+        return result
+    }
+    public static func effective(native: [Int32], saved: [Int32], allowed: Set<Int32>, active: Bool) -> [Int32] {
+        guard JerkgramDefaultFolderSettings.runtimeEnabled && active else { return native }
+        let movable = [Int32(0)] + native.filter { $0 != 0 && allowed.contains($0) }
+        let movableSet = Set(movable)
+        var result = bounded(saved).filter { movableSet.contains($0) }
+        for id in movable where !result.contains(id) { result.append(id) }
+        if let first = saved.first, !movableSet.contains(first) {
+            result.removeAll(where: { $0 == 0 }); result.insert(0, at: 0)
+        }
+        // Locked folders retain their native suffix, so ordinal-based native gates stay valid.
+        result.append(contentsOf: native.filter { $0 != 0 && !allowed.contains($0) })
+        return result
+    }
+    public static func server(native: [Int32], accepted: [Int32]) -> [Int32] {
+        var result = accepted.filter { native.contains($0) }
+        for id in native where !result.contains(id) { result.append(id) }
+        if native.contains(0) { result.removeAll(where: { $0 == 0 }); result.insert(0, at: 0) }
+        return result
+    }
+    public static func pruned(saved: [Int32], old: [Int32], new: [Int32]) -> [Int32] {
+        let removed = Set(old).subtracting(new)
+        var result = bounded(saved).filter { !removed.contains($0) }
+        if let first = saved.first, first != 0, removed.contains(first) {
+            result.removeAll(where: { $0 == 0 }); result.insert(0, at: 0)
+        }
+        return result
+    }
+    public static func proposalIsCurrent(enabled: Bool, premium: Bool?, generation: UInt64, proposedGeneration: UInt64) -> Bool {
+        return JerkgramDefaultFolderSettings.runtimeEnabled && enabled && premium == false && generation == proposedGeneration
+    }
+}
+
+struct JerkgramFolderProposalToken {
+    private let lifetime: ObjectIdentifier
+    let generation: UInt64
+    init(lifetime: AnyObject, generation: UInt64) {
+        self.lifetime = ObjectIdentifier(lifetime)
+        self.generation = generation
+    }
+    func matches(lifetime: AnyObject, generation: UInt64) -> Bool {
+        return self.lifetime == ObjectIdentifier(lifetime) && self.generation == generation
+    }
+}
+
+private struct JerkgramDefaultFolderOrder: Codable, Equatable {
+    let ids: [Int32]
+    init(ids: [Int32]) { self.ids = JerkgramFolderOrder.bounded(ids) }
+    private enum CodingKeys: String, CodingKey { case ids }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Decode at most the storage bound, even for a corrupt oversized preference.
+        var values = try container.nestedUnkeyedContainer(forKey: .ids)
+        var ids: [Int32] = []
+        while !values.isAtEnd && ids.count < 256 { ids.append(try values.decode(Int32.self)) }
+        self.init(ids: ids)
+    }
+}
+// END JERKGRAM DEFAULT FOLDER FOUNDATION
 
 public struct ChatListFilterPeerCategories: OptionSet, Hashable {
     public var rawValue: Int32
@@ -967,7 +1080,10 @@ private func loadAndStorePeerChatInfos(accountPeerId: PeerId, postbox: Postbox, 
                         
                         ttlPeriods[peer.peerId] = .known(ttlPeriod.flatMap(CachedPeerAutoremoveTimeout.Value.init(peerValue:)))
                         
-                        transaction.resetIncomingReadStates([peerId: [Namespaces.Message.Cloud: .idBased(maxIncomingReadId: readInboxMaxId, maxOutgoingReadId: readOutboxMaxId, maxKnownId: topMessage, count: unreadCount, markedUnread: false)]])
+                        // A channel the account is not a member of keeps no read state (NonMemberChannelReadState.swift).
+                        if dialogReadStateIsKept(peerId: peerId, responseChats: chats, storedPeer: transaction.getPeer(peerId)) {
+                            transaction.resetIncomingReadStates([peerId: [Namespaces.Message.Cloud: .idBased(maxIncomingReadId: readInboxMaxId, maxOutgoingReadId: readOutboxMaxId, maxKnownId: topMessage, count: unreadCount, markedUnread: false)]])
+                        }
                         
                         transaction.replaceMessageTagSummary(peerId: peerId, threadId: nil, tagMask: .unseenPersonalMessage, namespace: Namespaces.Message.Cloud, customTag: nil, count: unreadMentionsCount, maxId: topMessage)
                         transaction.replaceMessageTagSummary(peerId: peerId, threadId: nil, tagMask: .unseenReaction, namespace: Namespaces.Message.Cloud, customTag: nil, count: unreadReactionsCount, maxId: topMessage)
@@ -1105,6 +1221,107 @@ struct ChatListFiltersState: Codable, Equatable {
     }
 }
 
+public struct JerkgramChatListFilterProposal {
+    fileprivate let token: JerkgramFolderProposalToken
+    fileprivate let nativeIds: [Int32]
+    fileprivate let allowedIds: Set<Int32>
+}
+
+public struct JerkgramChatListFilterSnapshot {
+    public let filters: [ChatListFilter]
+    public let nativeFilters: [ChatListFilter]
+    public let isPremium: Bool?
+    public let limits: EngineConfiguration.UserLimits
+    public let allowedIds: Set<Int32>
+    public let localReady: Bool
+    public let policyEnabled: Bool
+    public let configuredDefaultId: Int32
+    public let generation: UInt64
+    public let localActive: Bool
+    public let defaultMissing: Bool
+    public let proposal: JerkgramChatListFilterProposal?
+    public var startupReady: Bool { return JerkgramFolderOrder.startupReady(enabled: self.policyEnabled, premium: self.isPremium, localRead: self.localReady) }
+    public func normalizedOrder(_ ids: [Int32]) -> [Int32] {
+        return JerkgramFolderOrder.effective(native: self.nativeFilters.map { $0.id }, saved: ids, allowed: self.allowedIds, active: self.localActive)
+    }
+}
+
+private func jerkgramFolderPolicy(accountPeerId: Int64) -> Signal<(enabled: Bool, generation: UInt64), NoError> {
+    return Signal { subscriber in
+        let observer = NotificationCenter.default.addObserver(forName: JerkgramDefaultFolderSettings.changed, object: nil, queue: nil) { notification in
+            guard let id = notification.object as? Int64, id == accountPeerId else { return }
+            subscriber.putNext(JerkgramDefaultFolderSettings.snapshot(accountPeerId: accountPeerId))
+        }
+        subscriber.putNext(JerkgramDefaultFolderSettings.snapshot(accountPeerId: accountPeerId))
+        return ActionDisposable { NotificationCenter.default.removeObserver(observer) }
+    }
+}
+
+func _internal_updatedJerkgramChatListFilters(account: Account) -> Signal<JerkgramChatListFilterSnapshot, NoError> {
+    let preferencesKey = PostboxViewKey.preferences(keys: Set([PreferencesKeys.chatListFilters, PreferencesKeys.jerkgramDefaultFolderOrder, PreferencesKeys.appConfiguration]))
+    let peerKey = PostboxViewKey.basicPeer(account.peerId)
+    return combineLatest(
+        account.postbox.combinedView(keys: [preferencesKey, peerKey]),
+        account.viewTracker.hiddenChatListFilterIds,
+        jerkgramFolderPolicy(accountPeerId: account.peerId.toInt64())
+    ) |> map { views, hiddenIds, policy -> JerkgramChatListFilterSnapshot in
+        guard let preferences = views.views[preferencesKey] as? PreferencesView,
+              let peerView = views.views[peerKey] as? BasicPeerView else { preconditionFailure() }
+        let state = preferences.values[PreferencesKeys.chatListFilters]?.get(ChatListFiltersState.self) ?? .default
+        let saved = preferences.values[PreferencesKeys.jerkgramDefaultFolderOrder]?.get(JerkgramDefaultFolderOrder.self)?.ids ?? [0]
+        let premium = peerView.peer?.isPremium
+        let configuration = preferences.values[PreferencesKeys.appConfiguration]?.get(AppConfiguration.self) ?? .defaultValue
+        let limits = EngineConfiguration.UserLimits(UserLimitsConfiguration(appConfiguration: configuration, isPremium: false))
+        let limit = max(0, Int(limits.maxFoldersCount))
+        let native = state.filters.filter { !hiddenIds.contains($0.id) }
+        let allowed = Set(native.filter { $0.id != 0 }.prefix(limit).map { $0.id })
+        let active = policy.enabled && premium == false
+        let ids = JerkgramFolderOrder.effective(native: native.map { $0.id }, saved: saved, allowed: allowed, active: active)
+        let filters = ids.compactMap { id -> ChatListFilter? in
+            if id == 0 { return .allChats }
+            return native.first(where: { $0.id == id })
+        }
+        return JerkgramChatListFilterSnapshot(filters: filters, nativeFilters: native, isPremium: premium, limits: limits, allowedIds: allowed, localReady: true, policyEnabled: policy.enabled, configuredDefaultId: saved.first ?? 0, generation: policy.generation, localActive: active, defaultMissing: active && saved.first != 0 && !allowed.contains(saved.first ?? 0), proposal: active ? JerkgramChatListFilterProposal(token: JerkgramFolderProposalToken(lifetime: account.postbox, generation: policy.generation), nativeIds: native.map { $0.id }, allowedIds: allowed) : nil)
+    }
+}
+
+// Returns one value even when obsolete: both native Done handlers must finish editing.
+func _internal_updateJerkgramChatListFilterOrder(account: Account, ids: [Int32], proposal: JerkgramChatListFilterProposal) -> Signal<[ChatListFilter], NoError> {
+    return account.viewTracker.hiddenChatListFilterIds |> take(1) |> mapToSignal { hiddenIds in
+        return account.postbox.transaction { transaction -> [ChatListFilter] in
+            let state = _internal_currentChatListFiltersState(transaction: transaction)
+            guard JerkgramDefaultFolderSettings.runtimeEnabled else { return state.filters }
+            let policy = JerkgramDefaultFolderSettings.snapshot(accountPeerId: account.peerId.toInt64())
+            let premium = transaction.getPeer(account.peerId)?.isPremium
+            let configuration = transaction.getPreferencesEntry(key: PreferencesKeys.appConfiguration)?.get(AppConfiguration.self) ?? .defaultValue
+            let limit = max(0, Int(UserLimitsConfiguration(appConfiguration: configuration, isPremium: false).maxFoldersCount))
+            let native = state.filters.filter { !hiddenIds.contains($0.id) }
+            let allowed = Set(native.filter { $0.id != 0 }.prefix(limit).map { $0.id })
+            guard proposal.token.matches(lifetime: account.postbox, generation: policy.generation),
+                  JerkgramFolderOrder.proposalIsCurrent(enabled: policy.enabled, premium: premium, generation: policy.generation, proposedGeneration: proposal.token.generation),
+                  proposal.nativeIds == native.map({ $0.id }), proposal.allowedIds == allowed else { return state.filters }
+            let accepted = JerkgramFolderOrder.effective(native: native.map { $0.id }, saved: ids, allowed: allowed, active: true)
+            transaction.updatePreferencesEntry(key: PreferencesKeys.jerkgramDefaultFolderOrder, { _ in PreferencesEntry(JerkgramDefaultFolderOrder(ids: accepted)) })
+            // Preserve every synchronized member, including hidden filters; All is never synthesized into RPC state.
+            let serverIds = JerkgramFolderOrder.server(native: state.filters.map { $0.id }, accepted: accepted.filter { $0 == 0 || allowed.contains($0) })
+            _internal_updateChatListFiltersInteractively(transaction: transaction, { current in
+                return serverIds.compactMap { id in current.first(where: { $0.id == id }) }
+            })
+            return accepted.compactMap { id in id == 0 ? .allChats : native.first(where: { $0.id == id }) }
+        }
+    }
+}
+
+private func jerkgramPruneDefaultFolderOrder(transaction: Transaction, old: [ChatListFilter], new: [ChatListFilter]) {
+    guard JerkgramDefaultFolderSettings.runtimeEnabled else { return }
+    guard !Set(old.map { $0.id }).subtracting(new.map { $0.id }).isEmpty,
+          let saved = transaction.getPreferencesEntry(key: PreferencesKeys.jerkgramDefaultFolderOrder)?.get(JerkgramDefaultFolderOrder.self) else { return }
+    let ids = JerkgramFolderOrder.pruned(saved: saved.ids, old: old.map { $0.id }, new: new.map { $0.id })
+    if ids != saved.ids {
+        transaction.updatePreferencesEntry(key: PreferencesKeys.jerkgramDefaultFolderOrder, { _ in PreferencesEntry(JerkgramDefaultFolderOrder(ids: ids)) })
+    }
+}
+
 func _internal_generateNewChatListFilterId(filters: [ChatListFilter]) -> Int32 {
     while true {
         let id = Int32(2 + arc4random_uniform(255 - 2))
@@ -1116,6 +1333,7 @@ func _internal_generateNewChatListFilterId(filters: [ChatListFilter]) -> Int32 {
 
 func _internal_updateChatListFiltersInteractively(postbox: Postbox, _ f: @escaping ([ChatListFilter]) -> [ChatListFilter]) -> Signal<[ChatListFilter], NoError> {
     return postbox.transaction { transaction -> [ChatListFilter] in
+        let oldFilters = _internal_currentChatListFilters(transaction: transaction)
         var updated: [ChatListFilter] = []
         var hasUpdates = false
         transaction.updatePreferencesEntry(key: PreferencesKeys.chatListFilters, { entry in
@@ -1131,6 +1349,7 @@ func _internal_updateChatListFiltersInteractively(postbox: Postbox, _ f: @escapi
             
             return PreferencesEntry(state)
         })
+        jerkgramPruneDefaultFolderOrder(transaction: transaction, old: oldFilters, new: updated)
         if hasUpdates {
             requestChatListFiltersSync(transaction: transaction)
         }
@@ -1176,6 +1395,7 @@ func _internal_updateChatListFiltersDisplayTagsInteractively(postbox: Postbox, d
 }
 
 func _internal_updateChatListFiltersInteractively(transaction: Transaction, _ f: ([ChatListFilter]) -> [ChatListFilter]) {
+    let oldFilters = _internal_currentChatListFilters(transaction: transaction)
     var hasUpdates = false
     transaction.updatePreferencesEntry(key: PreferencesKeys.chatListFilters, { entry in
         var state = entry?.get(ChatListFiltersState.self) ?? ChatListFiltersState.default
@@ -1187,6 +1407,7 @@ func _internal_updateChatListFiltersInteractively(transaction: Transaction, _ f:
         state.normalize()
         return PreferencesEntry(state)
     })
+    jerkgramPruneDefaultFolderOrder(transaction: transaction, old: oldFilters, new: _internal_currentChatListFilters(transaction: transaction))
     if hasUpdates {
         requestChatListFiltersSync(transaction: transaction)
     }
@@ -1254,6 +1475,7 @@ func _internal_currentChatListFiltersState(transaction: Transaction) -> ChatList
 }
 
 func updateChatListFiltersState(transaction: Transaction, _ f: (ChatListFiltersState) -> ChatListFiltersState) -> ChatListFiltersState {
+    let oldFilters = _internal_currentChatListFilters(transaction: transaction)
     var result: ChatListFiltersState?
     transaction.updatePreferencesEntry(key: PreferencesKeys.chatListFilters, { entry in
         let settings = entry?.get(ChatListFiltersState.self) ?? ChatListFiltersState.default
@@ -1262,6 +1484,7 @@ func updateChatListFiltersState(transaction: Transaction, _ f: (ChatListFiltersS
         result = updated
         return PreferencesEntry(updated)
     })
+    jerkgramPruneDefaultFolderOrder(transaction: transaction, old: oldFilters, new: (result ?? .default).filters)
     return result ?? .default
 }
 

@@ -1,10 +1,11 @@
+mod handover;
 mod wrap;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 pub use wrap::{
     ApiEnvironment, ClientProxy, INIT_CONNECTION, INPUT_CLIENT_PROXY, INVOKE_WITH_APNS_SECRET, INVOKE_WITH_RECAPTCHA,
-    Verification, flood_wait_seconds, wrap_request,
+    MAX_WRAPPER_BYTES, Verification, flood_wait_seconds, wrap_request, wrapper_len,
 };
 
 use crate::crypto::SecureRandom;
@@ -20,6 +21,8 @@ pub const LARGE_RESPONSE_THRESHOLD: u32 = 512 * 1024;
 pub const MAX_CONNECTION_NOT_INITED_RETRIES: u32 = 5;
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 pub const REQUEST_INVALID_SIZE: &str = "REQUEST_INVALID_SIZE";
+/// A host request id in the range the client keeps for its own `auth.bindTempAuthKey`.
+pub const REQUEST_ID_INVALID: &str = "REQUEST_ID_INVALID";
 pub const MIN_FLOOD_WAIT_SECONDS: i64 = 1;
 pub const MAX_FLOOD_WAIT_SECONDS: i64 = 14 * 24 * 60 * 60;
 pub const TEMPORARY_KEY_RETRY_DELAY: f64 = 1.0;
@@ -158,6 +161,15 @@ pub enum RpcEvent {
         flood_wait_text: Option<String>,
         server_errors: u32,
     },
+    /// While handing over (`start_handover`): the request left this client for the host to send on
+    /// another session. `may_have_run` unless it never reached the server under any of the client's
+    /// sessions, or the server said it never ran it; `retry_after` is what is left of a wait the
+    /// request was serving (a flood wait, a server error's delay), in seconds.
+    Released {
+        id: RequestId,
+        may_have_run: bool,
+        retry_after: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +198,10 @@ struct RequestState {
     pending_decision: Option<PendingDecision>,
     rejected_key: Option<u64>,
     temporary_key_rejections: u32,
+    /// An earlier copy of the request may have reached the server: under an earlier session of this
+    /// client, or one taken back from this session (an initConnection re-wrap). Only a handover reads
+    /// it; a later error answer does not clear it.
+    reached_server: bool,
 }
 
 impl RequestState {
@@ -208,6 +224,7 @@ impl RequestState {
             pending_decision: None,
             rejected_key: None,
             temporary_key_rejections: 0,
+            reached_server: false,
         }
     }
 }
@@ -262,10 +279,33 @@ impl PendingRequest {
     pub fn auth_token_ready(&mut self) {
         self.0.waiting_for_token = false;
     }
+
+    /// The request may have reached the server under an earlier session, or waits for the host's
+    /// answer to a retry question about the server's error.
+    pub fn may_have_run(&self) -> bool {
+        self.0.may_have_run_before() || self.0.pending_decision.is_some()
+    }
+
+    /// What is left of a wait the request was serving (see `RpcEvent::Released`).
+    pub fn retry_after(&self, now: Now) -> f64 {
+        self.0.retry_after(now)
+    }
 }
 
 fn has_invalid_size(body: &[u8]) -> bool {
     body.len() > MAX_REQUEST_BYTES || !body.len().is_multiple_of(4) || body.len() < 4
+}
+
+/// Why a host request cannot go at all: an id the client uses for its own binds would be taken for the
+/// bind (the host's request lost, its answer read as the bind's), a body no server takes.
+fn refusal(id: RequestId, body: &[u8]) -> Option<&'static str> {
+    if id.0 > BIND_QUERY_ID_BASE {
+        Some(REQUEST_ID_INVALID)
+    } else if has_invalid_size(body) {
+        Some(REQUEST_INVALID_SIZE)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -290,6 +330,8 @@ pub struct RpcClient {
     auth_token_ready: bool,
     temporary_key_reported: Option<(u64, f64)>,
     binds: u64,
+    /// The requests go to another session: see `handover.rs`.
+    handover: bool,
 }
 
 impl RpcClient {
@@ -313,6 +355,7 @@ impl RpcClient {
             auth_token_ready: true,
             temporary_key_reported: None,
             binds: 0,
+            handover: false,
         }
     }
 
@@ -355,8 +398,30 @@ impl RpcClient {
         }
     }
 
+    /// What the key was initialized with. When the next call has to initialize the connection again (after
+    /// auth.bindTempAuthKey), calls handed to the session but not sent yet were wrapped without
+    /// initConnection: they are taken back and wrapped again, so the first call to go carries it.
     pub fn set_stored_init_hash(&mut self, hash: Option<String>) {
         self.stored_init_hash = hash;
+        if !self.needs_initialization() {
+            return;
+        }
+        let unsent: Vec<RequestId> = self
+            .requests
+            .iter()
+            .filter(|(id, state)| {
+                state.in_session && !state.wrapped_with_init && !self.session.was_transmitted(QueryId::from(**id))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in unsent {
+            let may_have_run = self.session.may_have_run(QueryId::from(id));
+            if let Some(state) = self.requests.get_mut(&id) {
+                state.reached_server |= may_have_run;
+            }
+            self.session.cancel(QueryId::from(id));
+            self.leave_session(id);
+        }
     }
 
     pub fn update_environment(&mut self, environment: ApiEnvironment, noop_request: Option<RpcRequest>, now: Now) {
@@ -387,14 +452,18 @@ impl RpcClient {
         if self.requests.contains_key(&id) {
             return;
         }
-        if has_invalid_size(&request.body) {
+        if let Some(message) = refusal(id, &request.body) {
             self.events.push_back(RpcEvent::Failed {
                 id,
                 code: 400,
-                message: REQUEST_INVALID_SIZE.to_string(),
+                message: message.to_string(),
                 response_time: now.unix,
                 duration: 0.0,
             });
+            return;
+        }
+        if self.handover {
+            self.release_new(RequestState::new(request, 0, now), now);
             return;
         }
         let seq = self.next_seq;
@@ -412,17 +481,21 @@ impl RpcClient {
         if self.requests.contains_key(&id) {
             return;
         }
-        if has_invalid_size(&state.request.body) {
+        if let Some(message) = refusal(id, &state.request.body) {
             self.events.push_back(RpcEvent::Failed {
                 id,
                 code: 400,
-                message: REQUEST_INVALID_SIZE.to_string(),
+                message: message.to_string(),
                 response_time: now.unix,
                 duration: 0.0,
             });
             return;
         }
         state.temporary_key_rejections = 0;
+        if self.handover {
+            self.release_new(state, now);
+            return;
+        }
         state.seq = self.next_seq;
         self.next_seq += 1;
         state.in_session = false;
@@ -556,6 +629,10 @@ impl RpcClient {
 
     fn dispatch_ready(&mut self, now: Now) {
         self.debug_check_bookkeeping();
+        if self.handover {
+            self.release_handed_over(now);
+            return;
+        }
         if self.parked.is_empty() {
             return;
         }
@@ -577,6 +654,21 @@ impl RpcClient {
                 .and_then(|state| state.request.invoke_after)
                 .filter(|dependency| self.requests.get(dependency).is_some_and(|other| other.in_session))
                 .map(QueryId::from);
+            let environment = anonymous.as_ref().or(self.environment.as_ref());
+            let fits = self.requests.get(&id).is_some_and(|state| {
+                let without_updates = state.request.flags.without_updates
+                    || environment.is_some_and(|environment| environment.disable_updates);
+                wrap::wrapper_len(
+                    if initialize { environment } else { None },
+                    without_updates,
+                    state.verification.as_ref(),
+                )
+                .is_some_and(|length| length <= wrap::MAX_WRAPPER_BYTES)
+            });
+            if !fits {
+                self.surface(id, 400, REQUEST_INVALID_SIZE.to_string(), now.unix, now);
+                continue;
+            }
             let environment = anonymous.as_ref().or(self.environment.as_ref());
             let state = self.requests.get_mut(&id).expect("ready request exists");
             let without_updates = state.request.flags.without_updates
@@ -719,6 +811,9 @@ impl RpcClient {
             SessionEvent::Pong { rtt } => self.events.push_back(RpcEvent::Pong { rtt }),
             SessionEvent::DroppedAnswerTooLarge { .. } => self.events.push_back(RpcEvent::ConnectionShouldReset),
             SessionEvent::DestroyAuthKey { outcome } => self.events.push_back(RpcEvent::AuthKeyDestroyed { outcome }),
+            SessionEvent::Released { id, may_have_run } => {
+                self.on_query_released(RequestId::from(id), may_have_run, now)
+            }
         }
     }
 
@@ -838,7 +933,7 @@ impl RpcClient {
                 return;
             }
         }
-        if code == 403 {
+        if code == 403 && self.role != SessionRole::Cdn {
             if let Some(nonce) = message.strip_prefix("APNS_VERIFY_CHECK_") {
                 let kind = VerificationKind::Apns { nonce: nonce.to_string() };
                 self.park_for_verification(id, kind, now);
@@ -1040,7 +1135,8 @@ impl RpcClient {
         let order = std::mem::take(&mut self.order);
         let mut pending = Vec::with_capacity(order.len());
         for id in order.into_values() {
-            if let Some(state) = self.requests.remove(&id) {
+            if let Some(mut state) = self.requests.remove(&id) {
+                state.reached_server |= state.in_session && self.session.may_have_run(QueryId::from(id));
                 pending.push(PendingRequest(state));
             }
         }

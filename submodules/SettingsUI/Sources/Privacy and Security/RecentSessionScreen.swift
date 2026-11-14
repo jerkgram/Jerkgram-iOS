@@ -56,24 +56,44 @@ private let recentSessionCheckIcon: UIImage = {
     })!.withRenderingMode(.alwaysTemplate)
 }()
 
+// Captured on construction or the existing visibility/revision callback, never per layout.
+private struct RecentSessionMaterialState: Equatable {
+    let active: Bool
+    let revision: UInt64
+
+    init(optIn: Bool) {
+        self.active = JerkgramSettingsMaterialPolicy.active(
+            optIn: optIn,
+            master: GhostBaseGlassStyle.isEnabled,
+            enabled: GhostBaseGlassStyle.settingsTranslucencyEnabled,
+            reduceTransparency: !GhostBaseGlassStyle.allowsTransparentSurfaces
+        )
+        self.revision = GhostBaseGlassStyle.visualRevision
+    }
+}
+
 private final class RecentSessionSheetContent: CombinedComponent {
     typealias EnvironmentType = ViewControllerComponentContainer.Environment
     
     let context: AccountContext
     let subject: RecentSessionScreen.Subject
+    let materialState: RecentSessionMaterialState
     let cancel: (Bool) -> Void
     
     init(
         context: AccountContext,
         subject: RecentSessionScreen.Subject,
+        materialState: RecentSessionMaterialState,
         cancel: @escaping  (Bool) -> Void
     ) {
         self.context = context
         self.subject = subject
+        self.materialState = materialState
         self.cancel = cancel
     }
     
     static func ==(lhs: RecentSessionSheetContent, rhs: RecentSessionSheetContent) -> Bool {
+        if lhs.materialState != rhs.materialState { return false }
         if lhs.context !== rhs.context {
             return false
         }
@@ -293,7 +313,7 @@ private final class RecentSessionSheetContent: CombinedComponent {
         return { context in
             let environment = context.environment[ViewControllerComponentContainer.Environment.self].value
             let component = context.component
-            let theme = environment.theme.withModalBlocksBackground()
+            let theme = environment.theme.withModalBlocksBackground().jerkgramSettingsSurfaceTheme(enabled: component.materialState.active)
             let strings = environment.strings
             let presentationData = component.context.sharedContext.currentPresentationData.with { $0 }
             let state = context.state
@@ -358,6 +378,7 @@ private final class RecentSessionSheetContent: CombinedComponent {
                 )
                 context.add(icon
                     .position(CGPoint(x: context.availableSize.width / 2.0, y: contentHeight + icon.size.height / 2.0))
+                    .accessibilityHidden(true)
                 )
                 contentHeight += icon.size.height
                 contentHeight += 18.0
@@ -538,6 +559,7 @@ private final class RecentSessionSheetContent: CombinedComponent {
             )
             context.add(title
                 .position(CGPoint(x: context.availableSize.width / 2.0, y: contentHeight + title.size.height / 2.0))
+                .accessibilityTraits(.header)
             )
             contentHeight += title.size.height
             contentHeight += 2.0
@@ -590,7 +612,9 @@ private final class RecentSessionSheetContent: CombinedComponent {
                             insets: UIEdgeInsets(top: 0.0, left: 8.0, bottom: 0.0, right: 14.0),
                             isInteractive: true
                         )),
-                        action: nil
+                        action: nil,
+                        // The row reads as "title, value" (the value text stays selectable for sighted users).
+                        accessibility: ComponentAccessibility(label: applicationTitle, value: applicationString)
                     )
                 ))
             )
@@ -624,7 +648,9 @@ private final class RecentSessionSheetContent: CombinedComponent {
                                 insets: UIEdgeInsets(top: 0.0, left: 8.0, bottom: 0.0, right: 14.0),
                                 isInteractive: true
                             )),
-                            action: nil
+                            action: nil,
+                            // The row reads as "title, value" (the value text stays selectable for sighted users).
+                            accessibility: ComponentAccessibility(label: strings.AuthSessions_View_IP, value: ipString)
                         )
                     ))
                 )
@@ -658,7 +684,9 @@ private final class RecentSessionSheetContent: CombinedComponent {
                             insets: UIEdgeInsets(top: 0.0, left: 8.0, bottom: 0.0, right: 14.0),
                             isInteractive: true
                         )),
-                        action: nil
+                        action: nil,
+                        // The row reads as "title, value" (the value text stays selectable for sighted users).
+                        accessibility: ComponentAccessibility(label: strings.AuthSessions_View_Location, value: locationString)
                     )
                 ))
             )
@@ -692,7 +720,9 @@ private final class RecentSessionSheetContent: CombinedComponent {
                                 insets: UIEdgeInsets(top: 0.0, left: 8.0, bottom: 0.0, right: 14.0),
                                 isInteractive: false
                             )),
-                            action: nil
+                            action: nil,
+                            // The row reads as "title, value" (the value text stays selectable for sighted users).
+                            accessibility: ComponentAccessibility(label: strings.RecentSession_ConnectedBot_Date, value: dateString)
                         )
                     ))
                 )
@@ -1045,16 +1075,20 @@ private final class RecentSessionSheetComponent: CombinedComponent {
     
     let context: AccountContext
     let subject: RecentSessionScreen.Subject
+    let materialState: RecentSessionMaterialState
     
     init(
         context: AccountContext,
-        subject: RecentSessionScreen.Subject
+        subject: RecentSessionScreen.Subject,
+        materialState: RecentSessionMaterialState
     ) {
         self.context = context
         self.subject = subject
+        self.materialState = materialState
     }
     
     static func ==(lhs: RecentSessionSheetComponent, rhs: RecentSessionSheetComponent) -> Bool {
+        if lhs.materialState != rhs.materialState { return false }
         if lhs.context !== rhs.context {
             return false
         }
@@ -1096,6 +1130,7 @@ private final class RecentSessionSheetComponent: CombinedComponent {
                     content: AnyComponent<EnvironmentType>(RecentSessionSheetContent(
                         context: context.component.context,
                         subject: context.component.subject,
+                        materialState: context.component.materialState,
                         cancel: { animate in
                             dismiss(animate)
                         }
@@ -1141,7 +1176,9 @@ private final class RecentSessionSheetComponent: CombinedComponent {
                             )
                         )
                     },
-                    backgroundColor: .color(environment.theme.list.modalBlocksBackgroundColor),
+                    backgroundColor: .color(context.component.materialState.active
+                        ? (environment.theme.overallDarkAppearance ? UIColor.black : UIColor.white).withAlphaComponent(CGFloat(JerkgramSettingsMaterialPolicy.cardAlpha(isDark: environment.theme.overallDarkAppearance)))
+                        : environment.theme.list.modalBlocksBackgroundColor),
                     centeredSize: environment.metrics.widthClass == .regular ? CGSize(width: 414.0, height: 640.0) : nil,
                     animateOut: animateOut
                 ),
@@ -1155,7 +1192,7 @@ private final class RecentSessionSheetComponent: CombinedComponent {
                         metrics: environment.metrics,
                         deviceMetrics: environment.deviceMetrics,
                         isDisplaying: environment.value.isVisible,
-                        isCentered: environment.metrics.widthClass == .regular,
+                        isCentered: environment.presentsFloatingPanels,
                         screenSize: context.availableSize,
                         regularMetricsSize: CGSize(width: 430.0, height: 900.0),
                         dismiss: { animated in
@@ -1177,6 +1214,10 @@ private final class RecentSessionSheetComponent: CombinedComponent {
 }
 
 public class RecentSessionScreen: ViewControllerComponentContainer {
+    // ResizableSheetComponent owns its sheet fill, rounded boundary and outer dim.
+    // A full-window settings backdrop would clear and cover that native boundary.
+    override public var jerkgramAcceptsSettingsSurface: Bool { return false }
+
     public enum Subject {
         case session(RecentAccountSession)
         case website(WebAuthorization, EnginePeer?)
@@ -1185,6 +1226,7 @@ public class RecentSessionScreen: ViewControllerComponentContainer {
     
     private let context: AccountContext
     private let subject: Subject
+    private let settingsGlass: Bool
     fileprivate let updateAcceptSecretChats: (Bool) -> Void
     fileprivate let updateAcceptIncomingCalls: (Bool) -> Void
     fileprivate let remove: (@escaping () -> Void) -> Void
@@ -1194,10 +1236,12 @@ public class RecentSessionScreen: ViewControllerComponentContainer {
         subject: RecentSessionScreen.Subject,
         updateAcceptSecretChats: @escaping (Bool) -> Void,
         updateAcceptIncomingCalls: @escaping (Bool) -> Void,
-        remove: @escaping (@escaping () -> Void) -> Void
+        remove: @escaping (@escaping () -> Void) -> Void,
+        settingsGlass: Bool = false
     ) {
         self.context = context
         self.subject = subject
+        self.settingsGlass = settingsGlass
         self.updateAcceptSecretChats = updateAcceptSecretChats
         self.updateAcceptIncomingCalls = updateAcceptIncomingCalls
         self.remove = remove
@@ -1206,16 +1250,27 @@ public class RecentSessionScreen: ViewControllerComponentContainer {
             context: context,
             component: RecentSessionSheetComponent(
                 context: context,
-                subject: subject
+                subject: subject,
+                materialState: RecentSessionMaterialState(optIn: settingsGlass)
             ),
             navigationBarAppearance: .none,
             statusBarStyle: .ignore,
             theme: .default
         )
         
+        self.jerkgramTracksVisualSettings = settingsGlass
         self.navigationPresentation = .flatModal
     }
     
+    public override func jerkgramSettingsVisualStateUpdated() {
+        guard self.settingsGlass, self.isViewLoaded else { return }
+        self.updateComponent(component: AnyComponent(RecentSessionSheetComponent(
+            context: self.context,
+            subject: self.subject,
+            materialState: RecentSessionMaterialState(optIn: self.settingsGlass)
+        )), transition: .immediate)
+    }
+
     required public init(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }

@@ -1,5 +1,4 @@
 import Foundation
-import LottieSettings
 import UIKit
 import SwiftSignalKit
 import Display
@@ -50,6 +49,7 @@ final class TextProcessingContentComponent: Component {
     let mode: TextProcessingScreen.Mode
     let previewIconFile: TelegramMediaFile?
     let styles: [TextProcessingScreen.Style]
+    let localOnly: Bool
     let inputText: ComposedRichMessage
     let initialEditState: TextProcessingScreen.EditState?
     let ignoredTranslationLanguages: [String]
@@ -71,6 +71,7 @@ final class TextProcessingContentComponent: Component {
         previewIconFile: TelegramMediaFile?,
         styles: [TextProcessingScreen.Style],
         inputText: ComposedRichMessage,
+        localOnly: Bool = false,
         initialEditState: TextProcessingScreen.EditState?,
         ignoredTranslationLanguages: [String],
         shouldDisplayStyleNotice: Bool,
@@ -89,6 +90,7 @@ final class TextProcessingContentComponent: Component {
         self.context = context
         self.mode = mode
         self.previewIconFile = previewIconFile
+        self.localOnly = localOnly
         self.inputText = inputText
         self.initialEditState = initialEditState
         self.ignoredTranslationLanguages = ignoredTranslationLanguages
@@ -267,7 +269,7 @@ final class TextProcessingContentComponent: Component {
             guard let slug = style.slug else {
                 return
             }
-            let shareController = component.context.sharedContext.makeShareController(context: component.context, params: ShareControllerParams(
+            let shareController = component.context.sharedContext.makeShareScreen(context: component.context, params: ShareControllerParams(
                 subject: .url("https://t.me/addstyle/\(slug)"),
                 completed: { [weak self] peerIds in
                     Task { @MainActor in
@@ -435,11 +437,11 @@ final class TextProcessingContentComponent: Component {
                 }
                 
                 func takeView() -> ContextControllerTakeViewInfo? {
-                    return ContextControllerTakeViewInfo(containingItem: .view(self.contentView), contentAreaInScreenSpace: UIScreen.main.bounds)
+                    return ContextControllerTakeViewInfo(containingItem: .view(self.contentView), contentAreaInScreenSpace: mainWindowScreenBounds)
                 }
                 
                 func putBack() -> ContextControllerPutBackViewInfo? {
-                    return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: UIScreen.main.bounds)
+                    return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: mainWindowScreenBounds)
                 }
             }
             
@@ -791,7 +793,10 @@ final class TextProcessingContentComponent: Component {
                         items: tabs,
                         search: nil,
                         selectedId: currentModeId,
-                        outerInsets: UIEdgeInsets()
+                        outerInsets: UIEdgeInsets(),
+                        axis: .horizontal,
+                        isCompact: false,
+                        usesSystemLayout: false
                     )),
                     environment: {},
                     containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: 62.0)
@@ -826,6 +831,7 @@ final class TextProcessingContentComponent: Component {
             switch self.currentMode {
             case .translate:
                 contentExternalState = self.translateState
+                self.translateState.localOnly = component.localOnly
                 contentComponent = AnyComponent(TextProcessingTranslateContentComponent(
                     context: component.context,
                     theme: theme,
@@ -1309,6 +1315,7 @@ private final class TextProcessingSheetComponent: Component {
     let mode: TextProcessingScreen.Mode
     let ignoredTranslationLanguages: [String]
     let initialStyles: [TextProcessingScreen.Style]
+    let localOnly: Bool
     let inputText: ComposedRichMessage
     let initialEditState: TextProcessingScreen.EditState?
     let shouldDisplayStyleNotice: Bool
@@ -1322,6 +1329,7 @@ private final class TextProcessingSheetComponent: Component {
         ignoredTranslationLanguages: [String],
         initialStyles: [TextProcessingScreen.Style],
         inputText: ComposedRichMessage,
+        localOnly: Bool = false,
         initialEditState: TextProcessingScreen.EditState?,
         shouldDisplayStyleNotice: Bool,
         previewIconFile: TelegramMediaFile?,
@@ -1332,6 +1340,7 @@ private final class TextProcessingSheetComponent: Component {
         self.mode = mode
         self.ignoredTranslationLanguages = ignoredTranslationLanguages
         self.initialStyles = initialStyles
+        self.localOnly = localOnly
         self.inputText = inputText
         self.initialEditState = initialEditState
         self.shouldDisplayStyleNotice = shouldDisplayStyleNotice
@@ -1750,6 +1759,7 @@ private final class TextProcessingSheetComponent: Component {
                         previewIconFile: component.previewIconFile,
                         styles: self.styles,
                         inputText: component.inputText,
+                        localOnly: component.localOnly,
                         initialEditState: component.initialEditState,
                         ignoredTranslationLanguages: component.ignoredTranslationLanguages,
                         shouldDisplayStyleNotice: component.shouldDisplayStyleNotice,
@@ -1853,8 +1863,7 @@ private final class TextProcessingSheetComponent: Component {
                     titleItem: titleString.isEmpty ? nil : AnyComponent(TitleComponent(
                         theme: theme,
                         title: titleString,
-                        isProcessing: self.contentExternalState.isProcessing,
-                        lottieSettings: component.context.lottieRenderingSettings
+                        isProcessing: self.contentExternalState.isProcessing
                     )),
                     leftItem: AnyComponent(
                         GlassBarButtonComponent(
@@ -1935,7 +1944,7 @@ private final class TextProcessingSheetComponent: Component {
                         metrics: environmentValue.metrics,
                         deviceMetrics: environmentValue.deviceMetrics,
                         isDisplaying: environmentValue.isVisible,
-                        isCentered: environmentValue.metrics.widthClass == .regular,
+                        isCentered: environmentValue.presentsFloatingPanels,
                         screenSize: availableSize,
                         regularMetricsSize: nil,
                         dismiss: { animated in
@@ -1955,6 +1964,8 @@ private final class TextProcessingSheetComponent: Component {
             
             if self.contentExternalState.nonPremiumFloodTriggered {
                 let sideInset: CGFloat = 8.0
+                // Narrower on a regular-width layout, centred.
+                let toastBand = toastFrame(CGRect(x: sideInset, y: 0.0, width: availableSize.width - sideInset * 2.0, height: 0.0), metrics: environmentValue.metrics)
                 
                 let toast: ComponentView<Empty>
                 var toastTransition = transition
@@ -1975,8 +1986,7 @@ private final class TextProcessingSheetComponent: Component {
                             content: LottieComponent.AppBundleContent(name: "PremiumStar"),
                             startingPosition: .begin,
                             size: CGSize(width: 32.0, height: 32.0),
-                            playOnce: playOnce,
-                            lottieSettings: component.context.lottieRenderingSettings
+                            playOnce: playOnce
                         )),
                         content: AnyComponent(VStack([
                             AnyComponentWithIdentity(id: 0, component: AnyComponent(MultilineTextComponent(
@@ -1991,7 +2001,7 @@ private final class TextProcessingSheetComponent: Component {
                         iconSpacing: 12.0
                     )),
                     environment: {},
-                    containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: availableSize.height)
+                    containerSize: CGSize(width: toastBand.width, height: availableSize.height)
                 )
                 if let toastView = toast.view {
                     if toastView.superview == nil, let sheetView = self.sheet.view as? ResizableSheetComponent<ViewControllerComponentContainer.Environment>.View {
@@ -2004,7 +2014,7 @@ private final class TextProcessingSheetComponent: Component {
                             iconView.playOnce()
                         }
                     }
-                    toastTransition.setFrame(view: toastView, frame: CGRect(origin: CGPoint(x: sideInset, y: availableSize.height - 94.0 - toastSize.height), size: toastSize))
+                    toastTransition.setFrame(view: toastView, frame: CGRect(origin: CGPoint(x: toastBand.minX, y: availableSize.height - 94.0 - toastSize.height), size: toastSize))
                 }
             } else {
                 if let toast = self.toast {
@@ -2019,6 +2029,8 @@ private final class TextProcessingSheetComponent: Component {
             
             if let styleCreatedToastData = self.styleCreatedToastData, !self.contentExternalState.nonPremiumFloodTriggered {
                 let sideInset: CGFloat = 8.0
+                // Narrower on a regular-width layout, centred.
+                let toastBand = toastFrame(CGRect(x: sideInset, y: 0.0, width: availableSize.width - sideInset * 2.0, height: 0.0), metrics: environmentValue.metrics)
                 
                 let styleCreatedToast: ComponentView<Empty>
                 var styleCreatedToastTransition = transition
@@ -2062,7 +2074,7 @@ private final class TextProcessingSheetComponent: Component {
                         iconSpacing: 12.0
                     )),
                     environment: {},
-                    containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: availableSize.height)
+                    containerSize: CGSize(width: toastBand.width, height: availableSize.height)
                 )
                 if let styleCreatedToastView = styleCreatedToast.view {
                     if styleCreatedToastView.superview == nil, let sheetView = self.sheet.view as? ResizableSheetComponent<ViewControllerComponentContainer.Environment>.View {
@@ -2071,7 +2083,7 @@ private final class TextProcessingSheetComponent: Component {
                             styleCreatedToastView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25)
                         }
                     }
-                    styleCreatedToastTransition.setFrame(view: styleCreatedToastView, frame: CGRect(origin: CGPoint(x: sideInset, y: availableSize.height - 94.0 - styleCreatedToastSize.height), size: styleCreatedToastSize))
+                    styleCreatedToastTransition.setFrame(view: styleCreatedToastView, frame: CGRect(origin: CGPoint(x: toastBand.minX, y: availableSize.height - 94.0 - styleCreatedToastSize.height), size: styleCreatedToastSize))
                 }
             } else {
                 if let styleCreatedToast = self.styleCreatedToast {
@@ -2086,6 +2098,8 @@ private final class TextProcessingSheetComponent: Component {
             
             if let customToastData = self.customToastData, !self.contentExternalState.nonPremiumFloodTriggered, self.styleCreatedToastData == nil {
                 let sideInset: CGFloat = 8.0
+                // Narrower on a regular-width layout, centred.
+                let toastBand = toastFrame(CGRect(x: sideInset, y: 0.0, width: availableSize.width - sideInset * 2.0, height: 0.0), metrics: environmentValue.metrics)
                 
                 let customToast: ComponentView<Empty>
                 var customToastTransition = transition
@@ -2106,8 +2120,7 @@ private final class TextProcessingSheetComponent: Component {
                             content: LottieComponent.AppBundleContent(name: "anim_infotip"),
                             startingPosition: .begin,
                             size: CGSize(width: 32.0, height: 32.0),
-                            playOnce: playOnce,
-                            lottieSettings: component.context.lottieRenderingSettings
+                            playOnce: playOnce
                         )),
                         content: AnyComponent(VStack([
                             AnyComponentWithIdentity(id: 1, component: AnyComponent(MultilineTextComponent(
@@ -2119,7 +2132,7 @@ private final class TextProcessingSheetComponent: Component {
                         iconSpacing: 12.0
                     )),
                     environment: {},
-                    containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: availableSize.height)
+                    containerSize: CGSize(width: toastBand.width, height: availableSize.height)
                 )
                 if let customToastView = customToast.view {
                     if customToastView.superview == nil, let sheetView = self.sheet.view as? ResizableSheetComponent<ViewControllerComponentContainer.Environment>.View {
@@ -2129,7 +2142,7 @@ private final class TextProcessingSheetComponent: Component {
                         }
                         playOnce.invoke(())
                     }
-                    customToastTransition.setFrame(view: customToastView, frame: CGRect(origin: CGPoint(x: sideInset, y: availableSize.height - 94.0 - customToastSize.height), size: customToastSize))
+                    customToastTransition.setFrame(view: customToastView, frame: CGRect(origin: CGPoint(x: toastBand.minX, y: availableSize.height - 94.0 - customToastSize.height), size: customToastSize))
                 }
             } else {
                 if let customToast = self.customToast {
@@ -2292,12 +2305,15 @@ public class TextProcessingScreen: ViewControllerComponentContainer {
         theme: PresentationTheme? = nil,
         mode: Mode,
         inputText: ComposedRichMessage,
+        localOnly: Bool = false,
         copyResult: ((ComposedRichMessage) -> Void)?,
         translateChat: ((String) -> Void)?
     ) async {
         self.context = context
         
-        let rawStyles = await context.engine.messages.composeAIMessageStyles().get()
+        let localTranslation: Bool
+        if case .translate = mode { localTranslation = jerkgramEnhancedTranslationEnabled(context: context) && (localOnly || !context.isPremium) } else { localTranslation = false }
+        let rawStyles = await (localTranslation ? .single([]) : context.engine.messages.composeAIMessageStyles()).get()
         var styles: [Style] = []
         let resolvedEmojiFiles: [Int64: TelegramMediaFile] = await context.engine.stickers.resolveInlineStickersLocal(fileIds: Array(Set(rawStyles.compactMap({ style in
             switch style.content {
@@ -2342,7 +2358,9 @@ public class TextProcessingScreen: ViewControllerComponentContainer {
         
         var shouldDisplayStyleNotice = false
         var previewIconFile: TelegramMediaFile?
-        if case let .preview(style, _, _, _, _) = mode {
+        if localTranslation {
+            shouldDisplayStyleNotice = false
+        } else if case let .preview(style, _, _, _, _) = mode {
             if let emojiFileId = style.emojiFileId {
                 previewIconFile = await context.engine.stickers.resolveInlineStickersLocal(fileIds: [emojiFileId]).get().first?.value
             }
@@ -2373,6 +2391,7 @@ public class TextProcessingScreen: ViewControllerComponentContainer {
                 ignoredTranslationLanguages: translationSettings.ignoredLanguages ?? [],
                 initialStyles: styles,
                 inputText: inputText,
+                localOnly: localOnly,
                 initialEditState: initialEditState,
                 shouldDisplayStyleNotice: shouldDisplayStyleNotice,
                 previewIconFile: previewIconFile,
@@ -2407,18 +2426,15 @@ private final class TitleComponent: Component {
     let theme: PresentationTheme
     let title: String
     let isProcessing: Bool
-    let lottieSettings: LottieRenderingSettings
     
     init(
         theme: PresentationTheme,
         title: String,
-        isProcessing: Bool,
-        lottieSettings: LottieRenderingSettings
+        isProcessing: Bool
     ) {
         self.theme = theme
         self.title = title
         self.isProcessing = isProcessing
-        self.lottieSettings = lottieSettings
     }
     
     static func ==(lhs: TitleComponent, rhs: TitleComponent) -> Bool {
@@ -2490,8 +2506,7 @@ private final class TitleComponent: Component {
                         placeholderColor: nil,
                         startingPosition: .begin,
                         size: CGSize(width: 30.0, height: 30.0),
-                        loop: true,
-                        lottieSettings: component.lottieSettings
+                        loop: true
                     )),
                     environment: {},
                     containerSize: CGSize(width: 30.0, height: 30.0)

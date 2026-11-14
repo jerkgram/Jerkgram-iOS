@@ -49,6 +49,17 @@ private final class MediaPlayerNodeDisplayNode: ASDisplayNode {
     }
 }
 
+func mediaPlayerVideoRotationTransform(size: CGSize, rotationAngle: Double) -> CGAffineTransform {
+    guard size.width > 0.0, size.height > 0.0, size.width.isFinite, size.height.isFinite, rotationAngle.isFinite else {
+        return .identity
+    }
+    var transform = CGAffineTransform(rotationAngle: CGFloat(rotationAngle))
+    if abs(rotationAngle.truncatingRemainder(dividingBy: Double.pi)) > 0.1 {
+        transform = transform.scaledBy(x: size.height / size.width, y: size.width / size.height)
+    }
+    return transform
+}
+
 private enum PollStatus: CustomStringConvertible {
     case delay(Double)
     case finished
@@ -69,6 +80,7 @@ public final class MediaPlayerNode: ASDisplayNode {
     public var updateVideoInHierarchy: ((Bool) -> Void)?
     
     private var secondaryVideoLayers: [ObjectIdentifier: AVSampleBufferDisplayLayer] = [:]
+    private var secondaryVideoLayerBoundsObservers: [ObjectIdentifier: NSKeyValueObservation] = [:]
     var secondaryVideoLayersUpdated: (([AVSampleBufferDisplayLayer]) -> Void)?
     // V2's AVSampleBufferRenderSynchronizer owns its outputs' timebases.
     // This ownership lasts for the node; async renderer removal is not a
@@ -110,6 +122,14 @@ public final class MediaPlayerNode: ASDisplayNode {
     var currentRotationAngle = 0.0
     var currentAspect = 1.0
     
+    var externalVideoRotationAngle: Double? {
+        didSet {
+            if self.externalVideoRotationAngle != oldValue {
+                self.updateLayout()
+            }
+        }
+    }
+
     public var state: (timebase: CMTimebase, requestFrames: Bool, rotationAngle: Double, aspect: Double)? {
         didSet {
             self.updateState()
@@ -131,7 +151,8 @@ public final class MediaPlayerNode: ASDisplayNode {
                     transform = transform.scaledBy(x: CGFloat(aspect), y: CGFloat(1.0 / aspect))
                 }
 
-                if !self.currentRotationAngle.isEqual(to: rotationAngle) || !self.currentAspect.isEqual(to: aspect) {
+                if self.externalVideoRotationAngle != nil || !self.currentRotationAngle.isEqual(to: rotationAngle) || !self.currentAspect.isEqual(to: aspect) {
+                    self.externalVideoRotationAngle = nil
                     self.currentRotationAngle = rotationAngle
                     self.currentAspect = aspect
                     if videoLayer.affineTransform() != transform {
@@ -162,6 +183,17 @@ public final class MediaPlayerNode: ASDisplayNode {
         }
     }
     
+    private func updateSecondaryVideoLayerRotation(_ layer: AVSampleBufferDisplayLayer) {
+        assert(Queue.mainQueue().isCurrent())
+        guard self.secondaryVideoLayers[ObjectIdentifier(layer)] === layer,
+              let rotationAngle = self.externalVideoRotationAngle else {
+            return
+        }
+        // Mirrors can have a different aspect ratio and can be attached after
+        // Chunk has supplied rotation without ever setting the ordinary state.
+        layer.setAffineTransform(mediaPlayerVideoRotationTransform(size: layer.bounds.size, rotationAngle: rotationAngle))
+    }
+
     public func addSecondaryVideoLayer(_ layer: AVSampleBufferDisplayLayer) {
         assert(Queue.mainQueue().isCurrent())
         let key = ObjectIdentifier(layer)
@@ -173,7 +205,14 @@ public final class MediaPlayerNode: ASDisplayNode {
         // can synchronously deadlock AVFoundation during scene resume.
         layer.videoGravity = .resizeAspectFill
         self.secondaryVideoLayers[key] = layer
+        self.secondaryVideoLayerBoundsObservers[key] = layer.observe(\.bounds, options: [.new]) { [weak self, weak layer] _, _ in
+            guard let self, let layer else {
+                return
+            }
+            self.updateSecondaryVideoLayerRotation(layer)
+        }
         self.updateState()
+        self.updateSecondaryVideoLayerRotation(layer)
         self.secondaryVideoLayersUpdated?(self.currentSecondaryVideoLayers)
     }
 
@@ -183,6 +222,7 @@ public final class MediaPlayerNode: ASDisplayNode {
         guard self.secondaryVideoLayers.removeValue(forKey: key) != nil else {
             return
         }
+        self.secondaryVideoLayerBoundsObservers.removeValue(forKey: key)?.invalidate()
         layer.flushAndRemoveImage()
         if !self.secondaryVideoLayersUseRenderSynchronizer {
             layer.controlTimebase = nil
@@ -483,6 +523,9 @@ public final class MediaPlayerNode: ASDisplayNode {
     }
     
     public func updateLayout() {
+        for layer in self.secondaryVideoLayers.values {
+            self.updateSecondaryVideoLayerRotation(layer)
+        }
         let bounds = self.bounds
         if bounds.isEmpty {
             return
@@ -507,6 +550,9 @@ public final class MediaPlayerNode: ASDisplayNode {
         if let videoLayer = self.videoLayer {
             videoLayer.position = CGPoint(x: fittedRect.midX, y: fittedRect.midY)
             videoLayer.bounds = CGRect(origin: CGPoint(), size: fittedRect.size)
+            if let rotationAngle = self.externalVideoRotationAngle {
+                videoLayer.setAffineTransform(mediaPlayerVideoRotationTransform(size: fittedRect.size, rotationAngle: rotationAngle))
+            }
         }
         self.snapshotNode?.frame = fittedRect
     }

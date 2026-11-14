@@ -28,9 +28,17 @@ impl Drop for HttpCredentials {
 }
 
 impl HttpCredentials {
+    /// `Basic <base64(user:password)>`, built in buffers sized up front and wiped by the caller.
     fn header_value(&self) -> String {
-        let raw = format!("{}:{}", self.username, self.password);
-        format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(raw.as_bytes()))
+        let mut raw = String::with_capacity(self.username.len() + 1 + self.password.len());
+        raw.push_str(&self.username);
+        raw.push(':');
+        raw.push_str(&self.password);
+        let mut value = String::with_capacity(6 + base64::encoded_len(raw.len(), true).unwrap_or(0));
+        value.push_str("Basic ");
+        base64::engine::general_purpose::STANDARD.encode_string(raw.as_bytes(), &mut value);
+        zeroize::Zeroize::zeroize(&mut raw);
+        value
     }
 }
 
@@ -65,9 +73,12 @@ pub fn write_post_head(route: &HttpRoute, body_len: usize, out: &mut Vec<u8>) {
             out.extend_from_slice(authority.as_bytes());
             out.extend_from_slice(b"\r\nProxy-Connection: keep-alive\r\nConnection: keep-alive\r\n");
             if let Some(credentials) = credentials {
+                let mut value = credentials.header_value();
+                out.reserve(value.len() + 128);
                 out.extend_from_slice(b"Proxy-Authorization: ");
-                out.extend_from_slice(credentials.header_value().as_bytes());
+                out.extend_from_slice(value.as_bytes());
                 out.extend_from_slice(b"\r\n");
+                zeroize::Zeroize::zeroize(&mut value);
             }
         }
         HttpRoute::Web { host, path } => {
@@ -165,6 +176,7 @@ pub struct HttpResponseReader {
     discarded: usize,
     max_body: usize,
     expected: Option<usize>,
+    trailer_bytes: usize,
 }
 
 impl Default for HttpResponseReader {
@@ -188,6 +200,7 @@ impl HttpResponseReader {
             discarded: 0,
             max_body,
             expected: None,
+            trailer_bytes: 0,
         }
     }
 
@@ -290,6 +303,9 @@ impl HttpResponseReader {
                         if self.received().saturating_add(size) > limit {
                             return Err(HttpError::BodyTooLarge((self.received() + size) as u64));
                         }
+                        if size == 0 {
+                            self.trailer_bytes = 0;
+                        }
                         let next = if size == 0 { ChunkState::Trailers } else { ChunkState::Data(size) };
                         self.state = State::Body { framing: BodyFraming::Chunked, chunk: next };
                     }
@@ -322,6 +338,10 @@ impl HttpResponseReader {
                         };
                         if line.is_empty() {
                             return Ok(Some(self.finish_response()));
+                        }
+                        self.trailer_bytes += line.len() + 2;
+                        if self.trailer_bytes > MAX_HEAD_LEN {
+                            return Err(HttpError::HeadTooLarge);
                         }
                     }
                 },
@@ -491,12 +511,18 @@ pub enum HttpConnectError {
 
 impl HttpConnectHandshake {
     pub fn new(authority: &str, credentials: Option<&HttpCredentials>) -> (Self, Vec<u8>) {
-        let mut request =
-            format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: keep-alive\r\n");
-        if let Some(credentials) = credentials {
+        let mut value = credentials.map(HttpCredentials::header_value);
+        let mut request = String::with_capacity(96 + 2 * authority.len() + value.as_ref().map_or(0, String::len));
+        request.push_str("CONNECT ");
+        request.push_str(authority);
+        request.push_str(" HTTP/1.1\r\nHost: ");
+        request.push_str(authority);
+        request.push_str("\r\nProxy-Connection: keep-alive\r\n");
+        if let Some(value) = value.as_mut() {
             request.push_str("Proxy-Authorization: ");
-            request.push_str(&credentials.header_value());
+            request.push_str(value);
             request.push_str("\r\n");
+            zeroize::Zeroize::zeroize(value);
         }
         request.push_str("\r\n");
         (Self { done: false }, request.into_bytes())
@@ -516,6 +542,9 @@ impl HttpConnectHandshake {
                 }
                 return Ok(false);
             };
+            if end > MAX_HEAD_LEN {
+                return Err(HttpConnectError::Malformed(HttpError::HeadTooLarge));
+            }
             let head = parse_head(&data[..end]).map_err(HttpConnectError::Malformed)?;
             input.consume(end + 4);
             match head.status {
@@ -704,6 +733,27 @@ mod tests {
             read_all(&mut HttpResponseReader::new(), &chunked, 1 << 20).unwrap_err(),
             HttpError::BodyTooLarge(_)
         ));
+    }
+
+    #[test]
+    fn trailers_and_proxy_heads_are_bounded() {
+        let mut wire = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n0\r\n".to_vec();
+        for index in 0..64 {
+            wire.extend_from_slice(format!("X-Trailer-{index}: {}\r\n", "t".repeat(400)).as_bytes());
+        }
+        assert_eq!(read_all(&mut HttpResponseReader::new(), &wire, 97).unwrap_err(), HttpError::HeadTooLarge);
+        let wire = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nz\r\n0\r\nA: b\r\nC: d\r\n\r\n";
+        let responses = read_all(&mut HttpResponseReader::new(), wire, 5).unwrap();
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].body, b"z");
+
+        let mut head = b"HTTP/1.1 200 Connection established\r\nX-Pad: ".to_vec();
+        head.extend(vec![b'p'; MAX_HEAD_LEN]);
+        head.extend_from_slice(b"\r\n\r\n");
+        let (mut handshake, _) = HttpConnectHandshake::new("h:1", None);
+        let mut input = InputBuffer::new();
+        input.extend(&head);
+        assert_eq!(handshake.feed(&mut input), Err(HttpConnectError::Malformed(HttpError::HeadTooLarge)));
     }
 
     #[test]

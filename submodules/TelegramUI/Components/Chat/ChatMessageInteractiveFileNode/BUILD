@@ -11,7 +11,6 @@ swift_library(
     ],
     deps = [
         "//submodules/AsyncDisplayKit",
-        "//submodules/Postbox",
         "//submodules/SSignalKit/SwiftSignalKit",
         "//submodules/Display",
         "//submodules/TelegramCore",
@@ -45,6 +44,7 @@ swift_library(
         "//submodules/AnimatedCountLabelNode",
         "//submodules/AudioWaveform",
         "//submodules/DeviceProximity",
+        "//submodules/TelegramUI/Components/StaticGlassBackground",
     ],
     visibility = [
         "//visibility:public",

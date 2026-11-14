@@ -139,8 +139,7 @@ public var popularTranslationLanguages = [
     "uk"
 ]
 
-@available(iOS 12.0, *)
-private let languageRecognizer = NLLanguageRecognizer()
+
 
 public func effectiveIgnoredTranslationLanguages(context: AccountContext, ignoredLanguages: [String]?) -> Set<String> {
     var baseLang = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode
@@ -173,6 +172,7 @@ public func normalizeTranslationLanguage(_ code: String) -> String {
 }
 
 public func canTranslateChats(context: AccountContext) -> Bool {
+    if jerkgramEnhancedTranslationEnabled(context: context) { return true }
     let translationConfiguration = TranslationConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
     var chatTranslationAvailable = true
     switch translationConfiguration.auto {
@@ -207,7 +207,7 @@ public func canTranslateText(context: AccountContext, text: String, showTranslat
         break
     }
     
-    let showTranslate = showTranslate && translateButtonAvailable
+    let showTranslate = showTranslate && (translateButtonAvailable || jerkgramEnhancedTranslationEnabled(context: context))
         
     if #available(iOS 12.0, *) {
         if context.sharedContext.immediateExperimentalUISettings.disableLanguageRecognition {
@@ -217,6 +217,7 @@ public func canTranslateText(context: AccountContext, text: String, showTranslat
         let dontTranslateLanguages = effectiveIgnoredTranslationLanguages(context: context, ignoredLanguages: ignoredLanguages)
         
         let text = String(text.prefix(64))
+        let languageRecognizer = NLLanguageRecognizer()
         languageRecognizer.processString(text)
         let hypotheses = languageRecognizer.languageHypotheses(withMaximum: 3)
         languageRecognizer.reset()
@@ -255,186 +256,309 @@ class ExternalTranslationTrigger: ObservableObject {
     @Published var shouldInvalidate: Int = 0
 }
 
+// JG174 translation queue begin
+// Main-queue coordinator. Physical work remains active until the framework returns,
+// even when all subscribers cancel. Keys stay in-process; Apple sees opaque indices.
+private final class JerkgramTranslationQueue {
+    final class Job {
+        let id: Int
+        let texts: [AnyHashable: String]
+        let fromLang: String
+        let toLang: String
+        let byteCount: Int
+        let allowDownloads: Bool
+        var subscribers: [Int: ([AnyHashable: String]?) -> Void] = [:]
+        init(id: Int, texts: [AnyHashable: String], fromLang: String, toLang: String, allowDownloads: Bool) {
+            self.id = id; self.texts = texts; self.fromLang = fromLang; self.toLang = toLang
+            self.byteCount = texts.values.reduce(0) { $0 + $1.utf8.count }
+            self.allowDownloads = allowDownloads
+        }
+        func matches(_ texts: [AnyHashable: String], _ from: String, _ to: String, _ allowDownloads: Bool) -> Bool {
+            return self.texts == texts && self.fromLang == from && self.toLang == to && self.allowDownloads == allowDownloads
+        }
+    }
+    private struct Cached {
+        let texts: [AnyHashable: String]
+        let from: String
+        let to: String
+        let result: [AnyHashable: String]
+        let bytes: Int
+    }
+    private var nextId = 0
+    private(set) var pending: [Job] = []
+    private(set) var active: Job?
+    private var cache: [Cached] = []
+    private(set) var cacheBytes = 0
+    private(set) var cacheItems = 0
+    private(set) var workBytes = 0
+    private(set) var workItems = 0
+
+    // nil callback payload is an explicit failure, never original-as-success.
+    func enqueue(texts: [AnyHashable: String], from: String, to: String, allowDownloads: Bool = false, completion: @escaping ([AnyHashable: String]?) -> Void) -> (Int, Int)? {
+        guard !texts.isEmpty, texts.count <= 16, !to.isEmpty,
+              texts.values.allSatisfy({ !$0.isEmpty }),
+              texts.values.reduce(0, { $0 + $1.utf8.count }) <= 16 * 1024 else {
+            completion(nil); return nil
+        }
+        self.nextId += 1
+        let subscriber = self.nextId
+        if let index = self.cache.firstIndex(where: { $0.texts == texts && $0.from == from && $0.to == to }) {
+            let cached = self.cache.remove(at: index)
+            self.cache.append(cached)
+            completion(cached.result)
+            return nil
+        }
+        if let job = ([self.active].compactMap { $0 } + self.pending).first(where: { $0.matches(texts, from, to, allowDownloads) && !$0.subscribers.isEmpty }) {
+            job.subscribers[subscriber] = completion
+            return (job.id, subscriber)
+        }
+        let bytes = texts.values.reduce(0) { $0 + $1.utf8.count }
+        guard self.workItems + texts.count <= 64, self.workBytes + bytes <= 128 * 1024 else {
+            completion(nil); return nil
+        }
+        let job = Job(id: subscriber, texts: texts, fromLang: from, toLang: to, allowDownloads: allowDownloads)
+        job.subscribers[subscriber] = completion
+        self.pending.append(job)
+        self.workItems += texts.count; self.workBytes += bytes
+        return (job.id, subscriber)
+    }
+
+    var nextLanguagePair: (String, String)? {
+        guard self.active == nil, let job = self.pending.first else { return nil }
+        return (job.fromLang, job.toLang)
+    }
+
+    func begin() -> Job? {
+        guard self.active == nil, !self.pending.isEmpty else { return nil }
+        let job = self.pending.removeFirst()
+        self.active = job
+        return job
+    }
+
+    // Rechecked after async availability: cancelled/expired work cannot open UI.
+    func canTranslate(jobId: Int, installed: Bool) -> Bool {
+        guard let job = self.active, job.id == jobId, !job.subscribers.isEmpty,
+              !job.fromLang.isEmpty else { return false }
+        return installed || job.allowDownloads
+    }
+
+    func cancel(jobId: Int, subscriberId: Int) {
+        if let job = self.active, job.id == jobId {
+            job.subscribers.removeValue(forKey: subscriberId)
+            // Do not release the physical slot while TranslationSession is running.
+            return
+        }
+        guard let index = self.pending.firstIndex(where: { $0.id == jobId }) else { return }
+        let job = self.pending[index]
+        job.subscribers.removeValue(forKey: subscriberId)
+        if job.subscribers.isEmpty {
+            self.pending.remove(at: index)
+            self.workItems -= job.texts.count; self.workBytes -= job.byteCount
+        }
+    }
+
+    func expire(jobId: Int) -> [() -> Void] {
+        guard let job = self.active, job.id == jobId else { return [] }
+        let callbacks = job.subscribers.values.map { callback in { callback(nil) } }
+        job.subscribers.removeAll()
+        // A user-visible timeout is logical cancellation. Keep the physical
+        // slot until the framework finishes; never start concurrent sessions.
+        return callbacks
+    }
+
+    func finish(jobId: Int, result: [AnyHashable: String]?) -> [() -> Void] {
+        guard let job = self.active, job.id == jobId else { return [] }
+        self.active = nil
+        self.workItems -= job.texts.count; self.workBytes -= job.byteCount
+        let validated: [AnyHashable: String]?
+        if let result, result.count == job.texts.count,
+           job.texts.keys.allSatisfy({ result[$0]?.isEmpty == false }) {
+            validated = result
+        } else { validated = nil }
+        if let validated, !job.subscribers.isEmpty {
+            let bytes = job.byteCount + validated.values.reduce(0) { $0 + $1.utf8.count }
+            if bytes <= 1024 * 1024 {
+                self.cache.append(Cached(texts: job.texts, from: job.fromLang, to: job.toLang, result: validated, bytes: bytes))
+                self.cacheBytes += bytes; self.cacheItems += job.texts.count
+                while self.cacheItems > 256 || self.cacheBytes > 1024 * 1024 {
+                    let evicted = self.cache.removeFirst()
+                    self.cacheBytes -= evicted.bytes; self.cacheItems -= evicted.texts.count
+                }
+            }
+        }
+        let callbacks = job.subscribers.values.map { callback in { callback(validated) } }
+        job.subscribers.removeAll()
+        return callbacks
+    }
+}
+// JG174 translation queue end
+
 @available(iOS 18.0, *)
 private struct TranslationViewImpl: View {
     @State private var configuration: TranslationSession.Configuration?
     @ObservedObject var externalCondition: ExternalTranslationTrigger
-    private let taskContainer: Atomic<ExperimentalInternalTranslationServiceImpl.TranslationTaskContainer>
-    
-    init(externalCondition: ExternalTranslationTrigger, taskContainer: Atomic<ExperimentalInternalTranslationServiceImpl.TranslationTaskContainer>) {
-        self.externalCondition = externalCondition
-        self.taskContainer = taskContainer
+    private let taskContainer: Atomic<JerkgramTranslationQueue>
+
+    init(externalCondition: ExternalTranslationTrigger, taskContainer: Atomic<JerkgramTranslationQueue>) {
+        self.externalCondition = externalCondition; self.taskContainer = taskContainer
     }
-    
-    var body: some View {
-        Text("ABC")
-        .onChange(of: self.externalCondition.shouldInvalidate) { _ in
-            let firstTaskLanguagePair = self.taskContainer.with { taskContainer -> (String, String)? in
-                if let firstTask = taskContainer.tasks.first {
-                    return (firstTask.fromLang, firstTask.toLang)
-                } else {
-                    return nil
-                }
-            }
-            
-            if let firstTaskLanguagePair {
-                if let configuration = self.configuration, configuration.source?.languageCode?.identifier == firstTaskLanguagePair.0, configuration.target?.languageCode?.identifier == firstTaskLanguagePair.1 {
-                    self.configuration?.invalidate()
-                } else {
-                    self.configuration = .init(
-                        source: Locale.Language(identifier: firstTaskLanguagePair.0),
-                        target: Locale.Language(identifier: firstTaskLanguagePair.1)
-                    )
-                }
-            }
+
+    private func scheduleNext() {
+        guard let pair = self.taskContainer.with({ $0.nextLanguagePair }) else { return }
+        if let configuration = self.configuration,
+           configuration.source?.languageCode?.identifier == (pair.0.isEmpty ? nil : pair.0),
+           configuration.target?.languageCode?.identifier == pair.1 {
+            self.configuration?.invalidate()
+        } else {
+            self.configuration = .init(source: pair.0.isEmpty ? nil : Locale.Language(identifier: pair.0), target: Locale.Language(identifier: pair.1))
         }
+    }
+
+    var body: some View {
+        Text("").hidden()
+        .onChange(of: self.externalCondition.shouldInvalidate) { _ in self.scheduleNext() }
         .translationTask(self.configuration, action: { session in
-            var task: ExperimentalInternalTranslationServiceImpl.TranslationTask?
-            task = self.taskContainer.with { taskContainer -> ExperimentalInternalTranslationServiceImpl.TranslationTask? in
-                if !taskContainer.tasks.isEmpty {
-                    return taskContainer.tasks.removeFirst()
-                } else {
-                    return nil
-                }
-            }
-            
-            guard let task else {
-                return
-            }
-            
+            guard let job = self.taskContainer.with({ $0.begin() }) else { return }
+            let jobId = job.id
+            // A generous bound includes possible system language downloads.
+            // Closing the native screen cancels its subscriber immediately.
+            let timeout = SwiftSignalKit.Timer(timeout: 300.0, repeat: false, completion: {
+                let callbacks = self.taskContainer.with { $0.expire(jobId: jobId) }
+                for callback in callbacks { callback() }
+            }, queue: .mainQueue())
+            timeout.start()
+            defer { timeout.invalidate() }
+            var result: [AnyHashable: String]?
             do {
-                var nextClientIdentifier: Int = 0
-                var clientIdentifierMap: [String: AnyHashable] = [:]
-                let translationRequests = task.texts.map { key, value in
-                    let id = nextClientIdentifier
-                    nextClientIdentifier += 1
-                    clientIdentifierMap["\(id)"] = key
-                    return TranslationSession.Request(sourceText: value, clientIdentifier: "\(id)")
+                let ordered = Array(job.texts)
+                let requests = ordered.enumerated().map { index, entry in
+                    TranslationSession.Request(sourceText: entry.value, clientIdentifier: String(index))
                 }
-                
-                let responses = try await session.translations(from: translationRequests)
-                var resultMap: [AnyHashable: String] = [:]
-                for response in responses {
-                    if let clientIdentifier = response.clientIdentifier, let originalKey = clientIdentifierMap[clientIdentifier] {
-                        resultMap[originalKey] = "\(response.targetText)"
+                let source = Locale.Language(identifier: job.fromLang)
+                let target = Locale.Language(identifier: job.toLang)
+                let status = await LanguageAvailability().status(from: source, to: target)
+                guard !Task.isCancelled, self.taskContainer.with({ $0.canTranslate(jobId: job.id, installed: status == .installed) }) else {
+                    let callbacks = self.taskContainer.with { $0.finish(jobId: job.id, result: nil) }
+                    for callback in callbacks { callback() }
+                    self.scheduleNext()
+                    return
+                }
+                let translationSession: TranslationSession
+                if #available(iOS 26.0, *), !job.allowDownloads {
+                    // This session cannot request downloads even if models disappear
+                    // between availability and translation. Automatic work stays silent.
+                    translationSession = TranslationSession(installedSource: source, target: target)
+                } else {
+                    translationSession = session
+                }
+                let responses = try await translationSession.translations(from: requests)
+                if !Task.isCancelled {
+                    var values: [AnyHashable: String] = [:]
+                    for response in responses {
+                        if let identifier = response.clientIdentifier, let index = Int(identifier), ordered.indices.contains(index) {
+                            values[ordered[index].key] = response.targetText
+                        }
                     }
+                    result = values
                 }
-                
-                task.completion(resultMap)
-            } catch let e {
-                print("Translation error: \(e)")
-                task.completion(nil)
-            }
-            
-            let firstTaskLanguagePair = self.taskContainer.with { taskContainer -> (String, String)? in
-                if let firstTask = taskContainer.tasks.first {
-                    return (firstTask.fromLang, firstTask.toLang)
-                } else {
-                    return nil
-                }
-            }
-            
-            if let firstTaskLanguagePair {
-                if let configuration = self.configuration, configuration.source?.languageCode?.identifier == firstTaskLanguagePair.0, configuration.target?.languageCode?.identifier == firstTaskLanguagePair.1 {
-                    self.configuration?.invalidate()
-                } else {
-                    self.configuration = .init(
-                        source: Locale.Language(identifier: firstTaskLanguagePair.0),
-                        target: Locale.Language(identifier: firstTaskLanguagePair.1)
-                    )
-                }
-            }
+            } catch { result = nil }
+            let callbacks = self.taskContainer.with { $0.finish(jobId: job.id, result: result) }
+            for callback in callbacks { callback() }
+            // Configuration changes only after the physical request has returned.
+            self.scheduleNext()
         })
     }
 }
 
 @available(iOS 18.0, *)
 public final class ExperimentalInternalTranslationServiceImpl: ExperimentalInternalTranslationService {
-    fileprivate final class TranslationTask {
-        let id: Int
-        let texts: [AnyHashable: String]
-        let fromLang: String
-        let toLang: String
-        let completion: ([AnyHashable: String]?) -> Void
-        
-        init(id: Int, texts: [AnyHashable: String], fromLang: String, toLang: String, completion: @escaping ([AnyHashable: String]?) -> Void) {
-            self.id = id
-            self.texts = texts
-            self.fromLang = fromLang
-            self.toLang = toLang
-            self.completion = completion
-        }
-    }
-    
-    fileprivate final class TranslationTaskContainer {
-        var tasks: [TranslationTask] = []
-        
-        init() {
-        }
-    }
-    
     private final class Impl {
         private let hostingController: UIViewController
-        
-        private let taskContainer = Atomic(value: TranslationTaskContainer())
+        private let taskContainer = Atomic(value: JerkgramTranslationQueue())
         private let taskTrigger = ExternalTranslationTrigger()
-        
-        private var nextId: Int = 0
-        
+
         init(view: UIView) {
-            self.hostingController = UIHostingController(rootView: TranslationViewImpl(
-                externalCondition: self.taskTrigger,
-                taskContainer: self.taskContainer
-            ))
-            
+            self.hostingController = UIHostingController(rootView: TranslationViewImpl(externalCondition: self.taskTrigger, taskContainer: self.taskContainer))
+            self.hostingController.view.isUserInteractionEnabled = false
+            self.hostingController.view.backgroundColor = .clear
+            self.hostingController.view.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
             view.addSubview(self.hostingController.view)
         }
-        
-        func translate(texts: [AnyHashable: String], fromLang: String, toLang: String, onResult: @escaping ([AnyHashable: String]?) -> Void) -> Disposable {
-            let id = self.nextId
-            self.nextId += 1
-            self.taskContainer.with { taskContainer in
-                taskContainer.tasks.append(TranslationTask(
-                    id: id,
-                    texts: texts,
-                    fromLang: fromLang,
-                    toLang: toLang,
-                    completion: { result in
-                        onResult(result)
-                    }
-                ))
+
+        func translate(texts: [AnyHashable: String], fromLang: String, toLang: String, allowDownloads: Bool, onResult: @escaping ([AnyHashable: String]?) -> Void) -> Disposable {
+            let source: String
+            if fromLang.isEmpty {
+                let recognizer = NLLanguageRecognizer()
+                recognizer.processString(String(texts.values.joined(separator: " ").prefix(512)))
+                source = recognizer.dominantLanguage?.rawValue ?? ""
+            } else { source = fromLang }
+            let identity = self.taskContainer.with { queue in
+                queue.enqueue(texts: texts, from: source, to: toLang, allowDownloads: allowDownloads, completion: { result in
+                    Queue.mainQueue().async { onResult(result) }
+                })
             }
-            self.taskTrigger.shouldInvalidate += 1
-            
+            if identity != nil { self.taskTrigger.shouldInvalidate += 1 }
             return ActionDisposable { [weak self] in
                 Queue.mainQueue().async {
-                    guard let self else {
-                        return
-                    }
-                    self.taskContainer.with { taskContainer in
-                        taskContainer.tasks.removeAll(where: { $0.id == id })
-                    }
+                    guard let self, let identity else { return }
+                    self.taskContainer.with { $0.cancel(jobId: identity.0, subscriberId: identity.1) }
                 }
             }
         }
     }
-    
     private let impl: QueueLocalObject<Impl>
-    
     public init(view: UIView) {
-        self.impl = QueueLocalObject(queue: .mainQueue(), generate: {
-            return Impl(view: view)
-        })
+        self.impl = QueueLocalObject(queue: .mainQueue(), generate: { Impl(view: view) })
     }
-    
     public func translate(texts: [AnyHashable: String], fromLang: String, toLang: String) -> Signal<[AnyHashable: String]?, NoError> {
+        return self.translate(texts: texts, fromLang: fromLang, toLang: toLang, allowDownloads: false)
+    }
+    public func translate(texts: [AnyHashable: String], fromLang: String, toLang: String, allowDownloads: Bool) -> Signal<[AnyHashable: String]?, NoError> {
         return self.impl.signalWith { impl, subscriber in
-            return impl.translate(texts: texts, fromLang: fromLang, toLang: toLang, onResult: { result in
-                subscriber.putNext(result)
-                subscriber.putCompletion()
+            impl.translate(texts: texts, fromLang: fromLang, toLang: toLang, allowDownloads: allowDownloads, onResult: { result in
+                subscriber.putNext(result); subscriber.putCompletion()
             })
         }
     }
+}
+
+public func jerkgramEnhancedTranslationEnabled(context: AccountContext) -> Bool {
+    return JerkgramTranslationSettings.enabled(accountPeerId: context.account.peerId.toInt64())
+}
+
+public func jerkgramTranslationPolicyChanges(context: AccountContext) -> Signal<UInt64, NoError> {
+    return Signal { subscriber in
+        let accountPeerId = context.account.peerId.toInt64()
+        let observer = NotificationCenter.default.addObserver(forName: Notification.Name("JerkgramTranslationPolicyChanged"), object: nil, queue: nil) { notification in
+            guard notification.object as? Int64 == accountPeerId else { return }
+            subscriber.putNext(JerkgramTranslationSettings.generation(accountPeerId: accountPeerId))
+        }
+        subscriber.putNext(JerkgramTranslationSettings.generation(accountPeerId: accountPeerId))
+        return ActionDisposable { NotificationCenter.default.removeObserver(observer) }
+    }
+}
+
+// Selection translation uses the same bounded route as chat translation. Real
+// Premium remains on the native compose path at the caller.
+public func jerkgramTranslateText(context: AccountContext, text: String, entities: [MessageTextEntity] = [], fromLang: String?, toLang: String, localOnly: Bool = false) -> Signal<(String, [MessageTextEntity])?, TelegramCore.TranslationError> {
+    // A manual screen can open before any chat has installed the system host.
+    // Subscribe on main so host creation is idempotent across all entry points;
+    // the engine still owns bounded asynchronous backend work and cancellation.
+    return Signal<(String, [MessageTextEntity])?, TelegramCore.TranslationError> { subscriber in
+        if #available(iOS 18.0, *) {
+            if engineExperimentalInternalTranslationService == nil, let hostView = context.sharedContext.mainWindow?.hostView {
+                engineExperimentalInternalTranslationService = ExperimentalInternalTranslationServiceImpl(view: hostView.containerView)
+            }
+        }
+        return context.engine.messages.enhancedTranslate(text: text, entities: entities, fromLang: fromLang, toLang: toLang, allowLocalDownloads: true, localOnly: localOnly).start(next: { result in
+            subscriber.putNext(result)
+        }, error: { error in
+            subscriber.putError(error)
+        }, completed: {
+            subscriber.putCompletion()
+        })
+    }
+    |> runOn(Queue.mainQueue())
 }
 
 func alternativeTranslateText(text: String, fromLang: String?, toLang: String) -> Signal<(String, [MessageTextEntity])?, TelegramCore.TranslationError> {
@@ -445,6 +569,7 @@ func alternativeTranslateText(text: String, fromLang: String?, toLang: String) -
             if let fromLang {
                 effectiveFromLang = fromLang
             } else {
+                let languageRecognizer = NLLanguageRecognizer()
                 languageRecognizer.processString(text)
                 let hypotheses = languageRecognizer.languageHypotheses(withMaximum: 3)
                 languageRecognizer.reset()

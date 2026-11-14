@@ -12,7 +12,6 @@ import Intents
 
 import OpenSSLEncryptionProvider
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import OpenSSLEncryptionProvider
 import WidgetItemsUtils
@@ -260,7 +259,7 @@ BuildConfig.jerkgramRecordExtensionDiagnostic(
     
     let rootPath = rootPathForBasePath(appGroupUrl.path)
     
-    TempBox.initializeShared(basePath: rootPath, processType: "widget", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+    EngineTempBox.initializeShared(basePath: rootPath, processType: "widget", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
     
     let logsPath = rootPath + "/logs/widget-logs"
     let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
@@ -284,7 +283,7 @@ BuildConfig.jerkgramRecordExtensionDiagnostic(
     sharedContainerPath: appGroupUrl.path,
     detail: "encryption parameters ready"
 )
-    let encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+    let encryptionParameters = EngineValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: EngineValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: EngineValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
     
     BuildConfig.jerkgramRecordExtensionDiagnostic(
         process: "widget",
@@ -327,7 +326,7 @@ BuildConfig.jerkgramRecordExtensionDiagnostic(
             var result: [ParsedPeer] = []
             
             for (peerId, _) in items {
-                guard let peer = transaction.getPeer(PeerId(peerId)) else {
+                guard let peer = transaction.getPeer(EnginePeer.Id(peerId)) else {
                     continue
                 }
                 

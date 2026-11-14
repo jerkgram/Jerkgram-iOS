@@ -795,6 +795,85 @@ fn msgs_ack_on_container_acknowledges_children_once() {
 }
 
 #[test]
+fn trace_names_every_msg_id_a_query_went_under_and_its_answer() {
+    let mut h = Harness::new();
+    h.session.send(QueryId(1), query_body(1), QueryOptions::default(), h.now);
+    let packet = h.flush().unwrap();
+    let first = h.sent_query(&packet, 1);
+    let first_seq = packet.queries()[0].seq_no;
+    let container = packet.messages[0].container_id.unwrap_or(0);
+    assert_eq!(
+        Vec::from(h.session.take_trace()),
+        vec![QueryTrace::Sent {
+            id: QueryId(1),
+            msg_id: first,
+            seq_no: first_seq,
+            container_id: container,
+            previous_msg_id: 0,
+            again: false,
+        }]
+    );
+
+    h.deliver(vec![Outgoing::Service(bad_server_salt(packet.header.msg_id, packet.header.seq_no, 555))]).unwrap();
+    let packet = h.flush().unwrap();
+    let second = h.sent_query(&packet, 1);
+    assert!(second > first);
+    let trace = Vec::from(h.session.take_trace());
+    assert!(matches!(
+        trace.as_slice(),
+        [QueryTrace::Sent { id: QueryId(1), msg_id, previous_msg_id, again: false, .. }]
+            if *msg_id == second && *previous_msg_id == first
+    ));
+
+    h.session.connection_closed();
+    h.advance(1.0);
+    h.session.connection_opened(h.now);
+    let packet = h.flush().unwrap();
+    assert_eq!(h.sent_query(&packet, 1), second);
+    let trace = Vec::from(h.session.take_trace());
+    assert!(matches!(
+        trace.as_slice(),
+        [QueryTrace::Sent { id: QueryId(1), msg_id, previous_msg_id: 0, again: true, .. }]
+            if *msg_id == second
+    ));
+
+    h.deliver(vec![Outgoing::Content(rpc_error(second, 500, "NEED_OWNER_EMPTY"))]).unwrap();
+    let trace = Vec::from(h.session.take_trace());
+    assert!(matches!(
+        trace.as_slice(),
+        [QueryTrace::Answered { id: QueryId(1), msg_id, response_msg_id, error: Some((500, message)) }]
+            if *msg_id == second && *response_msg_id != 0 && message == "NEED_OWNER_EMPTY"
+    ));
+
+    h.session.send(QueryId(2), query_body(2), QueryOptions::default(), h.now);
+    let packet = h.flush().unwrap();
+    let third = h.sent_query(&packet, 2);
+    h.session.take_trace();
+    h.deliver(vec![Outgoing::Content(rpc_result(third, &[1, 2, 3, 4]))]).unwrap();
+    assert!(matches!(
+        Vec::from(h.session.take_trace()).as_slice(),
+        [QueryTrace::Answered { id: QueryId(2), msg_id, error: None, .. }] if *msg_id == third
+    ));
+}
+
+#[test]
+fn trace_keeps_only_the_latest_entries() {
+    let mut h = Harness::new();
+    for index in 0..MAX_QUERY_TRACE + 10 {
+        h.session.push_trace(QueryTrace::Answered {
+            id: QueryId(index as u64),
+            msg_id: 0,
+            response_msg_id: 0,
+            error: None,
+        });
+    }
+    let trace = h.session.take_trace();
+    assert_eq!(trace.len(), MAX_QUERY_TRACE);
+    assert!(matches!(trace.front(), Some(QueryTrace::Answered { id: QueryId(10), .. })));
+    assert!(h.session.take_trace().is_empty());
+}
+
+#[test]
 fn gzip_rpc_errors_and_duplicates() {
     let mut h = Harness::new();
     h.session.send(QueryId(1), query_body(1), QueryOptions::default(), h.now);
@@ -869,6 +948,33 @@ fn missing_salt_requests_future_salts_first() {
     h.session.send(QueryId(2), query_body(2), QueryOptions::default(), h.now);
     let packet = h.flush().unwrap();
     assert_eq!(packet.header.salt, 901);
+}
+
+/// A clock difference the host pushes can put the server's time past every stored salt. Salts were
+/// asked for moments before, so the session held its queries for the 60 s retry interval; a jump in
+/// the clock asks again at once (crashes.md, fix-02).
+#[test]
+fn a_pushed_clock_jump_past_every_salt_asks_for_salts_at_once() {
+    let mut h =
+        Harness::with_salts(vec![ServerSalt { salt: 101, valid_since: START - 100.0, valid_until: START + 1800.0 }]);
+    h.session.send(QueryId(1), query_body(1), QueryOptions::default(), h.now);
+    let packet = h.flush().unwrap();
+    let request = packet.find(ids::GET_FUTURE_SALTS).expect("salts are asked for at the start").msg_id;
+    let first = h.sent_query(&packet, 1);
+    let now = START as i32;
+    h.deliver(vec![
+        Outgoing::Content(future_salts(request, now, &[(now - 100, now + 1800, 101), (now + 1800, now + 3600, 102)])),
+        Outgoing::Content(rpc_result(first, &[1, 1, 1, 1])),
+    ])
+    .unwrap();
+    h.flush_all();
+    h.session.set_time_difference(20_000.0);
+    h.session.send(QueryId(2), query_body(2), QueryOptions::default(), h.now);
+    let packet = h.flush().expect("salts are asked for at once, not after FUTURE_SALTS_RETRY");
+    let request = packet.find(ids::GET_FUTURE_SALTS).expect("get_future_salts");
+    h.deliver(vec![Outgoing::Service(bad_msg_notification(request.msg_id, 0, 17))]).unwrap();
+    let packet = h.flush().expect("the clock is corrected and the query goes");
+    h.sent_query(&packet, 2);
 }
 
 #[test]
@@ -1181,7 +1287,7 @@ fn too_old_messages_are_acked_and_replayed_safely() {
     h.deliver_sealed(old_outer, 1, &update(0x0303_0303, &[0; 4])).unwrap();
     let events = h.events();
     assert!(updates_of(&events).is_empty());
-    assert!(events.contains(&SessionEvent::UpdatesLost));
+    assert!(!events.contains(&SessionEvent::UpdatesLost), "the fetch the first loss asked for covers it");
     assert!(h.acks_after_delay().contains(&old_outer));
 }
 
@@ -2585,13 +2691,14 @@ fn a_server_cannot_make_the_client_upload_a_query_forever() {
 fn outgoing_containers_never_exceed_1024_messages() {
     let mut h = Harness::new();
     h.sync();
-    for tag in 0..1500u32 {
+    let queries = MAX_INFLIGHT_QUERIES as u64;
+    for tag in 0..queries as u32 {
         h.session.send(QueryId(tag as u64 + 1), query_body(tag), QueryOptions::default(), h.now);
     }
     h.flush_all();
-    let sent: Vec<i64> = (0..1500u64).filter_map(|tag| h.session.query_msg_id(QueryId(tag + 1))).collect();
-    assert_eq!(sent.len(), 1500);
-    for tag in 0..1500u64 {
+    let sent: Vec<i64> = (0..queries).filter_map(|tag| h.session.query_msg_id(QueryId(tag + 1))).collect();
+    assert_eq!(sent.len(), queries as usize);
+    for tag in 0..queries {
         let _ = h.session.cancel(QueryId(tag + 1));
     }
     for msg_id in sent {
@@ -2611,7 +2718,7 @@ fn outgoing_containers_never_exceed_1024_messages() {
         );
         drops += packet.messages.iter().filter(|message| message.constructor() == ids::RPC_DROP_ANSWER).count();
     }
-    assert_eq!(drops, 1500, "every cancelled query's answer is dropped eventually");
+    assert_eq!(drops, queries as usize, "every cancelled query's answer is dropped eventually");
 }
 
 #[test]
@@ -4754,8 +4861,72 @@ fn a_wake_exactly_at_the_next_salts_start_uses_it() {
     assert!(sent.is_some_and(|at| at <= 281.0), "sent at {sent:?}");
 }
 
+/// A stored salt whose end is NaN (the C ABI takes the host's salts as doubles) is neither valid nor
+/// asked to be replaced: the session asked to be woken at once, sent nothing and asked again, a busy
+/// loop holding every query until the next stored salt began.
+#[test]
+fn a_stored_salt_with_a_nan_end_gets_future_salts_instead_of_a_busy_loop() {
+    let mut h = Harness::with_salts(vec![
+        ServerSalt { salt: 101, valid_since: START - 100.0, valid_until: f64::NAN },
+        ServerSalt { salt: 102, valid_since: START + 1800.0, valid_until: START + 3600.0 },
+    ]);
+    h.session.send(QueryId(1), query_body(1), QueryOptions::default(), h.now);
+    let packet = h.flush().expect("the session asks for salts");
+    let request = packet.find(ids::GET_FUTURE_SALTS).expect("get_future_salts").msg_id;
+    let deadline = h.session.poll_timeout(h.now).expect("a deadline");
+    assert!(deadline > h.now.mono + 0.5, "woken again at {deadline} while waiting for salts at {}", h.now.mono);
+    h.deliver(vec![Outgoing::Service(future_salts(
+        request,
+        START as i32,
+        &[(START as i32 - 10, START as i32 + 1800, 103)],
+    ))])
+    .unwrap();
+    let packet = h.flush().expect("the query goes out with the new salt");
+    assert_eq!(packet.header.salt, 103);
+    h.sent_query(&packet, 1);
+}
+
 #[path = "answer_model_tests.rs"]
 mod answer_model;
 
 #[path = "announced_answer_cases_tests.rs"]
 mod announced_answer_cases;
+
+#[path = "coverage_tests.rs"]
+mod coverage;
+
+/// A server msg_id far in the future (a clock glitch the session recovered from) does not raise the
+/// floor of reported update losses past what the server's clock allows: a later loss is still reported.
+#[test]
+fn a_far_future_msg_id_does_not_hide_a_later_update_loss() {
+    let mut h = Harness::new();
+    h.session.send(QueryId(1), query_body(1), QueryOptions::default(), h.now);
+    let packet = h.flush().unwrap();
+    let query = h.sent_query(&packet, 1);
+    let ping = packet.find(ids::PING_DELAY_DISCONNECT).unwrap().clone();
+    let glitch = msg_id_for_time(h.server.server_time + 1000.0) | 3;
+    h.deliver_sealed(glitch, 1, &update(1, &[0; 4])).unwrap();
+    let proof = msg_id_for_time(h.server.server_time + 0.01) | 1;
+    let body = container(&[
+        (proof + 4, 0, pong(ping.msg_id, ping_id_of(&ping).unwrap())),
+        (proof + 8, 1, rpc_result(query, &[3, 0, 0, 0])),
+    ]);
+    h.deliver_sealed(proof + 12, 0, &body).unwrap();
+    assert!(has_forced_time_update(&h.events()));
+    let losses = |h: &mut Harness, after: f64, tag: u32| {
+        h.advance(after);
+        let id = h.server.next_msg_id(false);
+        let lost = h.server.seal(id, 1, &update(tag, &[0; 4]));
+        for _ in 0..2100 {
+            h.deliver(vec![Outgoing::Content(update(0x0101_0101, &[0; 4]))]).unwrap();
+        }
+        h.events();
+        h.session.handle_packet(&lost, h.now, &mut h.rng).unwrap();
+        h.events().iter().filter(|e| matches!(e, SessionEvent::UpdatesLost)).count()
+    };
+    assert_eq!(losses(&mut h, 1.0, 0x0202_0202), 1);
+    assert_eq!(losses(&mut h, 60.0, 0x0303_0303), 1, "a loss 60 s after the last fetch is not covered by it");
+}
+
+#[path = "handover_tests.rs"]
+mod handover_tests;

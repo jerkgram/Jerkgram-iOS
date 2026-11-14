@@ -17,6 +17,78 @@ import AvatarNode
 import PeerNameColorItem
 import BoostLevelIconComponent
 
+// JG170 metadata policy begin
+private enum JerkgramProfileMetadataPolicy {
+    // Production DC locations: https://docs.pyrogram.org/faq/what-are-the-ip-addresses-of-telegram-data-centers
+    // This identifies avatar storage, never the person's location or phone country.
+    static func avatarDataCenterText(_ id: Int, isRussian: Bool) -> String {
+        let country: String
+        switch id {
+        case 1, 3:
+            country = isRussian ? "США" : "USA"
+        case 2, 4:
+            country = isRussian ? "Нидерланды" : "Netherlands"
+        case 5:
+            country = isRussian ? "Сингапур" : "Singapore"
+        default:
+            return String(id)
+        }
+        return "\(id) · \(country)"
+    }
+
+    static func showMutualContact(isMutual: Bool, isSelf: Bool, isBot: Bool) -> Bool {
+        return isMutual && !isSelf && !isBot
+    }
+
+    static func registrationMonth(_ value: String, currentYear: Int) -> (month: Int, year: Int)? {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2, let month = Int(parts[0]), let year = Int(parts[1]),
+              (1 ... 12).contains(month), (2013 ... max(2013, currentYear)).contains(year) else {
+            return nil
+        }
+        return (month, year)
+    }
+
+    // Offline observations from lastochkin-group/telegram-account-age-estimator/ages.json.
+    // These are empirical samples, not Telegram guarantees. Do not extrapolate.
+    private static let anchors: [(id: Int64, year: Int)] = [
+        (2_768_409, 2013), (7_679_610, 2013), (11_538_514, 2014),
+        (15_835_244, 2014), (23_646_077, 2014), (38_015_510, 2014),
+        (44_634_663, 2014), (46_145_305, 2014), (54_845_238, 2014),
+        (63_263_518, 2014), (101_260_938, 2015), (101_323_197, 2015),
+        (103_151_531, 2015), (103_258_382, 2015), (109_393_468, 2015),
+        (111_220_210, 2015), (112_594_714, 2015), (116_812_045, 2015),
+        (122_600_695, 2015), (124_872_445, 2015), (125_828_524, 2015),
+        (130_029_930, 2015), (133_909_606, 2015), (143_445_125, 2015),
+        (148_670_295, 2016), (152_079_341, 2016), (157_242_073, 2015),
+        (171_295_414, 2016), (181_783_990, 2016), (222_021_233, 2016),
+        (225_034_354, 2016), (278_941_742, 2016), (285_253_072, 2016),
+        (294_851_037, 2016), (297_621_225, 2016), (328_594_461, 2016),
+        (337_808_429, 2017), (341_546_272, 2017), (352_940_995, 2017),
+        (369_669_043, 2017), (400_169_472, 2017), (805_158_066, 2019),
+        (1_974_255_900, 2021), (5_520_018_289, 2024)
+    ]
+
+    static func estimatedYears(userId: Int64) -> ClosedRange<Int>? {
+        guard let first = self.anchors.first, let last = self.anchors.last,
+              userId >= first.id, userId <= last.id else {
+            return nil
+        }
+        // Report years rather than inventing a precise month. Non-monotonic
+        // observations deliberately produce a range instead of a negative slope.
+        if let exact = self.anchors.first(where: { $0.id == userId }) {
+            return exact.year ... exact.year
+        }
+        for index in 1 ..< self.anchors.count where userId < self.anchors[index].id {
+            let a = self.anchors[index - 1].year
+            let b = self.anchors[index].year
+            return min(a, b) ... max(a, b)
+        }
+        return nil
+    }
+}
+// JG170 metadata policy end
+
 private let enabledPublicBioEntities: EnabledEntityTypes = [.allUrl, .mention, .hashtag]
 private let enabledPrivateBioEntities: EnabledEntityTypes = [.internalUrl, .mention, .hashtag]
 
@@ -76,6 +148,7 @@ enum InfoSection: Int, CaseIterable {
     case groupLocation
     case calls
     case peerInfo
+    case agentProviders
     case personalChannel
     case ghostBaseMetrics
     case balances
@@ -118,6 +191,23 @@ func infoItems(
         var itemId = 990000
         var metricItems: [PeerInfoScreenItem] = []
 
+        let localized = JerkgramStrings(baseLanguageCode: presentationData.strings.baseLanguageCode)
+        let isRussian = localized.languageCode == "ru"
+        if case let .user(user) = peer,
+           JerkgramProfileMetadataPolicy.showMutualContact(
+               isMutual: user.flags.contains(.mutualContact),
+               isSelf: user.id == context.account.peerId,
+               isBot: user.botInfo != nil
+           ) {
+            let value = localized.mutualContact
+            metricItems.append(PeerInfoScreenLabeledValueItem(
+                id: itemId, label: localized.profileContact, text: value,
+                textColor: .primary, action: nil, longTapAction: nil,
+                requestLayout: { _ in interaction.requestLayout(false) }
+            ))
+            itemId += 1
+        }
+
         if ghostBaseMetricsSettings.showIds {
             let idText: String
             if case let .channel(channel) = peer {
@@ -136,11 +226,9 @@ func infoItems(
                     label: "Telegram ID",
                     text: idText,
                     textColor: .primary,
-                    action: { _, _ in
-                        UIPasteboard.general.string = idText
-                    },
-                    longTapAction: { _ in
-                        UIPasteboard.general.string = idText
+                    action: nil,
+                    longTapAction: { sourceNode in
+                        interaction.openPeerInfoContextMenu(.copyValue(idText), sourceNode, nil)
                     },
                     requestLayout: { _ in
                         interaction.requestLayout(false)
@@ -154,18 +242,16 @@ func infoItems(
            let representation = peer.smallProfileImage,
            let resource = representation.resource
                 as? CloudPeerPhotoSizeMediaResource {
-            let dcText = String(resource.datacenterId)
+            let dcText = JerkgramProfileMetadataPolicy.avatarDataCenterText(resource.datacenterId, isRussian: isRussian)
 
             metricItems.append(PeerInfoScreenLabeledValueItem(
                     id: itemId,
                     label: "DC",
                     text: dcText,
                     textColor: .primary,
-                    action: { _, _ in
-                        UIPasteboard.general.string = dcText
-                    },
-                    longTapAction: { _ in
-                        UIPasteboard.general.string = dcText
+                    action: nil,
+                    longTapAction: { sourceNode in
+                        interaction.openPeerInfoContextMenu(.copyValue(dcText), sourceNode, nil)
                     },
                     requestLayout: { _ in
                         interaction.requestLayout(false)
@@ -175,40 +261,32 @@ func infoItems(
             itemId += 1
         }
 
-        if ghostBaseMetricsSettings.showRegistration,
-           let cachedData = data.cachedData as? CachedUserData,
-           let registrationDate =
-                cachedData.peerStatusSettings?.registrationDate {
-            let components = registrationDate.components(
-                separatedBy: "."
-            )
-
-            if components.count == 2,
-               let monthValue = Int32(components[0]),
-               let yearValue = Int32(components[1]) {
-                let dateText = stringForMonth(
-                    strings: presentationData.strings,
-                    month: monthValue - 1,
-                    ofYear: yearValue - 1900
-                )
-
-                metricItems.append(
-                    PeerInfoScreenLabeledValueItem(
-                        id: itemId,
-                        label: "Дата регистрации",
-                        text: dateText,
-                        textColor: .primary,
-                        action: { _, _ in
-                            UIPasteboard.general.string = dateText
-                        },
-                        longTapAction: { _ in
-                            UIPasteboard.general.string = dateText
-                        },
-                        requestLayout: { _ in
-                            interaction.requestLayout(false)
-                        }
-                    )
-                )
+        if ghostBaseMetricsSettings.showRegistration, case let .user(user) = peer, user.botInfo == nil, !user.isDeleted {
+            let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
+            let reportedValue = (data.cachedData as? CachedUserData)?.peerStatusSettings?.registrationDate
+            let reported = reportedValue.flatMap { JerkgramProfileMetadataPolicy.registrationMonth($0, currentYear: currentYear) }
+            let label: String
+            let dateText: String?
+            if let reported {
+                label = localized.registrationDate
+                dateText = stringForMonth(strings: presentationData.strings, month: Int32(reported.month - 1), ofYear: Int32(reported.year - 1900))
+            } else if let range = JerkgramProfileMetadataPolicy.estimatedYears(userId: user.id.id._internalGetInt64Value()) {
+                label = localized.registrationEstimate
+                dateText = range.lowerBound == range.upperBound
+                    ? "≈ \(range.lowerBound)"
+                    : "≈ \(range.lowerBound)–\(range.upperBound)"
+            } else {
+                label = localized.registrationDate
+                dateText = nil
+            }
+            if let dateText {
+                metricItems.append(PeerInfoScreenLabeledValueItem(
+                    id: itemId, label: label, text: dateText, textColor: .primary,
+                    action: nil,
+                    longTapAction: { sourceNode in interaction.openPeerInfoContextMenu(.copyValue(dateText), sourceNode, nil) },
+                    requestLayout: { _ in interaction.requestLayout(false) }
+                ))
+                itemId += 1
             }
         }
 
@@ -269,6 +347,9 @@ func infoItems(
         let ItemBotAddToChat = 9002
         let ItemBotAddToChatInfo = 9003
         let ItemVerification = 9004
+        let ItemAgentInfo = 9100
+        let ItemAgentAddProvider = 9101
+        let ItemAgentProvidersInfo = 9102
         let ItemCommunity = 10000
         
         if let cachedUserData = data.cachedData as? CachedUserData, cachedUserData.flags.contains(.unofficialSecurityRisk) {
@@ -402,6 +483,13 @@ func infoItems(
                 hasWebApp = true
             }
             
+            // An agent bot asks for a key until one is connected, then lists the connected providers.
+            var agentKeys: [EngineAgentProviderKey]?
+            if data.agentSettingsContext != nil, let settings = data.agentState?.settings {
+                agentKeys = settings.keys
+            }
+            let hasAgentKeyButton = agentKeys?.isEmpty == true
+            
             if user.isFake {
                 items[currentPeerInfoSection]!.append(PeerInfoScreenLabeledValueItem(id: ItemAbout, label: "", text: user.botInfo != nil ? presentationData.strings.UserInfo_FakeBotWarning : presentationData.strings.UserInfo_FakeUserWarning, textColor: .primary, textBehavior: .multiLine(maxLines: 100, enabledEntities: user.botInfo != nil ? enabledPrivateBioEntities : []), action: nil, requestLayout: { animated in
                     interaction.requestLayout(animated)
@@ -410,9 +498,13 @@ func infoItems(
                 items[currentPeerInfoSection]!.append(PeerInfoScreenLabeledValueItem(id: ItemAbout, label: user.botInfo == nil ? presentationData.strings.Profile_About : presentationData.strings.Profile_BotInfo, text: user.botInfo != nil ? presentationData.strings.UserInfo_ScamBotWarning : presentationData.strings.UserInfo_ScamUserWarning, textColor: .primary, textBehavior: .multiLine(maxLines: 100, enabledEntities: user.botInfo != nil ? enabledPrivateBioEntities : []), action: nil, requestLayout: { animated in
                     interaction.requestLayout(animated)
                 }))
-            } else if hasAbout || hasNote || hasWebApp {
+            } else if hasAbout || hasNote || hasWebApp || hasAgentKeyButton {
                 var actionButton: PeerInfoScreenLabeledValueItem.Button?
-                if hasWebApp {
+                if hasAgentKeyButton {
+                    actionButton = PeerInfoScreenLabeledValueItem.Button(title: presentationData.strings.Agent_AddKey, action: {
+                        interaction.openAgentConnect()
+                    })
+                } else if hasWebApp {
                     actionButton = PeerInfoScreenLabeledValueItem.Button(title: presentationData.strings.PeerInfo_OpenAppButton, action: {
                         guard let parentController = interaction.getController() else {
                             return
@@ -445,7 +537,7 @@ func infoItems(
                     })
                 }
                 
-                if hasAbout || hasWebApp {
+                if hasAbout || hasWebApp || hasAgentKeyButton {
                     var label: String = ""
                     if let about = cachedData.about, !about.isEmpty {
                         label = user.botInfo == nil ? presentationData.strings.Profile_About : presentationData.strings.Profile_BotInfo
@@ -467,7 +559,11 @@ func infoItems(
                     }))
                 }
                 
-                if let botInfo = user.botInfo, botInfo.flags.contains(.canEdit) {
+                if hasAgentKeyButton {
+                    items[currentPeerInfoSection]!.append(PeerInfoScreenCommentItem(id: ItemAgentInfo, text: presentationData.strings.Agent_AddKeyInfo))
+                    
+                    currentPeerInfoSection = .peerInfoTrailing
+                } else if let botInfo = user.botInfo, botInfo.flags.contains(.canEdit) {
                     items[currentPeerInfoSection]!.append(PeerInfoScreenCommentItem(id: ItemAppFooter, text: presentationData.strings.PeerInfo_AppFooterAdmin, linkAction: { action in
                         if case let .tap(url) = action {
                             context.sharedContext.applicationBindings.openUrl(url)
@@ -481,6 +577,28 @@ func infoItems(
                             context.sharedContext.applicationBindings.openUrl(url)
                         }
                     }))
+                    
+                    currentPeerInfoSection = .peerInfoTrailing
+                }
+                
+                if let agentKeys, !agentKeys.isEmpty {
+                    let providers = data.agentState?.providers ?? []
+                    for key in agentKeys {
+                        let provider = providers.first(where: { $0.id == key.provider }) ?? EngineAgentProvider(id: key.provider, title: key.provider, vendor: "", keyUrl: "", modelsSearchable: false, iconEmojiId: nil)
+                        let isActive = agentKeys.count > 1 && data.agentState?.settings?.activeProvider == key.provider
+                        items[.agentProviders]!.append(PeerInfoScreenAgentProviderItem(id: "agent_\(key.provider)", context: context, provider: provider, isActive: isActive, action: agentKeys.count > 1 ? {
+                            interaction.setAgentActiveProvider(key.provider)
+                        } : nil, contextAction: { node, gesture in
+                            interaction.openAgentProviderContextMenu(key.provider, node, gesture)
+                        }))
+                    }
+                    let connectedIds = Set(agentKeys.map(\.provider))
+                    if providers.contains(where: { !connectedIds.contains($0.id) }) {
+                        items[.agentProviders]!.append(PeerInfoScreenActionItem(id: ItemAgentAddProvider, text: presentationData.strings.Agent_AddAnotherProvider, color: .accent, icon: generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Text/InputAIIcon"), color: presentationData.theme.list.itemAccentColor), alignment: .peerList, action: {
+                            interaction.openAgentConnect()
+                        }))
+                    }
+                    items[.agentProviders]!.append(PeerInfoScreenCommentItem(id: ItemAgentProvidersInfo, text: presentationData.strings.Agent_ProvidersInfo))
                     
                     currentPeerInfoSection = .peerInfoTrailing
                 }
@@ -579,6 +697,18 @@ func infoItems(
                             }))
                         }
                     }
+                }
+                
+                // Report is in the More menu; a header without More (a secret chat with a non-contact) offers it as a
+                // row instead. On a secret chat it reports the user.
+                var isSecretChat = false
+                if let chatPeer = data.chatPeer, case .secretChat = chatPeer {
+                    isSecretChat = true
+                }
+                if !peerInfoUserHeaderHasMore(user, isSecretChat: isSecretChat, isContact: data.isContact) && peerInfoCanReportUser(user, accountPeerId: context.account.peerId) {
+                    items[currentPeerInfoSection]!.append(PeerInfoScreenActionItem(id: ItemReport, text: presentationData.strings.ReportPeer_Report, action: {
+                        interaction.openReport(.default)
+                    }))
                 }
                 
                 if let encryptionKeyFingerprint = data.encryptionKeyFingerprint {

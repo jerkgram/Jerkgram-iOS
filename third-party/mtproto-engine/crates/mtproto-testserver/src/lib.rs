@@ -158,11 +158,19 @@ pub struct Stats {
     pub redelivered_answers: usize,
     pub chaos_injected: HashMap<&'static str, usize>,
     pub unique_executions: HashMap<(u32, u64), u32>,
-    pub first_executions: HashMap<(u32, u64), (i64, i64)>,
+    /// The session, msg_id and auth key id of each call's first execution.
+    pub first_executions: HashMap<(u32, u64), (i64, i64, u64)>,
     pub duplicate_records: Vec<String>,
     pub duplicate_executions: usize,
+    /// Duplicate executions that came under another auth key than the first: another engine's session
+    /// (each engine makes a temporary key of its own) or another temporary key ran the call again.
+    pub cross_key_duplicates: usize,
     pub bad_msgs_sent: usize,
     pub session_ids: HashSet<i64>,
+    /// When each client session sent its first packet, as Unix time.
+    pub session_first_seen: HashMap<i64, f64>,
+    /// The sessions of each duplicate execution: the first run's and the repeat's.
+    pub duplicate_sessions: Vec<(i64, i64)>,
     pub transport_errors_sent: usize,
     pub client_packets: usize,
     pub client_bytes: usize,
@@ -180,6 +188,11 @@ pub struct Stats {
     pub handshake_dcs: Vec<(i32, bool)>,
     pub binds: usize,
     pub bind_failures: Vec<String>,
+    /// `help.test` calls that came under a permanent key the server knows (not a temporary key), answered
+    /// or not.
+    pub help_tests: usize,
+    /// Packets under a permanent key the server knows that got -404 because permanent keys were hidden.
+    pub hidden_key_rejections: usize,
     pub perm_empty_errors: usize,
     pub expired_key_rejections: usize,
     /// The auth key ids `destroy_auth_key` arrived under.
@@ -189,6 +202,8 @@ pub struct Stats {
     pub executed_under: Vec<(u32, u64)>,
     /// Each executed call's tag and the auth key id it arrived under.
     pub executed_with_key: Vec<(u32, u64)>,
+    /// Each executed call's tag and the client session it arrived in.
+    pub executed_in_session: Vec<(u32, i64)>,
 }
 
 /// A key made by a `p_q_inner_data_temp_dc` handshake: it expires, and API calls under it are refused
@@ -263,6 +278,33 @@ struct Shared {
     http: http::HttpShared,
     tcp_blackhole: bool,
     temp_keys: HashMap<u64, TempKey>,
+    bind_fault: Option<BindFault>,
+    help_test: HelpTestReply,
+    /// Messages sent under a permanent key itself (not a temporary key bound to it) get -404, as from a
+    /// server that cannot find the key for a while.
+    hide_permanent_keys: bool,
+}
+
+/// How `help.test`, the call a client sends under its permanent key to learn whether the server still
+/// knows it, is answered from now on.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum HelpTestReply {
+    /// `boolTrue`.
+    #[default]
+    Answer,
+    /// Never.
+    Silent,
+    /// With this error.
+    Error(i32, String),
+}
+
+/// How `auth.bindTempAuthKey` misbehaves from now on, whatever the server options say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindFault {
+    /// Every bind is refused with this code and error.
+    Refuse(i32, String),
+    /// No bind is ever answered.
+    Ignore,
 }
 
 pub struct TestServer {
@@ -295,6 +337,9 @@ impl TestServer {
             http: http::HttpShared::default(),
             tcp_blackhole: false,
             temp_keys: HashMap::new(),
+            bind_fault: None,
+            help_test: HelpTestReply::Answer,
+            hide_permanent_keys: false,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -330,6 +375,22 @@ impl TestServer {
     /// MTProto; HTTP keeps working.
     pub fn set_tcp_blackhole(&self, enabled: bool) {
         self.shared.lock().unwrap().tcp_blackhole = enabled;
+    }
+
+    /// Messages under a permanent key itself get -404 from now on (true), or are read as usual (false).
+    /// Binds, which carry the permanent key inside, are not affected.
+    pub fn set_hide_permanent_keys(&self, hidden: bool) {
+        self.shared.lock().unwrap().hide_permanent_keys = hidden;
+    }
+
+    /// `help.test` is answered as `reply` says from now on.
+    pub fn set_help_test_reply(&self, reply: HelpTestReply) {
+        self.shared.lock().unwrap().help_test = reply;
+    }
+
+    /// Binds misbehave as `fault` says from now on; None goes back to the server options.
+    pub fn set_bind_fault(&self, fault: Option<BindFault>) {
+        self.shared.lock().unwrap().bind_fault = fault;
     }
 
     /// Forgets every temporary key, as when they expire or the server loses them: the next packet
@@ -921,7 +982,7 @@ fn serve_frames_inner(
                 }
             }
             drop(guard);
-            return trickle_forever(&mut wire, mode, &stop, &mut chaos_rng);
+            return trickle_forever(&mut wire, mode, &key, &stop, &mut chaos_rng);
         }
         if let Some(code) = transport_error {
             let mut guard = shared.lock().unwrap();
@@ -1080,7 +1141,9 @@ fn process_packet(
             }
         }
         let stats = &mut shared_ref.stats;
-        stats.session_ids.insert(session_id);
+        if stats.session_ids.insert(session_id) {
+            stats.session_first_seen.insert(session_id, unix_now());
+        }
         stats.client_packets += 1;
         stats.client_bytes += packet.len();
         *stats.calls_per_packet.entry(decoded.messages.len()).or_insert(0) += 1;
@@ -1193,12 +1256,20 @@ fn process_packet(
                         }
                     }
                     ids::RPC_DROP_ANSWER => {}
-                    ids::AUTH_BIND_TEMP_AUTH_KEY if options.ignore_binds => {}
+                    ids::AUTH_BIND_TEMP_AUTH_KEY
+                        if options.ignore_binds || matches!(shared_ref.bind_fault, Some(BindFault::Ignore)) => {}
                     ids::AUTH_BIND_TEMP_AUTH_KEY => {
                         let rebind = shared_ref.temp_keys.get(&auth_key_id).is_some_and(|temp| temp.bound_to.is_some());
-                        let checked = match (options.refuse_binds, options.refuse_rebinds) {
-                            (Some(error), _) => Err((options.refuse_binds_code.unwrap_or(400), error)),
-                            (None, Some(error)) if rebind => Err((400, error)),
+                        let refused = match &shared_ref.bind_fault {
+                            Some(BindFault::Refuse(code, error)) => Some((*code, error.clone())),
+                            _ => None,
+                        };
+                        let checked = match (refused, options.refuse_binds, options.refuse_rebinds) {
+                            (Some((code, error)), _, _) => Err((code, error)),
+                            (None, Some(error), _) => {
+                                Err((options.refuse_binds_code.unwrap_or(400), error.to_string()))
+                            }
+                            (None, None, Some(error)) if rebind => Err((400, error.to_string())),
                             _ => check_bind(
                                 &shared_ref.keys,
                                 &mut shared_ref.temp_keys,
@@ -1208,7 +1279,7 @@ fn process_packet(
                                 &message.body,
                                 connection,
                             )
-                            .map_err(|error| (400, error)),
+                            .map_err(|error| (400, error.to_string())),
                         };
                         let reply = match checked {
                             Ok(()) => {
@@ -1218,8 +1289,8 @@ fn process_packet(
                                 sp::rpc_result(message.msg_id, &writer.into_inner())
                             }
                             Err((code, error)) => {
-                                stats.bind_failures.push(error.to_string());
-                                sp::rpc_error(message.msg_id, code, error)
+                                stats.bind_failures.push(error.clone());
+                                sp::rpc_error(message.msg_id, code, &error)
                             }
                         };
                         outgoing.push((reply, true));
@@ -1250,9 +1321,29 @@ fn process_packet(
                         let (tag, payload) = match call {
                             Some(Inner::Call(tag, payload)) => (tag, payload),
                             Some(Inner::Api(constructor, body)) => {
-                                let reply = match &options.api {
-                                    Some(world) => world.handle(options.datacenter_id, auth_key_id, constructor, &body),
-                                    None => api::ApiReply::Error(400, "METHOD_INVALID".into()),
+                                let permanent = shared_ref
+                                    .temp_keys
+                                    .get(&auth_key_id)
+                                    .and_then(|temp| temp.bound_to)
+                                    .unwrap_or(auth_key_id);
+                                let reply = if constructor == api::HELP_TEST {
+                                    stats.help_tests += usize::from(!shared_ref.temp_keys.contains_key(&auth_key_id));
+                                    match &shared_ref.help_test {
+                                        HelpTestReply::Silent => continue,
+                                        HelpTestReply::Error(code, text) => api::ApiReply::Error(*code, text.clone()),
+                                        HelpTestReply::Answer => {
+                                            let mut writer = Writer::new();
+                                            writer.write_u32(ids::BOOL_TRUE);
+                                            api::ApiReply::Result(writer.into_inner())
+                                        }
+                                    }
+                                } else {
+                                    match &options.api {
+                                        Some(world) => {
+                                            world.handle(options.datacenter_id, permanent, constructor, &body)
+                                        }
+                                        None => api::ApiReply::Error(400, "METHOD_INVALID".into()),
+                                    }
                                 };
                                 let body = match reply {
                                     api::ApiReply::Result(result) => sp::rpc_result(message.msg_id, &result),
@@ -1344,6 +1435,7 @@ fn process_packet(
                             .map_or(auth_key_id, |temp| temp.bound_to.unwrap_or(0));
                         stats.executed_under.push((tag, executed_under));
                         stats.executed_with_key.push((tag, auth_key_id));
+                        stats.executed_in_session.push((tag, session_id));
                         let count = {
                             let entry = stats.executions.entry(tag).or_insert(0);
                             *entry += 1;
@@ -1355,20 +1447,26 @@ fn process_packet(
                             *entry += 1;
                             if *entry > 1 {
                                 stats.duplicate_executions += 1;
-                                let first = stats.first_executions.get(&(tag, key)).copied().unwrap_or((0, 0));
+                                let first = stats.first_executions.get(&(tag, key)).copied().unwrap_or((0, 0, 0));
+                                if first.2 != auth_key_id {
+                                    stats.cross_key_duplicates += 1;
+                                }
+                                stats.duplicate_sessions.push((first.0, session_id));
                                 if stats.duplicate_records.len() < 64 {
                                     stats.duplicate_records.push(format!(
-                                        "key {key}: first session {:x} msg {:x}, again session {:x} msg {:x} container {:?} fault {:?}",
+                                        "key {key}: first session {:x} msg {:x} auth key {:x}, again session {:x} msg {:x} auth key {:x} container {:?} fault {:?}",
                                         first.0,
                                         first.1,
+                                        first.2,
                                         session_id,
                                         message.msg_id,
+                                        auth_key_id,
                                         message.container_id,
                                         fault.map(chaos::Fault::name)
                                     ));
                                 }
                             } else {
-                                stats.first_executions.insert((tag, key), (session_id, message.msg_id));
+                                stats.first_executions.insert((tag, key), (session_id, message.msg_id, auth_key_id));
                             }
                         }
                         let reply = sp::rpc_result(message.msg_id, &result_body(tag, &payload));
@@ -1761,12 +1859,19 @@ fn register_key(shared: &mut Shared, outcome: &mtproto_core::test_support::Serve
     }
 }
 
-/// The key to decrypt with, unless it is a temporary key past its expiry, which the server forgets.
+/// The key to decrypt with, unless it is a temporary key past its expiry, which the server forgets, or a
+/// permanent key while they are hidden.
 fn usable_key(shared: &mut Shared, auth_key_id: u64, clock_offset: f64) -> Option<AuthKey> {
     if shared.temp_keys.get(&auth_key_id).is_some_and(|temp| temp.expires_at <= server_now(clock_offset)) {
         shared.temp_keys.remove(&auth_key_id);
         shared.keys.remove(&auth_key_id);
         shared.stats.expired_key_rejections += 1;
+        return None;
+    }
+    if shared.hide_permanent_keys && !shared.temp_keys.contains_key(&auth_key_id) {
+        if shared.keys.contains_key(&auth_key_id) {
+            shared.stats.hidden_key_rejections += 1;
+        }
         return None;
     }
     shared.keys.get(&auth_key_id).cloned()
@@ -1835,8 +1940,17 @@ fn check_bind(
     Ok(())
 }
 
-fn trickle_forever(wire: &mut Wire, mode: i32, stop: &AtomicBool, rng: &mut XorShiftRandom) -> std::io::Result<()> {
+fn trickle_forever(
+    wire: &mut Wire,
+    mode: i32,
+    key: &AuthKey,
+    stop: &AtomicBool,
+    rng: &mut XorShiftRandom,
+) -> std::io::Result<()> {
     let started = Instant::now();
+    if mode == 4 || mode == 5 {
+        return chain_short_frames(wire, mode, key, stop, started);
+    }
     if mode == 0 || mode == 3 {
         let declared = if mode == 0 { 2u32 << 20 } else { 8u32 << 20 };
         let header = match wire.framing {
@@ -1858,6 +1972,49 @@ fn trickle_forever(wire: &mut Wire, mode: i32, stop: &AtomicBool, rng: &mut XorS
             _ => wire.send_quick_ack(rng.next_u64() as u32 & 0x7fff_ffff),
         };
         if sent.is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Frames that never answer anything but each end inside the grace a partial frame gets, the next one
+/// already started: mode 4 chains empty transport frames, mode 5 chains packets sealed under the key
+/// for another session (what an on-path attacker replays from an earlier session under the same key).
+fn chain_short_frames(
+    wire: &mut Wire,
+    mode: i32,
+    key: &AuthKey,
+    stop: &AtomicBool,
+    started: Instant,
+) -> std::io::Result<()> {
+    let mut peer = ServerPeer::new(key.clone(), server_now(0.0));
+    peer.session_id = 0x0bad_5e55_1011;
+    let next_frame = |wire: &mut Wire, peer: &mut ServerPeer| -> Vec<u8> {
+        let payload = if mode == 4 {
+            0u32.to_le_bytes().to_vec()
+        } else {
+            peer.server_time = server_now(0.0);
+            let msg_id = peer.next_msg_id(false);
+            peer.seal(msg_id, 0, &sp::msgs_ack(&[msg_id - 1]))
+        };
+        let mut frame = Vec::new();
+        encode_frame(wire.framing, &payload, false, &mut wire.rng, &mut frame);
+        frame
+    };
+    let mut frame = next_frame(wire, &mut peer);
+    let head = frame.len().min(4);
+    if wire.send_raw_frame(frame[..head].to_vec()).is_err() {
+        return Ok(());
+    }
+    let mut rest = frame.split_off(head);
+    while !stop.load(Ordering::Relaxed) && started.elapsed() < Duration::from_secs(90) {
+        std::thread::sleep(Duration::from_millis(300));
+        let mut next = next_frame(wire, &mut peer);
+        let head = next.len().min(4);
+        let tail = next.split_off(head);
+        rest.extend_from_slice(&next);
+        if wire.send_raw_frame(std::mem::replace(&mut rest, tail)).is_err() {
             break;
         }
     }

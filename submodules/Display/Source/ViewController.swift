@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import SwiftSignalKit
+import UIKitRuntimeUtils
 
 public protocol StandalonePresentableController: ViewController {
 }
@@ -162,9 +163,92 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     open var previousItem: NavigationPreviousAction?
     
     open var navigationPresentation: ViewControllerNavigationPresentation = .default
+    /// Whether the controller shows a horizontal tab bar along its bottom edge. As the top of a split view's master pane,
+    /// it tells the detail pane beside it (`ContainerViewLayout.isBesideBottomTabBar`).
+    open var showsBottomTabBar: Bool {
+        return false
+    }
     open var _presentedInModal: Bool = false
+    // Explicit false stops inherited settings styling at chat/profile boundaries.
+    public var jerkgramSettingsScope: Bool? {
+        didSet { self.jerkgramRefreshSettingsSurface() }
+    }
+    // The root Settings screen already owns its native backdrop.
+    public var jerkgramSettingsHasOwnBackdrop = false
+    public var jerkgramSettingsBackdropProvider: ((UIView?) -> UIView?)? {
+        didSet { self.jerkgramRefreshSettingsSurface(invalidateBackdrop: true) }
+    }
+    open var jerkgramAcceptsSettingsSurface: Bool { return true }
+    public let jerkgramSettingsStyleRevision = ValuePromise<Int>(0, ignoreRepeated: true)
+    public var jerkgramTracksVisualSettings = false { didSet { self.jerkgramRefreshSettingsSurface() } }
+    open func jerkgramSettingsVisualStateUpdated() {}
+    private var jerkgramSettingsAppearanceVisible = false
+    private var jerkgramSettingsAppliedRevision: UInt64?
+    private var jerkgramSettingsDirtyRevision: UInt64?
+    private var jerkgramSettingsBackdropView: UIView?
+    private var jerkgramSettingsObserver: NSObjectProtocol?
+
+    public var jerkgramSettingsSurfaceActive: Bool {
+        return JerkgramSettingsSurfacePolicy.active(isSettings: self.jerkgramSettingsScope == true, accepts: self.jerkgramAcceptsSettingsSurface, master: GhostBaseGlassStyle.isEnabled && GhostBaseGlassStyle.allowsTransparentSurfaces, enabled: GhostBaseGlassStyle.settingsTranslucencyEnabled, hasBackdrop: self.jerkgramSettingsHasOwnBackdrop || self.jerkgramSettingsBackdropView != nil)
+    }
+
+    public func jerkgramInheritSettingsSurface(from source: ViewController) {
+        guard self.jerkgramSettingsScope == nil, self.jerkgramAcceptsSettingsSurface, source.jerkgramSettingsScope == true else { return }
+        self.jerkgramSettingsBackdropProvider = source.jerkgramSettingsBackdropProvider
+        self.jerkgramSettingsScope = true
+    }
+
+    public func jerkgramRefreshSettingsSurface(invalidateBackdrop: Bool = false) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.jerkgramRefreshSettingsSurface(invalidateBackdrop: invalidateBackdrop) }
+            return
+        }
+        guard self.jerkgramTracksVisualSettings || (self.jerkgramSettingsScope == true && self.jerkgramAcceptsSettingsSurface) else {
+            self.jerkgramSettingsBackdropView?.isHidden = true
+            return
+        }
+        if self.jerkgramSettingsObserver == nil {
+            self.jerkgramSettingsObserver = NotificationCenter.default.addObserver(forName: GhostBaseGlassStyle.settingsStyleDidChange, object: nil, queue: .main) { [weak self] _ in
+                JerkgramWave1Instrumentation.add("styleCallbacks")
+                self?.jerkgramRefreshSettingsSurface()
+            }
+        }
+        let revision = GhostBaseGlassStyle.visualRevision
+        if invalidateBackdrop { self.jerkgramSettingsAppliedRevision = nil }
+        guard self.jerkgramSettingsAppearanceVisible else {
+            JerkgramWave1Instrumentation.add("deferredStyleCallbacks")
+            self.jerkgramSettingsDirtyRevision = revision
+            return
+        }
+        guard JerkgramVisualPolicy.shouldReconcile(visible: self.jerkgramSettingsAppearanceVisible, applied: self.jerkgramSettingsAppliedRevision, current: revision, dirty: self.jerkgramSettingsDirtyRevision != nil) else { return }
+        JerkgramWave1Instrumentation.add(self.jerkgramSettingsAppearanceVisible ? "visibleOwnerRefreshes" : "hiddenOwnerRefreshes")
+        self.jerkgramSettingsDirtyRevision = nil
+        self.jerkgramSettingsAppliedRevision = revision
+        let admitted = self.jerkgramSettingsScope == true && self.jerkgramAcceptsSettingsSurface && GhostBaseGlassStyle.settingsTranslucencyEnabled && GhostBaseGlassStyle.isEnabled && GhostBaseGlassStyle.allowsTransparentSurfaces
+        let predecessor = self.jerkgramSettingsBackdropView
+        if admitted && !self.jerkgramSettingsHasOwnBackdrop {
+            // Refresh or adopt the same material even when a hidden root had no
+            // background at construction or released it during a master change.
+            self.jerkgramSettingsBackdropView = self.jerkgramSettingsBackdropProvider?(self.jerkgramSettingsBackdropView) ?? self.jerkgramSettingsBackdropView
+        }
+        if self.isViewLoaded, let backdrop = self.jerkgramSettingsBackdropView {
+            if admitted && backdrop.superview !== self.view { self.view.insertSubview(backdrop, at: 0) }
+            backdrop.frame = self.view.bounds
+            backdrop.isHidden = !admitted
+            if !admitted { backdrop.removeFromSuperview() }
+        }
+        // Successor has entered its window and acquired the shared native lease.
+        if predecessor !== self.jerkgramSettingsBackdropView { predecessor?.removeFromSuperview() }
+        self.jerkgramSettingsVisualStateUpdated()
+        self.jerkgramSettingsStyleRevision.set(Int(truncatingIfNeeded: revision))
+        if let layout = self.validLayout, self.isViewLoaded { self.containerLayoutUpdated(layout, transition: .immediate) }
+    }
+
     open var _hasGlassStyle: Bool = false
     open var flatReceivesModalTransition: Bool = false
+    /// A full-screen viewer (a web page, a document) presented as a modal fills the screen beside a top-right status
+    /// island (iPhone Duo, unfolded portrait) rather than becoming a card below it; its bar then sits beside the island.
+    open var fillsScreenBesideStatusIsland: Bool = false
     
     public var presentedOverCoveringView: Bool = false
     
@@ -211,11 +295,51 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     open var transitionNavigationBar: NavigationBar? {
         return self.navigationBar
     }
+    /// The bar a navigation push or pop morphs into the other screen's (`NavigationBarTransitionSource`); nil keeps
+    /// today's slide. A screen with its own header returns nil.
+    open var navigationBarTransitionSource: NavigationBarTransitionSource? {
+        guard self.displayNavigationBar, let navigationBar = self.navigationBar, !navigationBar.isHidden else {
+            return nil
+        }
+        return navigationBar
+    }
+    /// This screen's side when the screen above it expands out of it (a push or pop between the two); nil: it does not
+    /// take part.
+    open func navigationExpansionSource(above controller: ViewController, operation: NavigationExpansionOperation) -> NavigationExpansionSource? {
+        return nil
+    }
+
+    /// This screen's side when it expands out of the screen below it; nil: it does not (the slide).
+    open func navigationExpansionDestination(below controller: ViewController, operation: NavigationExpansionOperation) -> NavigationExpansionDestination? {
+        return nil
+    }
     public private(set) var toolbar: Toolbar?
     
     public var displayNavigationBar = true
     open var navigationBarRequiresEntireLayoutUpdate: Bool {
         return true
+    }
+    
+    /// iPhone Duo: whether the navigation bar lays out its side column (back or close, icon buttons, overflow) in the side strip (docs/iphone-duo-layout.md). A screen that lays out its own side column returns false.
+    open var placesNavigationButtonInSideColumn: Bool {
+        return true
+    }
+
+    /// iPhone Duo: where the bar puts its side column for `layout`, or nil while it puts none there.
+    private func navigationBarSideColumnPlacement(layout: ContainerViewLayout) -> NavigationBarSideColumnPlacement? {
+        guard self.placesNavigationButtonInSideColumn && self.displayNavigationBar else {
+            return nil
+        }
+        return NavigationBarSideColumnPlacement(layout: layout, reservedBelow: (self.parent as? TabBarController)?.verticalTabBarFrame(for: layout))
+    }
+
+    /// iPhone Duo: the side column the bar lays out for `layout` (nil without one), for a screen whose content keeps
+    /// clear of it.
+    public final func navigationBarSideColumnExtent(layout: ContainerViewLayout) -> NavigationBarSideColumnExtent? {
+        guard let navigationBar = self.navigationBar, let placement = self.navigationBarSideColumnPlacement(layout: layout) else {
+            return nil
+        }
+        return navigationBar.sideColumnExtent(placement: placement)
     }
 
     public struct TabBarSearchState: Equatable {
@@ -261,7 +385,8 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
 
     open func navigationLayout(layout: ContainerViewLayout) -> NavigationLayout {
-        let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
+        // Beside iPhone Duo's status island the bar stays near the top rather than below the island.
+        let statusBarHeight: CGFloat = layout.navigationBarStatusBarHeight ?? 0.0
         var defaultNavigationBarHeight: CGFloat
         if self._presentedInModal && self._hasGlassStyle {
             defaultNavigationBarHeight = 68.0
@@ -405,6 +530,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
                 }
             }
         }
+        self.navigationBar?.sideColumnExtentUpdated = { [weak self] transition in
+            self?.requestLayout(transition: transition)
+        }
         self.navigationBar?.item = self.navigationItem
         //self.automaticallyAdjustsScrollViewInsets = false
         
@@ -418,15 +546,15 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     deinit {
-        
+        if let observer = self.jerkgramSettingsObserver { NotificationCenter.default.removeObserver(observer) }
     }
 
     open func updateNavigationBarLayout(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        self.applyNavigationBarLayout(layout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: 0.0, additionalCutout: nil, transition: transition)
+        self.applyNavigationBarLayout(layout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: 0.0, transition: transition)
     }
     
-    public func applyNavigationBarLayout(_ layout: ContainerViewLayout, navigationLayout: NavigationLayout, additionalBackgroundHeight: CGFloat, additionalCutout: CGSize?, transition: ContainedViewLayoutTransition) {
-        let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
+    public func applyNavigationBarLayout(_ layout: ContainerViewLayout, navigationLayout: NavigationLayout, additionalBackgroundHeight: CGFloat, transition: ContainedViewLayoutTransition) {
+        let statusBarHeight: CGFloat = layout.navigationBarStatusBarHeight ?? 0.0
 
         var navigationBarFrame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: navigationLayout.navigationFrame.maxY))
         
@@ -436,10 +564,6 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         
         self.navigationBarOrigin = navigationBarFrame.origin.y
 
-        var isLandscape = layout.size.width > layout.size.height
-        if case .regular = layout.metrics.widthClass {
-            isLandscape = false
-        }
         if let navigationBar = self.navigationBar {
             if let contentNode = navigationBar.contentNode, case .expansion = contentNode.mode, !self.displayNavigationBar {
                 navigationBarFrame.origin.y -= navigationLayout.defaultContentHeight + statusBarHeight
@@ -464,7 +588,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
                 additionalTopHeight += 8.0
             }
             
-            navigationBar.updateLayout(size: navigationBarFrame.size, defaultHeight: navigationLayout.defaultContentHeight, additionalTopHeight: additionalTopHeight, additionalContentHeight: self.additionalNavigationBarHeight, additionalBackgroundHeight: additionalBackgroundHeight, additionalCutout: additionalCutout, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, appearsHidden: !self.displayNavigationBar, isLandscape: isLandscape, transition: transition)
+            navigationBar.trailingButtonsInset = layout.navigationBarTrailingButtonsInset
+            navigationBar.sideColumnPlacement = self.navigationBarSideColumnPlacement(layout: layout)
+            navigationBar.updateLayout(size: navigationBarFrame.size, defaultHeight: navigationLayout.defaultContentHeight, additionalTopHeight: additionalTopHeight, additionalContentHeight: self.additionalNavigationBarHeight, additionalBackgroundHeight: additionalBackgroundHeight, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, appearsHidden: !self.displayNavigationBar, transition: transition)
             if !transition.isAnimated {
                 navigationBar.layer.removeAnimation(forKey: "bounds")
                 navigationBar.layer.removeAnimation(forKey: "position")
@@ -484,6 +610,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
             self.statusBar.frame = CGRect(origin: CGPoint(), size: CGSize(width: layout.size.width, height: 40.0))
         }
         
+        self.jerkgramSettingsBackdropView?.frame = CGRect(origin: .zero, size: layout.size)
         self.updateNavigationBarLayout(layout, transition: transition)
         
         if self.automaticallyControlPresentationContextLayout {
@@ -504,6 +631,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         self.view.autoresizingMask = []
         self.view.addSubview(self.statusBar.view)
         self.presentationContext.view = self.view
+        self.jerkgramRefreshSettingsSurface()
     }
     
     open func loadDisplayNode() {
@@ -598,6 +726,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     public func push(_ controller: ViewController) {
+        controller.jerkgramInheritSettingsSurface(from: self)
         (self.navigationController as? NavigationController)?.pushViewController(controller)
     }
     
@@ -611,6 +740,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     open func present(_ controller: ViewController, in context: PresentationContextType, with arguments: Any? = nil, blockInteraction: Bool = false, completion: @escaping () -> Void = {}) {
+        if !(controller is StandalonePresentableController) {
+            controller.jerkgramInheritSettingsSurface(from: self)
+        }
         if !(controller is StandalonePresentableController), case .window = context, let arguments = arguments as? ViewControllerPresentationArguments, case .modalSheet = arguments.presentationAnimation, self.navigationController != nil {
             controller.navigationPresentation = .modal
             self.push(controller)
@@ -642,6 +774,13 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         self.window?.addGlobalPortalHostView(sourceView: sourceView)
     }
     
+    open override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        self.jerkgramSettingsAppearanceVisible = true
+        GhostBaseGlassStyle.invalidateVisualEnvironment()
+        self.jerkgramRefreshSettingsSurface()
+    }
+
     open override func viewWillDisappear(_ animated: Bool) {
         self.activeInputViewCandidate = findCurrentResponder(self.view)
         
@@ -649,6 +788,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     open override func viewDidDisappear(_ animated: Bool) {
+        self.jerkgramSettingsAppearanceVisible = false
+        self.jerkgramSettingsBackdropView?.removeFromSuperview()
+        self.jerkgramSettingsDirtyRevision = GhostBaseGlassStyle.visualRevision
         self.activeInputView = self.activeInputViewCandidate
         
         super.viewDidDisappear(animated)
@@ -658,7 +800,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     open override func viewDidAppear(_ animated: Bool) {
+        self.jerkgramSettingsAppearanceVisible = true
         self.activeInputView = nil
+        self.jerkgramRefreshSettingsSurface()
         
         super.viewDidAppear(animated)
     }

@@ -15,7 +15,6 @@ import Markdown
 import PlainButtonComponent
 import TextFieldComponent
 
-private let languageRecognizer = NLLanguageRecognizer()
 
 enum LocalizedLanguageNameKind {
     case neutral
@@ -90,6 +89,8 @@ final class TextProcessingTranslateContentComponent: Component {
         }
         var isProcessingUpdated: ((Bool) -> Void)?
         
+        var localOnly: Bool = false
+        fileprivate(set) var localTranslationError = false
         fileprivate(set) var nonPremiumFloodTriggered: Bool = false {
             didSet {
                 if self.nonPremiumFloodTriggered != oldValue {
@@ -201,6 +202,8 @@ final class TextProcessingTranslateContentComponent: Component {
         private var isUpdating: Bool = false
         
         private var processDisposable: Disposable?
+        private var localTranslationGeneration = 0
+        private var policyObserver: NSObjectProtocol?
         
         override init(frame: CGRect) {
             self.separatorLayer = SimpleLayer()
@@ -211,6 +214,17 @@ final class TextProcessingTranslateContentComponent: Component {
             super.init(frame: frame)
             
             self.layer.addSublayer(self.separatorLayer)
+            self.policyObserver = NotificationCenter.default.addObserver(forName: Notification.Name("JerkgramTranslationPolicyChanged"), object: nil, queue: .main) { [weak self] notification in
+                guard let self, let component = self.component, case .translate = component.mode,
+                      notification.object as? Int64 == component.context.account.peerId.toInt64() else { return }
+                self.localTranslationGeneration += 1
+                self.processDisposable?.dispose()
+                self.processDisposable = nil
+                component.externalState.isProcessing = false
+                if let result = component.externalState.result { component.externalState.result = (result.language, nil, []) }
+                if self.window != nil { self.beginTranslationIfNecessary(reset: true, force: true) }
+                self.state?.updated(transition: .immediate)
+            }
         }
         
         required init?(coder: NSCoder) {
@@ -218,7 +232,21 @@ final class TextProcessingTranslateContentComponent: Component {
         }
         
         deinit {
+            if let policyObserver = self.policyObserver { NotificationCenter.default.removeObserver(policyObserver) }
             self.processDisposable?.dispose()
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let component = self.component, case .translate = component.mode, (jerkgramEnhancedTranslationEnabled(context: component.context) && (component.externalState.localOnly || !component.context.isPremium)) else { return }
+            if self.window == nil {
+                self.localTranslationGeneration += 1
+                self.processDisposable?.dispose()
+                self.processDisposable = nil
+                component.externalState.isProcessing = false
+            } else if component.externalState.result?.text == nil && !component.externalState.localTranslationError {
+                self.beginTranslationIfNecessary(reset: true, force: false)
+            }
         }
         
         private func beginTranslationIfNecessary(reset: Bool, force: Bool) {
@@ -227,6 +255,8 @@ final class TextProcessingTranslateContentComponent: Component {
             }
             
             if reset {
+                self.localTranslationGeneration += 1
+                component.externalState.localTranslationError = false
                 self.processDisposable?.dispose()
                 self.processDisposable = nil
                 if let result = component.externalState.result {
@@ -235,6 +265,47 @@ final class TextProcessingTranslateContentComponent: Component {
             }
             
             if let result = component.externalState.result, (result.text == nil || force), self.processDisposable == nil {
+                if case .translate = component.mode, (jerkgramEnhancedTranslationEnabled(context: component.context) && (component.externalState.localOnly || !component.context.isPremium)) {
+                    self.localTranslationGeneration += 1
+                    let generation = self.localTranslationGeneration
+                    let accountPeerId = component.context.account.peerId.toInt64()
+                    let policyGeneration = JerkgramTranslationSettings.generation(accountPeerId: accountPeerId)
+                    let source = component.inputText
+                    let target = result.language
+                    component.externalState.localTranslationError = false
+                    component.externalState.isProcessing = true
+                    let signal: Signal<(String, [MessageTextEntity])?, TelegramCore.TranslationError>
+                    if case let .plain(text, entities) = source {
+                        signal = jerkgramTranslateText(context: component.context, text: text, entities: entities, fromLang: component.externalState.sourceLanguage, toLang: target, localOnly: component.externalState.localOnly)
+                    } else {
+                        // Preserve rich originals; do not send unsupported content to cloud AI.
+                        signal = .fail(.generic)
+                    }
+                    self.processDisposable = (signal |> deliverOnMainQueue).start(next: { [weak self] translated in
+                        guard let self, self.localTranslationGeneration == generation,
+                              let component = self.component, component.inputText == source,
+                              component.externalState.result?.language == target,
+                              component.context.account.peerId.toInt64() == accountPeerId,
+                              JerkgramTranslationSettings.generation(accountPeerId: accountPeerId) == policyGeneration,
+                              jerkgramEnhancedTranslationEnabled(context: component.context) else { return }
+                        component.externalState.isProcessing = false
+                        if let translated {
+                            component.externalState.result = (target, .plain(text: translated.0, entities: translated.1), [])
+                        } else { component.externalState.localTranslationError = true }
+                        if !self.isUpdating { self.state?.updated(transition: .spring(duration: 0.4)) }
+                    }, error: { [weak self] _ in
+                        guard let self, self.localTranslationGeneration == generation,
+                              let component = self.component, component.inputText == source,
+                              component.externalState.result?.language == target,
+                              component.context.account.peerId.toInt64() == accountPeerId,
+                              JerkgramTranslationSettings.generation(accountPeerId: accountPeerId) == policyGeneration,
+                              jerkgramEnhancedTranslationEnabled(context: component.context) else { return }
+                        component.externalState.isProcessing = false
+                        component.externalState.localTranslationError = true
+                        if !self.isUpdating { self.state?.updated(transition: .spring(duration: 0.4)) }
+                    })
+                    return
+                }
                 let mappedMode: TelegramComposeAIMessageMode?
                 
                 switch component.mode {
@@ -339,7 +410,8 @@ final class TextProcessingTranslateContentComponent: Component {
                     plainText = instantPage.plainText
                 }
 
-                languageRecognizer.processString(plainText)
+                let languageRecognizer = NLLanguageRecognizer()
+                languageRecognizer.processString(String(plainText.prefix(256)))
                 let hypotheses = languageRecognizer.languageHypotheses(withMaximum: 3)
                 languageRecognizer.reset()
                         
@@ -353,6 +425,10 @@ final class TextProcessingTranslateContentComponent: Component {
             
             self.component = component
             self.state = state
+            if let previousComponent, previousComponent.inputText != component.inputText,
+               case .translate = component.mode, (jerkgramEnhancedTranslationEnabled(context: component.context) && (component.externalState.localOnly || !component.context.isPremium)) {
+                self.beginTranslationIfNecessary(reset: true, force: true)
+            }
             
             if component.externalState.result == nil {
                 switch component.mode {
@@ -473,6 +549,9 @@ final class TextProcessingTranslateContentComponent: Component {
             var fromTextMeasurementString: ComposedRichMessage?
             var toTextMeasurementString: ComposedRichMessage?
             var toText: ComposedRichMessage? = component.externalState.result?.text
+            if component.externalState.localTranslationError {
+                toText = .plain(text: component.strings.jerkgram.localTranslationUnavailable, entities: [])
+            }
             var isPreview = false
             if case let .preview(from, to, _, _, isRequesting) = component.mode {
                 isPreview = true
@@ -599,6 +678,26 @@ final class TextProcessingTranslateContentComponent: Component {
                 )))
             }
             
+            if case .translate = component.mode, (jerkgramEnhancedTranslationEnabled(context: component.context) && (component.externalState.localOnly || !component.context.isPremium)) {
+                if component.externalState.localTranslationError {
+                    let retry = "[\(component.strings.jerkgram.localTranslationRetry)](retry)"
+                    component.externalState.sectionFooter = AnyComponentWithIdentity(id: "local_translation_retry", component: AnyComponent(MultilineTextComponent(
+                        text: .markdown(text: retry, attributes: MarkdownAttributes(
+                            body: MarkdownAttributeSet(font: Font.regular(13.0), textColor: component.theme.list.freeTextColor),
+                            bold: MarkdownAttributeSet(font: Font.semibold(13.0), textColor: component.theme.list.freeTextColor),
+                            link: MarkdownAttributeSet(font: Font.regular(13.0), textColor: component.theme.list.itemAccentColor),
+                            linkAttribute: { url in ("URL", url) }
+                        )),
+                        highlightColor: component.theme.list.itemAccentColor.withAlphaComponent(0.1),
+                        highlightAction: { attributes in attributes[NSAttributedString.Key("URL")] == nil ? nil : NSAttributedString.Key("URL") },
+                        tapAction: { [weak self] _, _ in
+                            self?.beginTranslationIfNecessary(reset: true, force: true)
+                            self?.state?.updated(transition: .spring(duration: 0.4))
+                        }
+                    )))
+                } else { component.externalState.sectionFooter = nil }
+            }
+
             if case let .stylize(isComposeWithAI) = component.mode {
                 let styleSelectionSize = self.styleSelection.update(
                     transition: transition,
@@ -714,7 +813,7 @@ final class TextProcessingTranslateContentComponent: Component {
             
             var displayEmojify = false
             if isTranslate {
-                displayEmojify = true
+                displayEmojify = !(jerkgramEnhancedTranslationEnabled(context: component.context) && (component.externalState.localOnly || !component.context.isPremium))
             } else if case let .stylize(isComposeWithAI) = component.mode, !isComposeWithAI {
                 displayEmojify = true
             }
@@ -731,7 +830,7 @@ final class TextProcessingTranslateContentComponent: Component {
                         guard let self, let component = self.component, let result = component.externalState.result else {
                             return
                         }
-                        component.displayLanguageSelectionMenu(sourceView, result.language, component.externalState.style.id, true, { [weak self] language, style in
+                        component.displayLanguageSelectionMenu(sourceView, result.language, component.externalState.style.id, !(jerkgramEnhancedTranslationEnabled(context: component.context) && (component.externalState.localOnly || !component.context.isPremium)), { [weak self] language, style in
                             guard let self, let component = self.component else {
                                 return
                             }
@@ -748,7 +847,7 @@ final class TextProcessingTranslateContentComponent: Component {
                         })
                     } : nil,
                     isExpanded: nil,
-                    copyAction: component.copyAction != nil ? { [weak self] in
+                    copyAction: component.copyAction != nil && !component.externalState.localTranslationError ? { [weak self] in
                         guard let self, let component = self.component else {
                             return
                         }

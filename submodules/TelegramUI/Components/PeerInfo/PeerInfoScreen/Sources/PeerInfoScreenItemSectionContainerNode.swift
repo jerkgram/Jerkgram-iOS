@@ -6,10 +6,12 @@ import AccountContext
 import TelegramPresentationData
 
 final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
-    private let ghostBaseGlassEnabled: Bool
+    private var ghostBaseGlassEnabled: Bool
+    private var ghostBaseDarkBackgroundAlpha: CGFloat?
     private let backgroundNode: ASDisplayNode
     private let topSeparatorNode: ASDisplayNode
     private let bottomSeparatorNode: ASDisplayNode
+    private let bioContentMask = CAShapeLayer()
     private let itemContainerNode: ASDisplayNode
     
     private var currentItems: [PeerInfoScreenItem] = []
@@ -37,12 +39,17 @@ final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
         self.addSubnode(self.bottomSeparatorNode)
     }
     
+    func updateJerkgramVisualState(glassEnabled: Bool, darkBackgroundAlpha: CGFloat? = nil) {
+        self.ghostBaseGlassEnabled = glassEnabled
+        self.ghostBaseDarkBackgroundAlpha = darkBackgroundAlpha
+    }
+
     func update(context: AccountContext, width: CGFloat, safeInsets: UIEdgeInsets, hasCorners: Bool, presentationData: PresentationData, items: [PeerInfoScreenItem], transition: ContainedViewLayoutTransition) -> CGFloat {
         if self.ghostBaseGlassEnabled {
             let isDark = presentationData.theme.overallDarkAppearance
             self.backgroundNode.backgroundColor = UIColor(
                 white: isDark ? 0.0 : 1.0,
-                alpha: isDark ? 0.26 : 0.18
+                alpha: isDark ? (self.ghostBaseDarkBackgroundAlpha ?? 0.26) : 0.18
             )
             self.itemContainerNode.backgroundColor = .clear
             self.topSeparatorNode.backgroundColor = .clear
@@ -148,11 +155,38 @@ final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
         transition.updateFrame(node: self.itemContainerNode, frame: CGRect(origin: CGPoint(), size: CGSize(width: width, height: contentHeight)))
         transition.updateFrame(node: self.backgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: contentWithBackgroundOffset), size: CGSize(width: width, height: max(0.0, contentWithBackgroundHeight - contentWithBackgroundOffset))))
         if self.ghostBaseGlassEnabled {
-            let radius: CGFloat = hasCorners ? 16.0 : 0.0
+            let containsBio = items.contains(where: { $0 is PeerInfoScreenMultilineInputItem })
+            let radius: CGFloat = hasCorners ? (containsBio ? 26.0 : 16.0) : 0.0
             self.backgroundNode.cornerRadius = radius
             self.backgroundNode.clipsToBounds = hasCorners
-            self.itemContainerNode.cornerRadius = radius
+            if containsBio && hasCorners {
+                // The comment is outside the card. Round at the card's bottom,
+                // not at the bottom of the card plus its comment footer.
+                let cardBottom = max(contentWithBackgroundOffset, contentWithBackgroundHeight)
+                let path = UIBezierPath(roundedRect: CGRect(x: 0.0, y: contentWithBackgroundOffset, width: width, height: max(0.0, cardBottom - contentWithBackgroundOffset)), cornerRadius: radius)
+                if contentWithBackgroundOffset > 0.0 {
+                    path.append(UIBezierPath(rect: CGRect(x: 0.0, y: 0.0, width: width, height: contentWithBackgroundOffset)))
+                }
+                if contentHeight > cardBottom {
+                    path.append(UIBezierPath(rect: CGRect(x: 0.0, y: cardBottom, width: width, height: contentHeight - cardBottom)))
+                }
+                self.itemContainerNode.cornerRadius = 0.0
+                self.itemContainerNode.layer.mask = self.bioContentMask
+                transition.updatePath(layer: self.bioContentMask, path: path.cgPath)
+            } else {
+                self.itemContainerNode.layer.mask = nil
+                self.itemContainerNode.cornerRadius = radius
+            }
             self.itemContainerNode.clipsToBounds = hasCorners
+        } else {
+            // Release only our own glass geometry when returning to native fill.
+            if self.itemContainerNode.layer.mask === self.bioContentMask {
+                self.itemContainerNode.layer.mask = nil
+            }
+            self.itemContainerNode.cornerRadius = 0.0
+            self.itemContainerNode.clipsToBounds = true
+            self.backgroundNode.cornerRadius = 0.0
+            self.backgroundNode.clipsToBounds = false
         }
         transition.updateFrame(node: self.topSeparatorNode, frame: CGRect(origin: CGPoint(x: 0.0, y: contentWithBackgroundOffset - UIScreenPixel), size: CGSize(width: width, height: UIScreenPixel)))
         transition.updateFrame(node: self.bottomSeparatorNode, frame: CGRect(origin: CGPoint(x: 0.0, y: contentWithBackgroundHeight), size: CGSize(width: width, height: UIScreenPixel)))

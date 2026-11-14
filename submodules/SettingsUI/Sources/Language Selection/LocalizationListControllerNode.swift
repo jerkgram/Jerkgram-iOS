@@ -436,8 +436,8 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
         }
         
         let translationConfiguration = TranslationConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
-        var translateButtonAvailable = false
-        var chatTranslationAvailable = false
+        var translateButtonAvailable = jerkgramEnhancedTranslationEnabled(context: self.context)
+        var chatTranslationAvailable = jerkgramEnhancedTranslationEnabled(context: self.context)
         
         switch translationConfiguration.manual {
         case .enabled, .alternative:
@@ -478,6 +478,7 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
             }
             
             let isPremium = peer?.isPremium ?? false
+            let canTranslateEntireChat = isPremium || jerkgramEnhancedTranslationEnabled(context: strongSelf.context)
                         
             var entries: [LanguageListEntry] = []
             var activeLanguageCode: String?
@@ -491,7 +492,7 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
             var ignoredLanguages: [String] = []
             if let translationSettings = sharedData.entries[ApplicationSpecificSharedDataKeys.translationSettings]?.get(TranslationSettings.self) {
                 showTranslate = translationSettings.showTranslate
-                translateChats = isPremium ? translationSettings.translateChats : false
+                translateChats = canTranslateEntireChat ? translationSettings.translateChats : false
                 if let languages = translationSettings.ignoredLanguages {
                     ignoredLanguages = languages
                 } else {
@@ -512,7 +513,7 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
                     }
                 }
             } else {
-                translateChats = isPremium
+                translateChats = canTranslateEntireChat
                 if let activeLanguage = activeLanguageCode, supportedTranslationLanguages.contains(activeLanguage) {
                     ignoredLanguages = [activeLanguage]
                 }
@@ -533,7 +534,7 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
                         entries.append(.translate(text: presentationData.strings.Localization_ShowTranslate, value: showTranslate))
                     }
                     if chatTranslationAvailable {
-                        entries.append(.translateEntire(text: presentationData.strings.Localization_TranslateEntireChat, value: translateChats, locked: !isPremium))
+                        entries.append(.translateEntire(text: presentationData.strings.Localization_TranslateEntireChat, value: translateChats, locked: !canTranslateEntireChat))
                     }
                     
                     var value = ""
@@ -678,9 +679,11 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
         var listInsets = layout.insets(options: [.input])
         listInsets.top += navigationBarHeight
         if layout.size.width >= 320.0 {
-            let inset = max(16.0, floor((layout.size.width - 674.0) / 2.0))
-            listInsets.left += inset
-            listInsets.right += inset
+            // iPhone Duo: a side with a side strip keeps the list 16pt clear of it; without a strip both
+            // margins are today's.
+            let margins = layout.listSideMargins(base: max(16.0, floor((layout.size.width - 674.0) / 2.0)))
+            listInsets.left += margins.left
+            listInsets.right += margins.right
         } else {
             listInsets.left += layout.safeInsets.left
             listInsets.right += layout.safeInsets.right
@@ -792,7 +795,7 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
             guard let strongSelf = self else {
                 return
             }
-            let shareController = strongSelf.context.sharedContext.makeShareController(context: strongSelf.context, params: ShareControllerParams(subject: .url("https://t.me/setlanguage/\(info.languageCode)"), actionCompleted: { [weak self] in
+            let shareController = strongSelf.context.sharedContext.makeShareScreen(context: strongSelf.context, params: ShareControllerParams(subject: .url("https://t.me/setlanguage/\(info.languageCode)"), actionCompleted: { [weak self] in
                 if let strongSelf = self {
                     let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
                     strongSelf.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)

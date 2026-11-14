@@ -110,6 +110,25 @@ static VideoCaptureInterfaceObject *GetVideoCaptureAssumingSameThread(VideoCaptu
         : nullptr;
 }
 
+class CreateSessionDescriptionObserverImpl : public webrtc::CreateSessionDescriptionObserver {
+public:
+    CreateSessionDescriptionObserverImpl(std::function<void(std::unique_ptr<webrtc::SessionDescriptionInterface>)> onSuccess, std::function<void(webrtc::RTCError)> onFailure) :
+    _onSuccess(std::move(onSuccess)), _onFailure(std::move(onFailure)) {
+    }
+
+    void OnSuccess(webrtc::SessionDescriptionInterface *desc) override {
+        _onSuccess(std::unique_ptr<webrtc::SessionDescriptionInterface>(desc));
+    }
+
+    void OnFailure(webrtc::RTCError error) override {
+        _onFailure(std::move(error));
+    }
+
+private:
+    std::function<void(std::unique_ptr<webrtc::SessionDescriptionInterface>)> _onSuccess;
+    std::function<void(webrtc::RTCError)> _onFailure;
+};
+
 class SetSessionDescriptionObserver : public webrtc::SetLocalDescriptionObserverInterface, public webrtc::SetRemoteDescriptionObserverInterface {
 public:
     SetSessionDescriptionObserver(std::function<void(webrtc::RTCError)> &&completion) :
@@ -390,7 +409,19 @@ public:
             }
         }
 
-        _useAddTrack = getCustomParameterBool(_customParameters, "network_reference_use_addtrack");
+        // Default on since 2026-10-12. With AddTransceiver the callee's own audio
+        // transceiver is never associated with the caller's m=0, so every call
+        // needed a second offer/answer round before the callee could send
+        // (FindAvailableTransceiverToReceive requires created_by_addtrack). The
+        // flag now only opts back into the old shape for a comparison.
+        _useAddTrack = getCustomParameterBoolDefaultTrue(_customParameters, "network_reference_use_addtrack");
+#if TGCALLS_ALLOW_TEST_KNOBS
+        // CLI-only knob (compiled out of the app, see BUILD): offer straight from
+        // setVideoCapture() as every build before 2026-09-17 did, and as the
+        // Android build still does, so the harness can reproduce the late-camera
+        // failure chain against the backstop in sendLocalDescription().
+        _immediateCaptureRenegotiation = getCustomParameterBool(_customParameters, "network_reference_immediate_capture_renegotiation");
+#endif
 
         webrtc::field_trial::InitFieldTrialsFromString(
             "WebRTC-DataChannel-Dcsctp/Enabled/"
@@ -440,7 +471,8 @@ public:
                 [signalingDataEmitted = _signalingDataEmitted](const std::vector<uint8_t> &data) {
                     signalingDataEmitted(data);
                 },
-                _encryptionKey.isOutgoing
+                _encryptionKey.isOutgoing,
+                SignalingSctpConnection::Options::fromCustomParameters(_customParameters)
             );
         }
         if (!_signalingConnection) {
@@ -526,7 +558,7 @@ public:
 
                 if (strong->_didBeginNegotiation) {
                     if (strong->_encryptionKey.isOutgoing || strong->_peerConnection->remote_description()) {
-                        strong->sendLocalDescription();
+                        strong->requestRenegotiation();
                     }
                 } else {
                     RTC_LOG(LS_INFO) << "onRenegotiationNeeded: not sending local description";
@@ -663,7 +695,7 @@ public:
         _networkMonitorFactory = PlatformInterface::SharedInstance()->createNetworkMonitorFactory();
         _socketFactory = std::make_unique<rtc::BasicPacketSocketFactory>(_threads->getNetworkThread()->socketserver());
         _networkManager = std::make_unique<rtc::BasicNetworkManager>(_networkMonitorFactory.get(), _threads->getNetworkThread()->socketserver());
-        _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBool(_customParameters, "network_reflector_resolve_remote_candidate_ip"));
+        _relayPortFactory = std::make_unique<ReflectorRelayPortFactory>(_rtcServers, false, 0, _threads->getNetworkThread()->socketserver(), getCustomParameterBoolDefaultTrue(_customParameters, "network_reflector_resolve_remote_candidate_ip"));
         
         auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
 
@@ -804,26 +836,7 @@ public:
             webrtc::scoped_refptr<webrtc::AudioSourceInterface> audioSource = _peerConnectionFactory->CreateAudioSource(audioSourceOptions);
 
             webrtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack = _peerConnectionFactory->CreateAudioTrack("0", audioSource.get());
-            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = [&]() -> webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> {
-                if (!_useAddTrack) {
-                    return _peerConnection->AddTransceiver(audioTrack, transceiverInit);
-                }
-                // AddTrack sets created_by_addtrack(), which
-                // FindAvailableTransceiverToReceive requires before it will associate
-                // the callee's own transceiver with the offerer's m= section. Without
-                // it the callee mints a fresh recvonly transceiver and needs a second
-                // offer/answer before it can send.
-                auto senderOrError = _peerConnection->AddTrack(audioTrack, transceiverInit.stream_ids);
-                if (!senderOrError.ok()) {
-                    return senderOrError.MoveError();
-                }
-                for (const auto &transceiver : _peerConnection->GetTransceivers()) {
-                    if (transceiver->sender() == senderOrError.value()) {
-                        return transceiver;
-                    }
-                }
-                return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
-            }();
+            webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> audioTransceiverOrError = addSendTransceiver(audioTrack, transceiverInit);
             if (audioTransceiverOrError.ok()) {
                 _outgoingAudioTrack = audioTrack;
                 _outgoingAudioTransceiver = audioTransceiverOrError.value();
@@ -1090,6 +1103,29 @@ public:
         });
     }
 
+    // Adds a send transceiver for `track`. AddTrack (the default) sets
+    // created_by_addtrack(), which FindAvailableTransceiverToReceive requires
+    // before it will associate the callee's own transceiver with the m= section
+    // the caller offered; with AddTransceiver the callee answers recvonly and
+    // needs a second offer/answer round before it can send. A transceiver that
+    // has already sent is never reused by AddTrack (has_ever_been_used_to_send),
+    // so a camera toggled off and on still gets a fresh m-line either way.
+    webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> addSendTransceiver(webrtc::scoped_refptr<webrtc::MediaStreamTrackInterface> track, webrtc::RtpTransceiverInit const &transceiverInit) {
+        if (!_useAddTrack) {
+            return _peerConnection->AddTransceiver(track, transceiverInit);
+        }
+        auto senderOrError = _peerConnection->AddTrack(track, transceiverInit.stream_ids);
+        if (!senderOrError.ok()) {
+            return senderOrError.MoveError();
+        }
+        for (const auto &transceiver : _peerConnection->GetTransceivers()) {
+            if (transceiver->sender() == senderOrError.value()) {
+                return transceiver;
+            }
+        }
+        return webrtc::RTCError(webrtc::RTCErrorType::INTERNAL_ERROR, "AddTrack produced no matching transceiver");
+    }
+
     void sendLocalDescription() {
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
 
@@ -1124,12 +1160,49 @@ public:
             });
         }));
         RTC_LOG(LS_INFO) << "Calling SetLocalDescription";
+
+        if (_peerAnsweredAsDtlsClient && _peerConnection->signaling_state() == webrtc::PeerConnectionInterface::SignalingState::kHaveRemoteOffer) {
+            // We are answering an offer, and the peer has already answered one of
+            // ours with setup:active - a DTLS role it keeps for the whole call,
+            // whether or not we accepted that answer (we do not when our offer was
+            // replaced while it was in flight, "order of m-lines"). WebRTC answers
+            // actpass with active unless our own role is already server, which it
+            // is not after a rejected answer, so both sides would be DTLS clients:
+            // the handshake fails on a connected path (ContinueSSL error 1) and
+            // nothing recovers. Answer as the server instead.
+            //
+            // The role is set on the created description and the description is
+            // applied from the CreateAnswer callback itself, on the signaling
+            // thread, so no other operation (a further remote offer, say) can
+            // land between creating and applying the answer; that is the same
+            // atomicity the implicit SetLocalDescription(observer) has.
+            webrtc::scoped_refptr<CreateSessionDescriptionObserverImpl> createObserver(new rtc::RefCountedObject<CreateSessionDescriptionObserverImpl>([peerConnection = _peerConnection, observer](std::unique_ptr<webrtc::SessionDescriptionInterface> description) {
+                int changed = 0;
+                for (auto &transportInfo : description->description()->transport_infos()) {
+                    if (transportInfo.description.connection_role == cricket::CONNECTIONROLE_ACTIVE) {
+                        transportInfo.description.connection_role = cricket::CONNECTIONROLE_PASSIVE;
+                        changed++;
+                    }
+                }
+                if (changed > 0) {
+                    RTC_LOG(LS_INFO) << "answering with setup:passive: the peer already holds the DTLS client role";
+                }
+                peerConnection->SetLocalDescription(std::move(description), observer);
+            }, [observer](webrtc::RTCError error) {
+                observer->OnSetLocalDescriptionComplete(std::move(error));
+            }));
+            _peerConnection->CreateAnswer(createObserver.get(), webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
+            return;
+        }
+
         _peerConnection->SetLocalDescription(observer);
     }
 
     void requestRenegotiation() {
-        // A capture change wants a new offer, but only from a quiet stable
-        // state: never while our own offer is in flight, never while we owe or
+        // A capture change, or WebRTC's own OnRenegotiationNeeded (an ICE
+        // restart, say; it was raised in stable but runs a task later, when an
+        // exchange may be under way), wants a new offer, but only from a quiet
+        // stable state: never while our own offer is in flight, never while we owe or
         // await an answer, and on the callee never before the caller's first
         // offer has arrived - an unsolicited callee offer collides with it and
         // rolls it back, and a rollback of the very first offer orphans the
@@ -1393,6 +1466,9 @@ public:
         }
 
         _isSettingRemoteAnswerPending = type == "answer";
+        if (type == "answer" && sdp.find("a=setup:active") != std::string::npos) {
+            _peerAnsweredAsDtlsClient = true;
+        }
 
         const auto weak = std::weak_ptr<InstanceV2ReferenceImplInternal>(shared_from_this());
         webrtc::scoped_refptr<webrtc::SetRemoteDescriptionObserverInterface> observer(new rtc::RefCountedObject<SetSessionDescriptionObserver>([threads = _threads, weak, type](webrtc::RTCError error) {
@@ -1596,10 +1672,7 @@ public:
                     webrtc::RtpTransceiverInit transceiverInit;
                     transceiverInit.stream_ids = { "0" };
 
-                    // Deliberately still AddTransceiver: see network_reference_use_addtrack.
-                    // AddTrack reuse is once-only, so it would not cure m-line growth on
-                    // repeated camera toggles, and it would add a second variable to the A/B.
-                    webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> videoTransceiverOrError = _peerConnection->AddTransceiver(videoTrack, transceiverInit);
+                    webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>> videoTransceiverOrError = addSendTransceiver(videoTrack, transceiverInit);
                     if (videoTransceiverOrError.ok()) {
                         _outgoingVideoTrack = videoTrack;
                         _outgoingVideoTransceiver = videoTransceiverOrError.value();
@@ -1633,7 +1706,13 @@ public:
                             }
                         }
 
-                        _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
+                        // AddTrack may hand back the transceiver that already carries
+                        // the peer's incoming video (a recvonly m-line never used to
+                        // send); its codec list was negotiated by the peer's offer and
+                        // our sender-only preference list must not narrow it.
+                        if (!_outgoingVideoTransceiver->mid()) {
+                            _outgoingVideoTransceiver->SetCodecPreferences(codecCapabilities);
+                        }
 
                         webrtc::RtpParameters parameters = _outgoingVideoTransceiver->sender()->GetParameters();
                         if (parameters.encodings.empty()) {
@@ -1652,7 +1731,11 @@ public:
 
         if (_didBeginNegotiation) {
             sendMediaState();
-            requestRenegotiation();
+            if (_immediateCaptureRenegotiation) {
+                sendLocalDescription();
+            } else {
+                requestRenegotiation();
+            }
         }
     }
 
@@ -1904,11 +1987,15 @@ private:
     bool _didBeginNegotiation = false;
     bool _isMakingOffer = false;
     bool _isSettingRemoteAnswerPending = false;
-    // setVideoCapture() asked for a new offer while one was in flight, an
-    // answer was pending, or (callee) the first remote offer had not arrived.
+    // setVideoCapture() or OnRenegotiationNeeded asked for a new offer while one
+    // was in flight, an answer was pending, or (callee) the first remote offer
+    // had not arrived.
     bool _pendingRenegotiation = false;
     bool _isPerformingConfiguration = false;
     bool _useAddTrack = false;
+    bool _immediateCaptureRenegotiation = false;
+    // The peer answered one of our offers with setup:active (see sendLocalDescription).
+    bool _peerAnsweredAsDtlsClient = false;
     bool _useMtProto = false;
 
     webrtc::scoped_refptr<webrtc::AudioTrackInterface> _outgoingAudioTrack;

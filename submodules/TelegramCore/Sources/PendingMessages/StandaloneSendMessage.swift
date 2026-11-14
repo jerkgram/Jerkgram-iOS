@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
@@ -428,6 +428,7 @@ private func sendUploadedMessageContent(
         if peerId.namespace == Namespaces.Peer.SecretChat {
             return .fail(StandaloneSendMessagesError(peerId: peerId, reason: .none))
         } else if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
+            let botBridgeContext = botBridgeOperationContext(network: network, peer: peer, attributes: attributes, hasText: !text.isEmpty)
             var uniqueId: Int64 = 0
             var forwardSourceInfoAttribute: ForwardSourceInfoAttribute?
             var messageEntities: [Api.MessageEntity]?
@@ -509,7 +510,7 @@ private func sendUploadedMessageContent(
                 } else if let attribute = attribute as? SuggestedPostMessageAttribute {
                     suggestedPost = attribute.apiSuggestedPost(fixMinTime: Int32(Date().timeIntervalSince1970 + 10))
                 } else if let attribute = attribute as? RichTextMessageAttribute {
-                    apiRichMessage = attribute.apiInputRichMessage()
+                    apiRichMessage = attribute.apiInputRichMessage(users: apiInputRichMessageUsers(attribute.instantPage, peer: transaction.getPeer))
                     flags |= Int32(1 << 23)
                 }
             }
@@ -570,7 +571,7 @@ private func sendUploadedMessageContent(
                         if let _ = replyPollOption {
                             replyFlags |= 1 << 7
                         }
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption, quoteRich: nil))
                     } else if let replyToStoryId {
                         if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                             flags |= 1 << 0
@@ -584,7 +585,7 @@ private func sendUploadedMessageContent(
                         flags |= 1 << 22
                     }
                 
-                    sendMessageRequest = network.requestWithAdditionalInfo(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyTo: replyTo, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost, richMessage: apiRichMessage), info: .acknowledgement, tag: dependencyTag)
+                    sendMessageRequest = network.requestWithAdditionalInfo(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyTo: replyTo, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost, richMessage: apiRichMessage), info: .acknowledgement, tag: dependencyTag, diagnosticContext: botBridgeContext)
                 case let .media(inputMedia, text):
                     if bubbleUpEmojiOrStickersets {
                         flags |= Int32(1 << 15)
@@ -607,7 +608,7 @@ private func sendUploadedMessageContent(
                         if let _ = replyPollOption {
                             replyFlags |= 1 << 7
                         }
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption, quoteRich: nil))
                     } else if let replyToStoryId = replyToStoryId {
                         if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                             flags |= 1 << 0
@@ -619,7 +620,7 @@ private func sendUploadedMessageContent(
                         flags |= 1 << 22
                     }
                     
-                    sendMessageRequest = network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyTo: replyTo, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag)
+                    sendMessageRequest = network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyTo: replyTo, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag, diagnosticContext: botBridgeContext)
                     |> map(NetworkRequestResult.result)
                 case let .forward(sourceInfo):
                     if topMsgId != nil {
@@ -630,7 +631,7 @@ private func sendUploadedMessageContent(
                     }
                 
                     if let forwardSourceInfoAttribute = forwardSourceInfoAttribute, let sourcePeer = transaction.getPeer(forwardSourceInfoAttribute.messageId.peerId), let sourceInputPeer = apiInputPeer(sourcePeer) {
-                        sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: sourceInputPeer, id: [sourceInfo.messageId.id], randomId: [uniqueId], toPeer: inputPeer, topMsgId: topMsgId, replyTo: nil, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, videoTimestamp: videoTimestamp, allowPaidStars: allowPaidStars, suggestedPost: nil), tag: dependencyTag)
+                        sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: sourceInputPeer, id: [sourceInfo.messageId.id], randomId: [uniqueId], toPeer: inputPeer, topMsgId: topMsgId, replyTo: nil, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, videoTimestamp: videoTimestamp, allowPaidStars: allowPaidStars, suggestedPost: nil), tag: dependencyTag, diagnosticContext: botBridgeContext)
                         |> map(NetworkRequestResult.result)
                     } else {
                         sendMessageRequest = .fail(MTRpcError(errorCode: 400, errorDescription: "internal"))
@@ -651,7 +652,7 @@ private func sendUploadedMessageContent(
                         if monoforumPeerId != nil {
                             replyFlags |= 1 << 5
                         }
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil, pollOption: nil))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil, pollOption: nil, quoteRich: nil))
                     } else if let replyToStoryId = replyToStoryId {
                         if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                             flags |= 1 << 0
@@ -659,28 +660,28 @@ private func sendUploadedMessageContent(
                         }
                     }
 
-                    sendMessageRequest = network.request(Api.functions.messages.sendInlineBotResult(flags: flags, peer: inputPeer, replyTo: replyTo, randomId: uniqueId, queryId: chatContextResult.queryId, id: chatContextResult.id, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: nil, allowPaidStars: allowPaidStars))
+                    sendMessageRequest = network.request(Api.functions.messages.sendInlineBotResult(flags: flags, peer: inputPeer, replyTo: replyTo, randomId: uniqueId, queryId: chatContextResult.queryId, id: chatContextResult.id, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: nil, allowPaidStars: allowPaidStars), diagnosticContext: botBridgeContext)
                     |> map(NetworkRequestResult.result)
                 case .messageScreenshot:
                     let replyTo: Api.InputReplyTo
 
                     if let replyMessageId = replyMessageId {
                         let replyFlags: Int32 = 0
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                     } else if let replyToStoryId = replyToStoryId {
                         if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                             flags |= 1 << 0
                             replyTo = .inputReplyToStory(.init(peer: inputPeer, storyId: replyToStoryId.id))
                         } else {
                             let replyFlags: Int32 = 0
-                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                         }
                     } else {
                         let replyFlags: Int32 = 0
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                     }
                 
-                    sendMessageRequest = network.request(Api.functions.messages.sendScreenshotNotification(peer: inputPeer, replyTo: replyTo, randomId: uniqueId))
+                    sendMessageRequest = network.request(Api.functions.messages.sendScreenshotNotification(peer: inputPeer, replyTo: replyTo, randomId: uniqueId), diagnosticContext: botBridgeContext)
                     |> map(NetworkRequestResult.result)
                 case .secretMedia:
                     assertionFailure()
@@ -767,6 +768,11 @@ private func sendMessageContent(account: Account, peerId: PeerId, attributes: [M
             // Secret chats cannot be written to from here.
             return .fail(.generic)
         } else if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
+            let botBridgeHasText: Bool
+            switch content {
+            case let .text(text), let .media(_, text): botBridgeHasText = !text.isEmpty
+            }
+            let botBridgeContext = botBridgeOperationContext(network: account.network, peer: peer, attributes: attributes, hasText: botBridgeHasText)
             var uniqueId: Int64 = Int64.random(in: Int64.min ... Int64.max)
             //var forwardSourceInfoAttribute: ForwardSourceInfoAttribute?
             var messageEntities: [Api.MessageEntity]?
@@ -811,7 +817,7 @@ private func sendMessageContent(account: Account, peerId: PeerId, attributes: [M
                 } else if let attribute = attribute as? SuggestedPostMessageAttribute {
                     suggestedPost = attribute.apiSuggestedPost(fixMinTime: Int32(Date().timeIntervalSince1970 + 10))
                 } else if let attribute = attribute as? RichTextMessageAttribute {
-                    apiRichMessage = attribute.apiInputRichMessage()
+                    apiRichMessage = attribute.apiInputRichMessage(users: apiInputRichMessageUsers(attribute.instantPage, peer: transaction.getPeer))
                     flags |= Int32(1 << 23)
                 }
             }
@@ -838,7 +844,7 @@ private func sendMessageContent(account: Account, peerId: PeerId, attributes: [M
                         flags |= 1 << 0
 
                         let replyFlags: Int32 = 0
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                     } else if let replyToStoryId = replyToStoryId {
                         if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                             flags |= 1 << 0
@@ -846,10 +852,10 @@ private func sendMessageContent(account: Account, peerId: PeerId, attributes: [M
                         }
                     } else if let threadId {
                         flags |= 1 << 0
-                        replyTo = .inputReplyToMessage(.init(flags: flags, replyToMsgId: threadId, topMsgId: threadId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                        replyTo = .inputReplyToMessage(.init(flags: flags, replyToMsgId: threadId, topMsgId: threadId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                     }
 
-                    sendMessageRequest = account.network.request(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyTo: replyTo, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: nil, richMessage: apiRichMessage))
+                    sendMessageRequest = account.network.request(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyTo: replyTo, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: nil, richMessage: apiRichMessage), diagnosticContext: botBridgeContext)
                     |> mapError { _ -> StandaloneSendMessageError in
                         return .generic
                     }
@@ -859,7 +865,7 @@ private func sendMessageContent(account: Account, peerId: PeerId, attributes: [M
                         flags |= 1 << 0
 
                         let replyFlags: Int32 = 0
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                     } else if let replyToStoryId = replyToStoryId {
                         if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                             flags |= 1 << 0
@@ -867,14 +873,14 @@ private func sendMessageContent(account: Account, peerId: PeerId, attributes: [M
                         }
                     } else if let threadId {
                         flags |= 1 << 0
-                        replyTo = .inputReplyToMessage(.init(flags: flags, replyToMsgId: threadId, topMsgId: threadId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                        replyTo = .inputReplyToMessage(.init(flags: flags, replyToMsgId: threadId, topMsgId: threadId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                     }
                 
                     if suggestedPost != nil {
                         flags |= 1 << 22
                     }
                 
-                    sendMessageRequest = account.network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyTo: replyTo, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost))
+                    sendMessageRequest = account.network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyTo: replyTo, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: nil, effect: nil, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), diagnosticContext: botBridgeContext)
                     |> mapError { _ -> StandaloneSendMessageError in
                         return .generic
                     }

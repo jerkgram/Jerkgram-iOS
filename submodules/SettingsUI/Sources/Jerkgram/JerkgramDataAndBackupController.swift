@@ -6,6 +6,12 @@ import ItemListUI
 import AccountContext
 import JerkgramCore
 
+private final class JerkgramDataAndBackupListController: ItemListController {
+    deinit {
+        JerkgramWave1Instrumentation.add("liveDataBackupControllers", -1)
+    }
+}
+
 private struct JerkgramDataUIState: Equatable {
     var configuration: JerkgramRetentionConfiguration
 }
@@ -55,7 +61,7 @@ private enum JerkgramDataUIEntry: ItemListNodeEntry {
                 disclosureStyle: .none, action: nil
             )
         case let .action(_, _, title, value, action):
-            if action == "export" || action == "import" || action == "cleanup" {
+            if action == "export" || action == "import" || action == "cleanup" || action == "botbridgeDiagnostics" {
                 return ItemListActionItem(
                     presentationData: presentationData, title: title,
                     kind: .generic, alignment: .center,
@@ -117,17 +123,26 @@ private func jerkgramDataEntries(state: JerkgramDataUIState, strings: JerkgramSt
         .action(1, 1, strings.historyDuration, jerkgramDurationTitle(policy.historyDuration, strings: strings), "duration"),
         .action(1, 2, strings.recoveredMediaLimit, jerkgramMediaLimitTitle(policy.mediaByteLimit, strings: strings), "media"),
         .toggle(1, 3, strings.archiveSecretChats, "secretChats", policy.archiveSecretChats),
+
         .action(1, 4, strings.perChatRules, "", "perChat"),
         .action(1, 5, strings.cleanupExpired, "", "cleanup"),
+        .toggle(1, 6, strings.languageCode == "ru" ? "Оставлять чаты после исключения" : "Keep Chats After Removal", "excludedHistory", policy.retainExcludedChats),
     ]
     if policy.historyDuration == .forever && policy.mediaByteLimit == .unlimited {
-        entries.append(.info(1, strings.foreverUnlimitedWarning + " (Forever + Unlimited)"))
+        entries.append(.info(1, strings.foreverUnlimitedWarning))
     }
     entries.append(contentsOf: [
         .header(2, strings.backup),
-        .action(2, 1, strings.exportArchive, "Archive v2", "export"),
-        .action(2, 2, strings.importArchive, "Archive v2", "import"),
+        .action(2, 1, strings.exportArchive, strings.archiveFormat, "export"),
+        .action(2, 2, strings.importArchive, strings.archiveFormat, "import"),
         .info(2, strings.backupAccountHint(state.configuration.accountPeerId)),
+        .info(3, strings.languageCode == "ru" ? "После исключения чат остаётся в списке с уже загруженной перепиской и сведениями. Доступен только просмотр. Включите до исключения." : "After removal, keep the chat in the list with locally loaded history and information. Read-only. Enable before removal."),
+    ])
+    // Explicit experimental action is always reachable after bot account removal.
+    entries.append(contentsOf: [
+        .header(4, "BOTBRIDGE1"),
+        .action(4, 1, strings.languageCode == "ru" ? "Экспорт диагностики BOTBRIDGE1" : "Export BOTBRIDGE1 Diagnostics", "", "botbridgeDiagnostics"),
+        .info(4, strings.languageCode == "ru" ? "Обезличенная экспериментальная диагностика. Содержимое сообщений и общий журнал не включаются." : "Redacted experimental diagnostics. Message content and general logs are excluded."),
     ])
     return entries
 }
@@ -139,7 +154,7 @@ public func jerkgramDataAndBackupController(context: AccountContext) -> ViewCont
     )
     let stateValue = Atomic(value: initial)
     let statePromise = ValuePromise(initial, ignoreRepeated: true)
-    var controller: ItemListController?
+    weak var actionTarget: ItemListController?
 
     func update(_ transform: (inout JerkgramRetentionConfiguration) -> Void) {
         let value = stateValue.modify { current in
@@ -165,10 +180,12 @@ public func jerkgramDataAndBackupController(context: AccountContext) -> ViewCont
                 let current = configuration.accountPolicy.mediaByteLimit
                 configuration.accountPolicy.mediaByteLimit = mediaLimits[(mediaLimits.firstIndex(of: current)! + 1) % mediaLimits.count]
             }
+        case "botbridgeDiagnostics":
+            if let controller = actionTarget { jerkgramPresentBotBridgeDiagnosticExport(context: context, controller: controller) }
         case "export":
-            if let controller { jerkgramPresentArchiveExport(context: context, controller: controller) }
+            if let controller = actionTarget { jerkgramPresentArchiveExport(context: context, controller: controller) }
         case "import":
-            if let controller { jerkgramPresentArchiveImport(context: context, controller: controller) }
+            if let controller = actionTarget { jerkgramPresentArchiveImport(context: context, controller: controller) }
         case "perChat":
             let strings = context.sharedContext.currentPresentationData.with { $0.strings.jerkgram }
             let picker = context.sharedContext.makePeerSelectionController(
@@ -178,14 +195,14 @@ public func jerkgramDataAndBackupController(context: AccountContext) -> ViewCont
                     title: strings.perChatRules
                 )
             )
-            picker.peerSelected = { [weak picker, weak controller] peer, _ in
+            picker.peerSelected = { [weak picker, weak controller = actionTarget] peer, _ in
                 picker?.dismiss()
                 controller?.push(jerkgramChatRetentionController(
                     context: context,
                     chatPeerId: peer.id.toInt64()
                 ))
             }
-            controller?.push(picker)
+            actionTarget?.push(picker)
         case "cleanup":
             Queue.concurrentDefaultQueue().async {
                 let store = JerkgramJSONLEventStore(rootURL: jerkgramDataCoreRootURL())
@@ -209,6 +226,7 @@ public func jerkgramDataAndBackupController(context: AccountContext) -> ViewCont
             break
         }
     }, toggle: { action, value in
+        if action == "excludedHistory" { update { $0.accountPolicy.retainExcludedChats = value } }
         if action == "secretChats" {
             update { $0.accountPolicy.archiveSecretChats = value }
         }
@@ -232,8 +250,10 @@ public func jerkgramDataAndBackupController(context: AccountContext) -> ViewCont
             ), arguments as Any)
         )
     }
-    controller = ItemListController(context: context, state: signal)
-    return controller!
+    let controller = JerkgramDataAndBackupListController(context: context, state: signal)
+    JerkgramWave1Instrumentation.add("liveDataBackupControllers")
+    actionTarget = controller
+    return controller
 }
 
 private func jerkgramDataCoreRootURL() -> URL {

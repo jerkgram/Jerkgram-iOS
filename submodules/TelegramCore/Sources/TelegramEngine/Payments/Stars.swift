@@ -2,7 +2,7 @@ import Foundation
 import Postbox
 import MtProtoKit
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import FlatBuffers
 import FlatSerialization
 
@@ -676,7 +676,7 @@ private final class StarsContextImpl {
     
     private func updateState(_ state: StarsContext.State) {
         var state = state
-        if let ghostBaseBalance = ghostBaseLocalStarsVisualBalance() {
+        if !self.ton, let ghostBaseBalance = ghostBaseLocalStarsVisualBalance() {
             state.balance = ghostBaseBalance
         }
         self._state = state

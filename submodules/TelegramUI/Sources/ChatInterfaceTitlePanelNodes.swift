@@ -19,10 +19,17 @@ func titlePanelForChatPresentationInterfaceState(_ chatPresentationInterfaceStat
     if chatPresentationInterfaceState.renderedPeer?.peer?.restrictionText(platform: "ios", contentSettings: context.currentContentSettings.with { $0 }) != nil {
         return nil
     }
+    if chatPresentationInterfaceState.hasLocalSavedTags, chatPresentationInterfaceState.search == nil,
+        chatPresentationInterfaceState.interfaceState.selectionState == nil {
+        if let currentPanel = currentPanel as? ChatSearchTitleAccessoryPanelNode { return currentPanel }
+        let panel = ChatSearchTitleAccessoryPanelNode(context: context, chatLocation: chatPresentationInterfaceState.chatLocation)
+        panel.interfaceInteraction = interfaceInteraction
+        return panel
+    }
     if let search = chatPresentationInterfaceState.search {
         var matches = false
         if chatPresentationInterfaceState.chatLocation.peerId == context.account.peerId {
-            if chatPresentationInterfaceState.hasSearchTags || !chatPresentationInterfaceState.isPremium {
+            if chatPresentationInterfaceState.hasLocalSavedTags || chatPresentationInterfaceState.hasSearchTags || !chatPresentationInterfaceState.isPremium {
                 if case .everything = search.domain {
                     matches = true
                 } else if case .tag = search.domain, search.query.isEmpty {
@@ -87,7 +94,7 @@ func titlePanelForChatPresentationInterfaceState(_ chatPresentationInterfaceStat
                 case .pinnedMessage:
                     if case .pinnedMessages = chatPresentationInterfaceState.subject {
                     } else {
-                        if let pinnedMessage = chatPresentationInterfaceState.pinnedMessage, pinnedMessage.topMessageId != chatPresentationInterfaceState.interfaceState.messageActionsState.closedPinnedMessageId, !chatPresentationInterfaceState.pendingUnpinnedAllMessages {
+                        if chatPinnedPanelIsVisible(pinnedMessageTopId: chatPresentationInterfaceState.pinnedMessage?.topMessageId, skeletonId: chatPresentationInterfaceState.pinnedMessageSkeletonId, closedPinnedMessageId: chatPresentationInterfaceState.interfaceState.messageActionsState.closedPinnedMessageId, pendingUnpinnedAllMessages: chatPresentationInterfaceState.pendingUnpinnedAllMessages) {
                             selectedContext = context
                             break loop
                         }
@@ -291,7 +298,11 @@ func managingBotTitlePanelForChatPresentationInterfaceState(_ chatPresentationIn
     return panel
 }
 
-func headerTopicsPanelForChatPresentationInterfaceState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, controllerInteraction: ChatControllerInteraction?, interfaceInteraction: ChatPanelInterfaceInteraction?, force: Bool) -> AnyComponent<Empty>? {
+func headerTopicsPanelForChatPresentationInterfaceState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, controllerInteraction: ChatControllerInteraction?, interfaceInteraction: ChatPanelInterfaceInteraction?, force: Bool, sideListActive: Bool) -> AnyComponent<Empty>? {
+    // The side list replaces the strip.
+    if sideListActive {
+        return nil
+    }
     guard let peerId = chatPresentationInterfaceState.chatLocation.peerId else {
         return nil
     }
@@ -409,7 +420,11 @@ func headerTopicsPanelForChatPresentationInterfaceState(_ chatPresentationInterf
     return nil
 }
 
-func floatingTopicsPanelForChatPresentationInterfaceState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, controllerInteraction: ChatControllerInteraction?, interfaceInteraction: ChatPanelInterfaceInteraction?, force: Bool) -> ChatFloatingTopicsPanel? {
+func floatingTopicsPanelForChatPresentationInterfaceState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, controllerInteraction: ChatControllerInteraction?, interfaceInteraction: ChatPanelInterfaceInteraction?, force: Bool, sideListActive: Bool) -> ChatFloatingTopicsPanel? {
+    // The side list replaces the strip.
+    if sideListActive {
+        return nil
+    }
     guard let peerId = chatPresentationInterfaceState.chatLocation.peerId else {
         return nil
     }

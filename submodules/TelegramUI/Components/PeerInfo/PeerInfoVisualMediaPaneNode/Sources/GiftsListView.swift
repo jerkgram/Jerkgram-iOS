@@ -1,4 +1,3 @@
-import LottieSettings
 import AsyncDisplayKit
 import UIKit
 import Display
@@ -27,8 +26,10 @@ import UndoUI
 import LottieComponent
 import ButtonComponent
 import ContextUI
+import DustEffect
 
 final class GiftsListView: UIView {
+    var jerkgramGlassEnabled: Bool?
     private let context: AccountContext
     private let peerId: EnginePeer.Id
     let profileGifts: ProfileGiftsContext
@@ -70,6 +71,9 @@ final class GiftsListView: UIView {
             
     private var starsProducts: [ProfileGiftsContext.State.StarGift]?
     private var starsItems: [AnyHashable: (StarGiftReference?, ComponentView<Empty>)] = [:]
+    
+    private var deletedReferences = Set<StarGiftReference>()
+    private var dustEffectLayer: DustEffectLayer?
 
     private(set) var resultsAreEmpty = false
     private var filteredResultsAreEmpty = false
@@ -201,6 +205,12 @@ final class GiftsListView: UIView {
             
             let _ = self.updateScrolling(transition: isFirstTime ? .immediate : .easeInOut(duration: 0.25))
             
+            if !self.deletedReferences.isEmpty {
+                self.deletedReferences = self.deletedReferences.filter { reference in
+                    return state.gifts.contains(where: { $0.reference == reference })
+                }
+            }
+            
             Queue.mainQueue().justDispatch {
                 self.onContentUpdated()
             }
@@ -247,6 +257,41 @@ final class GiftsListView: UIView {
     
     required init?(coder: NSCoder) {
         preconditionFailure()
+    }
+    
+    /// VoiceOver: the gift tiles on screen plus one row beyond each edge (as ListView's edge rows), in reading order.
+    /// The list is laid out at full height inside the profile's scroll, so the tiles far below the screen are left out
+    /// until the profile scrolls them closer. Computed only when an accessibility client asks.
+    override var accessibilityElements: [Any]? {
+        get {
+            guard let window = self.window else {
+                return nil
+            }
+            let onScreen = self.convert(window.bounds, from: window)
+            var rowHeight: CGFloat = 0.0
+            for subview in self.subviews where subview.bounds.height > rowHeight {
+                rowHeight = subview.bounds.height
+            }
+            let listed = onScreen.insetBy(dx: 0.0, dy: -(rowHeight + 10.0))
+            var elements: [UIView] = []
+            for subview in self.subviews {
+                if subview.isHidden || subview.alpha < 0.01 || subview.accessibilityElementsHidden {
+                    continue
+                }
+                if !subview.frame.intersects(listed) {
+                    continue
+                }
+                elements.append(subview)
+            }
+            elements.sort(by: { lhs, rhs in
+                if abs(lhs.frame.minY - rhs.frame.minY) > 1.0 {
+                    return lhs.frame.minY < rhs.frame.minY
+                }
+                return lhs.frame.minX < rhs.frame.minX
+            })
+            return elements
+        } set(value) {
+        }
     }
     
     deinit {
@@ -403,6 +448,38 @@ final class GiftsListView: UIView {
         self.profileGifts.loadMore()
     }
     
+    private func playDustEffect(itemView: UIView) {
+        guard itemView.window != nil, !itemView.bounds.isEmpty else {
+            itemView.removeFromSuperview()
+            return
+        }
+        let renderer = UIGraphicsImageRenderer(bounds: itemView.bounds)
+        let image = renderer.image { _ in
+            itemView.drawHierarchy(in: itemView.bounds, afterScreenUpdates: false)
+        }
+        
+        let dustEffectLayer: DustEffectLayer
+        if let current = self.dustEffectLayer {
+            dustEffectLayer = current
+        } else {
+            dustEffectLayer = DustEffectLayer()
+            dustEffectLayer.frame = self.visibleBounds ?? self.bounds
+            dustEffectLayer.zPosition = 10.0
+            dustEffectLayer.becameEmpty = { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.dustEffectLayer?.removeFromSuperlayer()
+                self.dustEffectLayer = nil
+            }
+            self.dustEffectLayer = dustEffectLayer
+            self.layer.addSublayer(dustEffectLayer)
+        }
+        dustEffectLayer.addItem(frame: itemView.frame.offsetBy(dx: -dustEffectLayer.frame.minX, dy: -dustEffectLayer.frame.minY), image: image)
+        
+        itemView.removeFromSuperview()
+    }
+    
     @discardableResult
     private func updateScrolling(interactive: Bool = false, transition: ComponentTransition) -> CGFloat {
         guard let topInset = self.topInset, let visibleBounds = self.visibleBounds else {
@@ -426,23 +503,14 @@ final class GiftsListView: UIView {
             return 0.0
         }
         
-        let ghostBaseGlassEnabled =
-            GhostBaseProfileBlurSettings
-                .loadEnabled() != nil
+        let ghostBaseGlassEnabled = self.jerkgramGlassEnabled ?? (
+            GhostBaseGlassStyle.allowsTransparentSurfaces && GhostBaseProfileBlurSettings.loadEnabled() != nil
+        )
         
         let optionSpacing: CGFloat = 10.0
         let itemsSideInset = params.sideInset + 16.0
         
-        let defaultItemsInRow: Int
-        if params.size.width > params.size.height || params.size.width > 480.0 {
-            if case .tablet = params.deviceMetrics.type {
-                defaultItemsInRow = 4
-            } else {
-                defaultItemsInRow = 5
-            }
-        } else {
-            defaultItemsInRow = 3
-        }
+        let defaultItemsInRow = peerInfoGiftsItemsInRow(size: params.size, itemsSideInset: itemsSideInset, spacing: optionSpacing, isTablet: params.deviceMetrics.type == .tablet)
         let itemsInRow = max(1, min(starsProducts.count, defaultItemsInRow))
         let defaultOptionWidth = (params.size.width - itemsSideInset * 2.0 - optionSpacing * CGFloat(defaultItemsInRow - 1)) / CGFloat(defaultItemsInRow)
         let optionWidth = (params.size.width - itemsSideInset * 2.0 - optionSpacing * CGFloat(itemsInRow - 1)) / CGFloat(itemsInRow)
@@ -626,6 +694,13 @@ final class GiftsListView: UIView {
                                             }
                                             self.profileGifts.convertStarGift(reference: reference)
                                         },
+                                        deleteGift: { [weak self] reference in
+                                            guard let self else {
+                                                return
+                                            }
+                                            self.deletedReferences.insert(reference)
+                                            self.profileGifts.deleteStarGift(reference: reference)
+                                        },
                                         dropOriginalDetails: { [weak self] reference in
                                             guard let self else {
                                                 return .complete()
@@ -759,7 +834,10 @@ final class GiftsListView: UIView {
             if !validIds.contains(id) {
                 removeIds.append(id)
                 if let itemView = item.1.view {
-                    if !transition.animation.isImmediate {
+                    if let reference = item.0, self.deletedReferences.contains(reference) {
+                        self.deletedReferences.remove(reference)
+                        self.playDustEffect(itemView: itemView)
+                    } else if !transition.animation.isImmediate {
                         itemView.layer.animateScale(from: 1.0, to: 0.01, duration: 0.25, removeOnCompletion: false)
                         itemView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.25, removeOnCompletion: false, completion: { _ in
                             itemView.removeFromSuperview()
@@ -799,9 +877,11 @@ final class GiftsListView: UIView {
         
         let panelTransition = ComponentTransition.immediate
         let fadeTransition = ComponentTransition.easeInOut(duration: 0.25)
+        let contentTopInset = topInset
+        var emptyResultsMinY: CGFloat = 0.0
         if self.resultsAreEmpty && self.isCollection {
             let sideInset: CGFloat = 44.0
-            let topInset: CGFloat = 52.0
+            let topInset: CGFloat = contentTopInset
             let emptyTextSpacing: CGFloat = 18.0
             
             self.emptyResultsClippingView.isHidden = false
@@ -859,6 +939,7 @@ final class GiftsListView: UIView {
             let emptyTotalHeight = emptyResultsTitleSize.height + emptyTextSpacing + emptyResultsTextSize.height + emptyTextSpacing + emptyResultsActionSize.height
             let emptyTitleY = topInset + floorToScreenPixels((visibleHeight - topInset - bottomInset - emptyTotalHeight) / 2.0)
             
+            emptyResultsMinY = emptyTitleY
             let emptyResultsTitleFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((params.size.width - emptyResultsTitleSize.width) / 2.0), y: emptyTitleY), size: emptyResultsTitleSize)
             let emptyResultsTextFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((params.size.width - emptyResultsTextSize.width) / 2.0), y: emptyResultsTitleFrame.maxY + emptyTextSpacing), size: emptyResultsTextSize)
             let emptyResultsActionFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((params.size.width - emptyResultsActionSize.width) / 2.0), y: emptyResultsTextFrame.maxY + emptyTextSpacing), size: emptyResultsActionSize)
@@ -893,7 +974,7 @@ final class GiftsListView: UIView {
         } else if self.filteredResultsAreEmpty {
             let sideInset: CGFloat = 44.0
             let emptyAnimationHeight = 148.0
-            let topInset: CGFloat = 0.0
+            let topInset: CGFloat = contentTopInset
             let bottomInset: CGFloat = bottomPanelHeight
             let emptyAnimationSpacing: CGFloat = 20.0
             let emptyTextSpacing: CGFloat = 18.0
@@ -941,8 +1022,7 @@ final class GiftsListView: UIView {
             let emptyResultsAnimationSize = self.emptyResultsAnimation.update(
                 transition: .immediate,
                 component: AnyComponent(LottieComponent(
-                    content: LottieComponent.AppBundleContent(name: "ChatListNoResults"),
-                    lottieSettings: self.context.lottieRenderingSettings
+                    content: LottieComponent.AppBundleContent(name: "ChatListNoResults")
                 )),
                 environment: {},
                 containerSize: CGSize(width: emptyAnimationHeight, height: emptyAnimationHeight)
@@ -951,6 +1031,7 @@ final class GiftsListView: UIView {
             let emptyTotalHeight = emptyAnimationHeight + emptyAnimationSpacing + emptyResultsTitleSize.height + emptyResultsActionSize.height + emptyTextSpacing
             let emptyAnimationY = topInset + floorToScreenPixels((visibleHeight - topInset - bottomInset - emptyTotalHeight) / 2.0)
             
+            emptyResultsMinY = emptyAnimationY
             let emptyResultsAnimationFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((params.size.width - emptyResultsAnimationSize.width) / 2.0), y: emptyAnimationY), size: emptyResultsAnimationSize)
             
             let emptyResultsTitleFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((params.size.width - emptyResultsTitleSize.width) / 2.0), y: emptyResultsAnimationFrame.maxY + emptyAnimationSpacing), size: emptyResultsTitleSize)
@@ -1009,7 +1090,7 @@ final class GiftsListView: UIView {
             }
         }
         
-        fadeTransition.setAlpha(view: self.emptyResultsClippingView, alpha: visibleHeight < 300.0 ? 0.0 : 1.0)
+        fadeTransition.setAlpha(view: self.emptyResultsClippingView, alpha: emptyResultsMinY < contentTopInset ? 0.0 : 1.0)
         
         if self.peerId == self.context.account.peerId, !self.canSelect && !self.filteredResultsAreEmpty && self.profileGifts.collectionId == nil && self.emptyResultsClippingView.isHidden {
             let footerText: ComponentView<Empty>

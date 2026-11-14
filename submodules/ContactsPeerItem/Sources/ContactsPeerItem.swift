@@ -25,11 +25,24 @@ import TextFormat
 import TextNodeWithEntities
 
 public final class ContactItemHighlighting {
-    public var chatLocation: ChatLocation?
-    public var progress: CGFloat = 1.0
+    public private(set) var chatLocation: ChatLocation?
+    public private(set) var progress: CGFloat = 1.0
     
     public init(chatLocation: ChatLocation? = nil) {
         self.chatLocation = chatLocation
+    }
+    
+    /// `progress` describes the selection of `chatLocation`; without one there is nothing in progress (as the chat list
+    /// drops its highlighted location). The split view clears its selection with `(nil, 0.0)` when it goes away (folding
+    /// iPhone Duo); keeping that 0 gave every row `1 - 0` and left it gray.
+    public func update(chatLocation: ChatLocation?, progress: CGFloat) {
+        self.chatLocation = chatLocation
+        self.progress = chatLocation == nil ? 1.0 : progress
+    }
+    
+    /// The highlight alpha of a row: `isSelected` is a row being pressed or showing `chatLocation`.
+    public func highlightAlpha(isSelected: Bool) -> CGFloat {
+        return isSelected ? self.progress : 1.0 - self.progress
     }
 }
 
@@ -206,6 +219,8 @@ public class ContactsPeerItem: ItemListItem, ListViewItemWithHeader {
     let editing: ContactsPeerItemEditing
     let options: [ItemListPeerItemRevealOption]
     let additionalActions: [ContactsPeerItemAction]
+    /// In the chat side list's search: the highlight is an inset rounded plate in the search field's colour.
+    let isSideListStyle: Bool
     let actionIcon: ContactsPeerItemActionIcon
     let buttonAction: ContactsPeerItemButtonAction?
     let searchQuery: String?
@@ -273,6 +288,7 @@ public class ContactsPeerItem: ItemListItem, ListViewItemWithHeader {
         isAd: Bool = false,
         alwaysShowLastSeparator: Bool = false,
         hideBackground: Bool = false,
+        isSideListStyle: Bool = false,
         action: ((ContactsPeerItemPeer) -> Void)?,
         disabledAction: ((ContactsPeerItemPeer) -> Void)? = nil,
         setPeerIdWithRevealedOptions: ((EnginePeer.Id?, EnginePeer.Id?) -> Void)? = nil,
@@ -327,6 +343,7 @@ public class ContactsPeerItem: ItemListItem, ListViewItemWithHeader {
         self.openStories = openStories
         self.adButtonAction = adButtonAction
         self.visibilityUpdated = visibilityUpdated
+        self.isSideListStyle = isSideListStyle
         
         if let index = index {
             var letter: String = "#"
@@ -460,6 +477,8 @@ public class ContactsPeerItem: ItemListItem, ListViewItemWithHeader {
 private let avatarFont = avatarPlaceholderFont(size: 16.0)
 
 public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
+    /// What the VoiceOver custom actions were last built from (option keys and titles, the menu's presence).
+    private var accessibilityCustomActionsKey: [String]?
     private let backgroundNode: ASDisplayNode
     private let topSeparatorNode: ASDisplayNode
     public let separatorNode: ASDisplayNode
@@ -748,7 +767,6 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
         if let item = self.item, !item.enabled {
             reallyHighlighted = false
         }
-        let highlightProgress: CGFloat = self.item?.itemHighlighting?.progress ?? 1.0
         if let item = self.item {
             switch item.peer {
             case let .peer(_, chatPeer):
@@ -766,26 +784,22 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
             transition.updateTintColor(layer: avatarBadgeBackground.layer, color: item.presentationData.theme.list.itemHighlightedBackgroundColor.mixedWith(item.presentationData.theme.list.plainBackgroundColor, alpha: reallyHighlighted ? 0.0 : 1.0))
         }
         
-        if reallyHighlighted {
-            if self.highlightedBackgroundNode.supernode == nil {
-                self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: self.separatorNode)
-                self.highlightedBackgroundNode.alpha = 0.0
-            }
-            self.highlightedBackgroundNode.layer.removeAllAnimations()
-            transition.updateAlpha(layer: self.highlightedBackgroundNode.layer, alpha: highlightProgress)
-        } else {
-            if self.highlightedBackgroundNode.supernode != nil {
-                transition.updateAlpha(layer: self.highlightedBackgroundNode.layer, alpha: 1.0 - highlightProgress, completion: { [weak self] completed in
-                    if let strongSelf = self {
-                        if completed {
-                            strongSelf.highlightedBackgroundNode.removeFromSupernode()
-                        }
-                    }
-                })
-            }
+        let baseAlpha = self.item?.itemHighlighting?.highlightAlpha(isSelected: reallyHighlighted) ?? (reallyHighlighted ? 1.0 : 0.0)
+        self.updateRevealOptionsHighlightedBackgroundNode(self.highlightedBackgroundNode, isHighlighted: baseAlpha > 0, transition: transition, aboveNodes: [self.separatorNode, self.backgroundNode], highlightAlpha: baseAlpha)
+        if let item = self.item, let avatarBadgeBackground = self.avatarBadgeBackground {
+            transition.updateTintColor(layer: avatarBadgeBackground.layer, color: item.presentationData.theme.list.itemHighlightedBackgroundColor.mixedWith(item.presentationData.theme.list.plainBackgroundColor, alpha: 1.0 - self.highlightedBackgroundNode.alpha))
         }
     }
-    
+
+    override public func revealOptionsActiveStateUpdated(isActive: Bool, transition: ContainedViewLayoutTransition) {
+        super.revealOptionsActiveStateUpdated(isActive: isActive, transition: transition)
+        self.updateIsHighlighted(transition: transition)
+    }
+
+    override public func revealOptionsSurfaceUpdated(progress: CGFloat) {
+        self.updateIsHighlighted(transition: .immediate)
+    }
+
     public func asyncLayout() -> (_ item: ContactsPeerItem, _ params: ListViewItemLayoutParams, _ first: Bool, _ last: Bool, _ firstWithHeader: Bool, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> (Signal<Void, NoError>?, (Bool, Bool) -> Void)) {
         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
         let titleBadgeLayout = TextNode.asyncLayout(self.titleBadge?.textNode)
@@ -1255,7 +1269,7 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
                             color = item.presentationData.theme.list.itemDisclosureActions.accent.fillColor
                             textColor = item.presentationData.theme.list.itemDisclosureActions.accent.foregroundColor
                     }
-                    mappedOptions.append(ItemListRevealOption(key: index, title: option.title, icon: .none, color: color, iconColor: textColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor))
+                    mappedOptions.append(ItemListRevealOption(key: index, title: option.title, icon: .none, color: color, iconColor: textColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor, isDestructive: option.type == .destructive))
                     index += 1
                 }
                 peerRevealOptions = mappedOptions
@@ -1280,12 +1294,29 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
             
             return (nodeLayout, { [weak self] in
                 if let strongSelf = self {
+                    var revealBottomSeparatorIsHidden = false
+
                     return (.complete(), { [weak strongSelf] animated, synchronousLoads in
                         if let strongSelf = strongSelf {
                             strongSelf.layoutParams = (item, params, first, last, firstWithHeader, neighbors)
                             
                             strongSelf.accessibilityLabel = titleAttributedString?.string
-                            strongSelf.accessibilityValue = statusAttributedString?.string
+                            var accessibilityValue = statusAttributedString?.string ?? ""
+                            if let badge = item.badge, badge.count > 0 {
+                                // The unread badge: a number on screen, "7 unread messages" for VoiceOver.
+                                let unreadString = item.presentationData.strings.VoiceOver_Chat_UnreadMessages(badge.count)
+                                accessibilityValue = accessibilityValue.isEmpty ? unreadString : accessibilityValue + "\n" + unreadString
+                            }
+                            strongSelf.accessibilityValue = accessibilityValue.isEmpty ? nil : accessibilityValue
+                            var accessibilityTraits: UIAccessibilityTraits = [.button]
+                            if case .selectable(selected: true) = item.selection {
+                                accessibilityTraits.insert(.selected)
+                            }
+                            if !item.enabled {
+                                // Shown dimmed; activating it runs `disabledAction` (an explanation), as a tap does.
+                                accessibilityTraits.insert(.notEnabled)
+                            }
+                            strongSelf.accessibilityTraits = accessibilityTraits
                             
                             strongSelf.containerNode.frame = CGRect(origin: CGPoint(), size: nodeLayout.contentSize)
                             strongSelf.contextSourceNode.frame = CGRect(origin: CGPoint(), size: nodeLayout.contentSize)
@@ -1294,7 +1325,7 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
                             strongSelf.containerNode.isGestureEnabled = item.contextAction != nil
                             
                             let nonExtractedRect = CGRect(origin: CGPoint(), size: CGSize(width: nodeLayout.contentSize.width - 16.0, height: nodeLayout.contentSize.height))
-                            let extractedRect = CGRect(origin: CGPoint(), size: nodeLayout.contentSize).insetBy(dx: 16.0 + params.leftInset, dy: 0.0)
+                            let extractedRect = CGRect(origin: CGPoint(), size: nodeLayout.contentSize).inset(by: UIEdgeInsets(top: 0.0, left: 16.0 + params.leftInset, bottom: 0.0, right: 16.0 + params.rightInset))
                             strongSelf.extractedRect = extractedRect
                             strongSelf.nonExtractedRect = nonExtractedRect
                             
@@ -1412,6 +1443,9 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
                                 }
                                 strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
                             }
+                            if item.isSideListStyle {
+                                strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.rootController.navigationSearchBar.inputFillColor
+                            }
                             
                             let hasCorners = itemListHasRoundedBlockLayout(params)
                             var hasTopCorners = false
@@ -1429,10 +1463,10 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
                                 }
                                 switch neighbors.bottom {
                                 case .sameSection(false):
-                                    strongSelf.separatorNode.isHidden = false
+                                    revealBottomSeparatorIsHidden = false
                                 default:
                                     hasBottomCorners = true
-                                    strongSelf.separatorNode.isHidden = hasCorners
+                                    revealBottomSeparatorIsHidden = hasCorners
                                 }
                             }
                             
@@ -2012,33 +2046,82 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
                             }
                             
                             let separatorHeight = UIScreenPixel
-                            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
-                            
+                            // iPhone Duo: the part of one side's inset beyond the other's is the side strip; the
+                            // separator and the highlight stop at it instead of running under it. Equal insets give
+                            // today's frames.
+                            let stripExcessLeft = max(0.0, params.leftInset - params.rightInset)
+                            let stripExcessRight = max(0.0, params.rightInset - params.leftInset)
+                            let separatorRightInset: CGFloat = (item.systemStyle == .glass ? 16.0 : 0.0) + stripExcessRight
+
                             strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
-                            
+
                             var topHighlightInset: CGFloat = (first || !nodeLayout.insets.top.isZero) ? 0.0 : separatorHeight
                             topHighlightInset -= nodeLayout.insets.top
                             strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: nodeLayout.contentSize.width, height: nodeLayout.contentSize.height))
-                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
-                            strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -nodeLayout.insets.top - topHighlightInset), size: CGSize(width: nodeLayout.size.width, height: nodeLayout.size.height + topHighlightInset))
+                            strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.inset(by: UIEdgeInsets(top: 0.0, left: params.leftInset, bottom: 0.0, right: params.rightInset))
+                            var highlightedBackgroundFrame = CGRect(origin: CGPoint(x: stripExcessLeft, y: -nodeLayout.insets.top - topHighlightInset), size: CGSize(width: nodeLayout.size.width - stripExcessLeft - stripExcessRight, height: nodeLayout.size.height + topHighlightInset))
+                            if item.isSideListStyle {
+                                highlightedBackgroundFrame.origin.x = params.leftInset
+                                highlightedBackgroundFrame.size.width = nodeLayout.size.width - params.leftInset - params.rightInset
+                                strongSelf.revealOptionsHighlightedBackgroundRestingCornerRadius = 24.0
+                            }
+                            strongSelf.updateRevealOptionsHighlightedBackgroundFrame(strongSelf.highlightedBackgroundNode, frame: highlightedBackgroundFrame, aboveNodes: [strongSelf.separatorNode, strongSelf.backgroundNode])
                             strongSelf.topSeparatorNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(nodeLayout.insets.top, separatorHeight)), size: CGSize(width: nodeLayout.contentSize.width, height: separatorHeight))
                             strongSelf.separatorNode.frame = CGRect(origin: CGPoint(x: leftInset, y: nodeLayout.contentSize.height - separatorHeight), size: CGSize(width: max(0.0, nodeLayout.size.width - leftInset - separatorRightInset), height: separatorHeight))
                             if !item.alwaysShowLastSeparator && item.style != .blocks {
-                                strongSelf.separatorNode.isHidden = last
+                                revealBottomSeparatorIsHidden = last
                             }
                             
                             if let userPresence = userPresence {
                                 strongSelf.peerPresenceManager?.reset(presence: userPresence)
                             }
                             
+                            strongSelf.updateRevealOptionsSeparatorNodes(top: nil, bottom: strongSelf.separatorNode, topIsHidden: true, bottomIsHidden: revealBottomSeparatorIsHidden)
                             strongSelf.updateLayout(size: nodeLayout.contentSize, leftInset: params.leftInset, rightInset: params.rightInset)
                             
                             if item.editing.editable {
-                                strongSelf.setRevealOptions((left: [], right: [ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, iconColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor)]))
+                                strongSelf.setRevealOptions((left: [], right: [ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: item.presentationData.theme.list.itemDisclosureActions.destructive.fillColor, iconColor: item.presentationData.theme.list.itemDisclosureActions.destructive.foregroundColor, textColor: item.presentationData.theme.list.itemSecondaryTextColor, isDestructive: true)]))
                                 strongSelf.setRevealOptionsOpened(item.editing.revealed, animated: animated)
                             } else {
                                 strongSelf.setRevealOptions((left: [], right: peerRevealOptions))
                                 strongSelf.setRevealOptionsOpened(item.editing.revealed, animated: animated)
+                            }
+                            
+                            // The swipe options and the long-press menu as VoiceOver custom actions, through the same
+                            // paths as the gestures (`revealOptionSelected`, `secondaryAction`'s menu without a gesture).
+                            // Rebuilt only when the options or the menu's presence change.
+                            let revealOptions: [ItemListRevealOption]
+                            if item.editing.editable {
+                                revealOptions = [ItemListRevealOption(key: 0, title: item.presentationData.strings.Common_Delete, icon: .none, color: .clear, iconColor: .clear, textColor: .clear, isDestructive: true)]
+                            } else {
+                                revealOptions = peerRevealOptions
+                            }
+                            var accessibilityCustomActionsKey: [String] = revealOptions.map { "\($0.key):\($0.title)" }
+                            if item.contextAction != nil {
+                                accessibilityCustomActionsKey.append("more:\(item.presentationData.strings.Common_More)")
+                            }
+                            if strongSelf.accessibilityCustomActionsKey != accessibilityCustomActionsKey {
+                                strongSelf.accessibilityCustomActionsKey = accessibilityCustomActionsKey
+                                var accessibilityCustomActions: [UIAccessibilityCustomAction] = []
+                                for option in revealOptions {
+                                    accessibilityCustomActions.append(UIAccessibilityCustomAction(name: option.title, actionHandler: { [weak strongSelf] _ in
+                                        guard let strongSelf else {
+                                            return false
+                                        }
+                                        strongSelf.revealOptionSelected(option, animated: false)
+                                        return true
+                                    }))
+                                }
+                                if item.contextAction != nil {
+                                    accessibilityCustomActions.append(UIAccessibilityCustomAction(name: item.presentationData.strings.Common_More, actionHandler: { [weak strongSelf] _ in
+                                        guard let strongSelf, let contextAction = strongSelf.item?.contextAction else {
+                                            return false
+                                        }
+                                        contextAction(strongSelf.containerNode, nil, nil)
+                                        return true
+                                    }))
+                                }
+                                strongSelf.view.accessibilityCustomActions = accessibilityCustomActions.isEmpty ? nil : accessibilityCustomActions
                             }
                             
                             if item.isAd {
@@ -2056,7 +2139,7 @@ public class ContactsPeerItemNode: ItemListRevealOptionsItemNode {
                                     adButton.setImage(searchAdIcon, for: .normal)
                                 }
                                 if let icon = adButton.image(for: .normal) {
-                                    adButton.frame = CGRect(origin: CGPoint(x: params.width - 20.0 - icon.size.width - 13.0, y: 11.0), size: icon.size).insetBy(dx: -11.0, dy: -11.0)
+                                    adButton.frame = CGRect(origin: CGPoint(x: params.width - 20.0 - icon.size.width - 13.0 - max(0.0, params.rightInset - params.leftInset), y: 11.0), size: icon.size).insetBy(dx: -11.0, dy: -11.0)
                                 }
                             } else if let adButton = strongSelf.adButton {
                                 strongSelf.adButton = nil

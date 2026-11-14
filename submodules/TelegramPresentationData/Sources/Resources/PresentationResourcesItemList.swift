@@ -1,5 +1,7 @@
 import Foundation
 import UIKit
+import AsyncDisplayKit
+import ObjectiveC
 import Display
 import AppBundle
 
@@ -385,7 +387,7 @@ public struct PresentationResourcesItemList {
             return nil
         }
         if !top && !bottom {
-            return nil
+            return theme.list.blocksBackgroundColor.cgColor.alpha == 0.0 ? JerkgramListCornerSpec.middleImage : nil
         }
         let key: PresentationResourceKey
         if top && bottom {
@@ -396,8 +398,9 @@ public struct PresentationResourcesItemList {
             key = glass ? PresentationResourceKey.itemListCornersBottomGlass : PresentationResourceKey.itemListCornersBottom
         }
         return theme.image(key.rawValue, { theme in
-            return generateImage(CGSize(width: 56.0, height: 56.0), rotatedContext: { (size, context) in
+            let image = generateImage(CGSize(width: 56.0, height: 56.0), rotatedContext: { (size, context) in
                 let bounds = CGRect(origin: CGPoint(), size: size)
+                context.clear(bounds)
                 context.setFillColor(theme.list.blocksBackgroundColor.cgColor)
                 context.fill(bounds)
                 
@@ -417,7 +420,54 @@ public struct PresentationResourcesItemList {
                 context.addPath(path.cgPath)
                 context.fillPath()
             })?.stretchableImage(withLeftCapWidth: 28, topCapHeight: 28)
+            if let image, theme.list.blocksBackgroundColor.cgColor.alpha == 0.0 {
+                objc_setAssociatedObject(image, &jerkgramCornerImageKey, JerkgramListCornerSpec(top: top, bottom: bottom, radius: glass ? 26.0 : 11.0), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            }
+            return image
         })
+    }
+
+    public static func updateTranslucentRowCorners(_ node: ASDisplayNode) {
+        var imageNode: ASImageNode?
+        for child in node.subnodes ?? [] {
+            if let candidate = child as? ASImageNode, let image = candidate.image,
+               objc_getAssociatedObject(image, &jerkgramCornerImageKey) is JerkgramListCornerSpec {
+                imageNode = candidate
+                break
+            }
+        }
+        let previous = objc_getAssociatedObject(node, &jerkgramCornerLayerKey) as? JerkgramListCornerLayer
+        guard let imageNode, let image = imageNode.image,
+              let spec = objc_getAssociatedObject(image, &jerkgramCornerImageKey) as? JerkgramListCornerSpec else {
+            if let previous {
+                if node.layer.mask === previous.layer { node.layer.mask = nil }
+                previous.imageNode?.isHidden = false
+                objc_setAssociatedObject(node, &jerkgramCornerLayerKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            }
+            return
+        }
+        guard node.layer.mask == nil || node.layer.mask === previous?.layer else { return }
+        let owned = previous ?? JerkgramListCornerLayer()
+        let rect = imageNode.frame
+        guard rect.width > 0.0, rect.height > 0.0 else { return }
+        var corners: UIRectCorner = []
+        if spec.top { corners.formUnion([.topLeft, .topRight]) }
+        if spec.bottom { corners.formUnion([.bottomLeft, .bottomRight]) }
+        let key = "\(rect):\(node.bounds):\(spec.top):\(spec.bottom):\(spec.radius)"
+        if owned.geometry != key {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            owned.layer.frame = node.bounds
+            let localRect = rect.offsetBy(dx: -node.bounds.minX, dy: -node.bounds.minY)
+            owned.layer.path = UIBezierPath(roundedRect: localRect, byRoundingCorners: corners, cornerRadii: CGSize(width: spec.radius, height: spec.radius)).cgPath
+            owned.layer.fillColor = UIColor.black.cgColor
+            CATransaction.commit()
+            owned.geometry = key
+        }
+        owned.imageNode = imageNode
+        imageNode.isHidden = true
+        node.layer.mask = owned.layer
+        objc_setAssociatedObject(node, &jerkgramCornerLayerKey, owned, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
     
     public static func uploadToneIcon(_ theme: PresentationTheme) -> UIImage? {
@@ -525,4 +575,27 @@ public struct PresentationResourcesItemList {
             return generateTintedImage(image: UIImage(bundleImageName: "Premium/Stars/Stats"), color: .white)?.withRenderingMode(.alwaysTemplate)
         })
     }
+}
+
+private var jerkgramCornerImageKey: UInt8 = 0
+private var jerkgramCornerLayerKey: UInt8 = 0
+private final class JerkgramListCornerSpec {
+    static let middleImage: UIImage? = {
+        let image = generateImage(CGSize(width: 1.0, height: 1.0), rotatedContext: { size, context in
+            context.clear(CGRect(origin: .zero, size: size))
+        })
+        if let image {
+            objc_setAssociatedObject(image, &jerkgramCornerImageKey, JerkgramListCornerSpec(top: false, bottom: false, radius: 0.0), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+        return image
+    }()
+    let top: Bool
+    let bottom: Bool
+    let radius: CGFloat
+    init(top: Bool, bottom: Bool, radius: CGFloat) { self.top = top; self.bottom = bottom; self.radius = radius }
+}
+private final class JerkgramListCornerLayer {
+    let layer = CAShapeLayer()
+    weak var imageNode: ASImageNode?
+    var geometry = ""
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import Display
 import SwiftSignalKit
 import TelegramPresentationData
@@ -94,18 +95,74 @@ private enum JerkgramStarsEditorEntry: ItemListNodeEntry {
 private func jerkgramIsValidStarsDraft(_ text: String) -> Bool {
     let value = text.replacingOccurrences(of: ",", with: ".")
     guard value.count <= 20, value.filter({ $0 == "." }).count <= 1 else { return false }
-    return value.allSatisfy { $0.isNumber || $0 == "." || $0 == " " || $0 == "\u{00a0}" }
+    return value.allSatisfy { ("0"..."9").contains(String($0)) || $0 == "." || $0 == " " || $0 == "\u{00a0}" }
 }
 
 private func jerkgramSanitizeStarsDraft(_ text: String) -> String {
-    let compact = text.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\u{00a0}", with: "").replacingOccurrences(of: ",", with: ".")
-    guard jerkgramIsValidStarsDraft(compact) else { return "0" }
-    return compact.isEmpty ? "0" : compact
+    return text.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\u{00a0}", with: "").replacingOccurrences(of: ",", with: ".")
+}
+
+private func jerkgramSavedStarsAmount(_ text: String) -> String? {
+    let value = text.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\u{00a0}", with: "").replacingOccurrences(of: ",", with: ".")
+    guard !value.isEmpty, value.count <= 20, !value.hasSuffix("."),
+        value.allSatisfy({ ("0"..."9").contains(String($0)) || $0 == "." }) else { return nil }
+    let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count <= 2, let whole = Int64(parts[0].isEmpty ? "0" : String(parts[0])), whole >= 0 else { return nil }
+    return String(whole) + (parts.count == 2 ? "." + String(parts[1].prefix(9)) : "")
 }
 
 private func jerkgramStarsPreset(_ current: String, delta: Int64) -> String {
     let whole = current.split(separator: ".", maxSplits: 1).first.flatMap { Int64($0) } ?? 0
-    return String(max(0, whole + delta))
+    let (next, overflow) = whole.addingReportingOverflow(delta)
+    return String(overflow ? (delta >= 0 ? Int64.max : 0) : max(0, next))
+}
+
+private final class JerkgramStarsAutosave {
+    private var saved: JerkgramStarsDraftState
+    private var latest: JerkgramStarsDraftState
+    private var cancelPending: (() -> Void)?
+    private var generation: UInt64 = 0
+    private let commit: (JerkgramStarsDraftState) -> Void
+    private let schedule: (@escaping () -> Void) -> (() -> Void)
+
+    init(initial: JerkgramStarsDraftState, commit: @escaping (JerkgramStarsDraftState) -> Void, schedule: @escaping (@escaping () -> Void) -> (() -> Void) = { action in
+        let item = DispatchWorkItem(block: action)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+        return { item.cancel() }
+    }) {
+        self.saved = initial
+        self.latest = initial
+        self.commit = commit
+        self.schedule = schedule
+    }
+
+    func update(_ draft: JerkgramStarsDraftState) {
+        let next = JerkgramStarsDraftState(enabled: draft.enabled, amount: jerkgramSavedStarsAmount(draft.amount) ?? self.latest.amount)
+        guard next != self.latest else { return }
+        self.latest = next
+        self.generation &+= 1
+        self.cancelPending?()
+        self.cancelPending = nil
+        guard next != self.saved else { return }
+        let generation = self.generation
+        self.cancelPending = self.schedule { [weak self] in
+            guard let self, self.generation == generation else { return }
+            self.flush()
+        }
+    }
+
+    func flush() {
+        self.generation &+= 1
+        self.cancelPending?()
+        self.cancelPending = nil
+        guard self.latest != self.saved else { return }
+        self.saved = self.latest
+        self.commit(self.saved)
+    }
+
+    deinit {
+        self.flush()
+    }
 }
 
 private func jerkgramCommitStarsDraft(accountPeerId: Int64, state: JerkgramStarsDraftState) {
@@ -124,8 +181,11 @@ public func jerkgramStarsEditorController(context: AccountContext) -> ViewContro
     let defaults = UserDefaults.standard
     let initial = JerkgramStarsDraftState(
         enabled: (defaults.object(forKey: scopedEnabled) as? Bool) ?? defaults.bool(forKey: jerkgramStarsEnabledKey),
-        amount: (defaults.string(forKey: scopedAmount) ?? defaults.string(forKey: jerkgramStarsAmountKey)).map(jerkgramSanitizeStarsDraft) ?? "0"
+        amount: (defaults.string(forKey: scopedAmount) ?? defaults.string(forKey: jerkgramStarsAmountKey)).flatMap(jerkgramSavedStarsAmount) ?? "0"
     )
+    let autosave = JerkgramStarsAutosave(initial: initial, commit: { value in
+        jerkgramCommitStarsDraft(accountPeerId: accountPeerId, state: value)
+    })
     let stateValue = Atomic(value: initial)
     let statePromise = ValuePromise(initial, ignoreRepeated: true)
     var controller: ItemListController?
@@ -137,6 +197,7 @@ public func jerkgramStarsEditorController(context: AccountContext) -> ViewContro
             return current
         }
         statePromise.set(value)
+        autosave.update(value)
     }
 
     let arguments = JerkgramStarsEditorArguments(
@@ -151,14 +212,6 @@ public func jerkgramStarsEditorController(context: AccountContext) -> ViewContro
         let strings = presentationData.strings.jerkgram
         let amount = jerkgramSanitizeStarsDraft(state.amount)
         let status = strings.starsOverrideSummary(state.enabled, amount)
-        let dirty = state != initial
-        let leftNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Cancel), style: .regular, enabled: true, action: {
-            let _ = (controller?.navigationController as? NavigationController)?.popViewController(animated: true)
-        })
-        let rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Save), style: .bold, enabled: dirty, action: {
-            jerkgramCommitStarsDraft(accountPeerId: accountPeerId, state: stateValue.with { $0 })
-            let _ = (controller?.navigationController as? NavigationController)?.popViewController(animated: true)
-        })
         let entries: [JerkgramStarsEditorEntry] = [
             .preview(1, amount, status),
             .toggle(2, strings.localStarsBalance, state.enabled),
@@ -171,8 +224,8 @@ public func jerkgramStarsEditorController(context: AccountContext) -> ViewContro
         return (
             ItemListControllerState(
                 presentationData: ItemListPresentationData(presentationData), title: .text(strings.starsBalance),
-                leftNavigationButton: leftNavigationButton, rightNavigationButton: rightNavigationButton,
-                backNavigationButton: nil
+                leftNavigationButton: nil, rightNavigationButton: nil,
+                backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
             ),
             (ItemListNodeState(
                 presentationData: ItemListPresentationData(presentationData), entries: entries,
@@ -181,5 +234,6 @@ public func jerkgramStarsEditorController(context: AccountContext) -> ViewContro
         )
     }
     controller = ItemListController(context: context, state: signal)
+    controller?.willDisappear = { _ in autosave.flush() }
     return controller!
 }

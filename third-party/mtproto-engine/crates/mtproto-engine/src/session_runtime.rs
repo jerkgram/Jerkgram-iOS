@@ -10,7 +10,9 @@ use mtproto_core::msg_id::msg_id_for_time;
 use mtproto_core::rpc::{
     ApiEnvironment, PendingRequest, RequestId, RpcClient, RpcEvent, RpcRequest, SessionRole, Verification,
 };
-use mtproto_core::session::{Now, SEND_QUEUE_STUCK_AFTER, ServerSalt, Session, SessionConfig, SessionError};
+use mtproto_core::session::{
+    Now, QueryTrace, SEND_QUEUE_STUCK_AFTER, ServerSalt, Session, SessionConfig, SessionError,
+};
 use mtproto_core::tl::mtproto::ReqPqMulti;
 use mtproto_core::tl::{TlWrite, Writer, ids};
 use mtproto_core::transport::{
@@ -31,6 +33,8 @@ mod http;
 use http::{AutoState, HttpState};
 #[path = "session_carrier.rs"]
 mod carrier;
+#[path = "session_drain.rs"]
+mod drain;
 #[path = "session_pfs.rs"]
 mod pfs;
 #[path = "session_websocket.rs"]
@@ -136,7 +140,6 @@ struct ResolvedHost {
 }
 
 struct FrameWatch {
-    length: usize,
     started_at: f64,
 }
 
@@ -224,6 +227,8 @@ pub struct SessionRuntime {
     network_generation: u64,
     /// Streams the host opens (Telegram Web's HTTPS endpoint), and how their news reaches the worker.
     host_streams: Option<(Arc<crate::host_stream::HostStreams>, Arc<crate::host_stream::WorkerSignal>)>,
+    /// Set while the requests go back to the host for another session (`drain`).
+    drain: Option<drain::DrainState>,
 }
 
 impl SessionRuntime {
@@ -291,9 +296,11 @@ impl SessionRuntime {
             hints: Arc::default(),
             network_generation: 0,
             host_streams: None,
+            drain: None,
             setup,
         };
-        if let Some(pfs) = runtime.setup.pfs.take().filter(|pfs| !pfs.public_keys.is_empty()) {
+        let cdn = runtime.setup.role == SessionRole::Cdn;
+        if let Some(pfs) = runtime.setup.pfs.take().filter(|pfs| !pfs.public_keys.is_empty() && !cdn) {
             let perm = runtime.setup.auth_key.take();
             runtime.pfs = Some(PfsState::new(pfs, perm));
             runtime.setup.key_generation = None;
@@ -410,7 +417,7 @@ impl SessionRuntime {
 
     /// Drops the session's client: its requests wait in `queued` for the next one, ahead of anything
     /// queued since, and what it still held for the host goes out with the next pump.
-    fn retire_rpc(&mut self) {
+    fn retire_rpc(&mut self, now: Now) {
         let Some(mut rpc) = self.rpc.take() else {
             return;
         };
@@ -423,6 +430,12 @@ impl SessionRuntime {
                     | RpcEvent::ConnectionShouldReset
             )
         }));
+        if self.is_draining() {
+            let mut pending = rpc.into_pending();
+            pending.extend(self.queued.drain(..));
+            self.release_retired(pending, now);
+            return;
+        }
         let mut pending: VecDeque<PendingRequest> = rpc.into_pending().into();
         pending.extend(self.queued.drain(..));
         self.queued = pending;
@@ -457,6 +470,10 @@ impl SessionRuntime {
 
     pub fn send(&mut self, request: RpcRequest, now: Now) {
         self.last_activity_at = now.mono;
+        if self.is_draining() {
+            self.undelivered.push(RpcEvent::Released { id: request.id, may_have_run: false, retry_after: 0.0 });
+            return;
+        }
         if request.invoke_after.is_some_and(|after| self.rotated.contains(&after)) {
             self.note_rotated(request.id);
             self.undelivered.push(RpcEvent::Failed {
@@ -567,7 +584,7 @@ impl SessionRuntime {
                     pfs.forget_permanent_key();
                 }
                 self.close_connection(registry, now, false);
-                self.retire_rpc();
+                self.retire_rpc(now);
                 self.reported_key_required = false;
             }
         }
@@ -651,7 +668,13 @@ impl SessionRuntime {
         callbacks: &Arc<dyn EngineCallbacks>,
         rng: &mut OsRandom,
     ) {
-        if self.pfs.is_some() || setup.public_keys.is_empty() {
+        if setup.public_keys.is_empty() || self.setup.role == SessionRole::Cdn {
+            return;
+        }
+        if let Some(pfs) = &mut self.pfs {
+            if pfs.take_over_key_check(setup) {
+                pfs.replace_temporary_key_now(now);
+            }
             return;
         }
         let perm = self.rpc.as_ref().map(|rpc| AuthKeyMaterial {
@@ -782,6 +805,7 @@ impl SessionRuntime {
 
     pub fn set_time_difference(&mut self, difference: f64) {
         self.setup.time_difference = difference;
+        self.reported_time_difference = Some(difference);
         if let Some(rpc) = &mut self.rpc {
             rpc.session_mut().set_time_difference(difference);
         }
@@ -1676,6 +1700,7 @@ impl SessionRuntime {
         }
         let mut more_readable = false;
         let mut failure: Option<ConnectionError> = None;
+        let mut processing_failed = false;
         if writable {
             let result = self.connection.as_mut().expect("connection").handle_writable(registry, now.mono);
             if self.racer.is_some()
@@ -1707,6 +1732,7 @@ impl SessionRuntime {
                         }
                         if let Err(error) = self.process_incoming(registry, now, callbacks, rng) {
                             failure = Some(error);
+                            processing_failed = true;
                             break;
                         }
                         if self.frame_is_progressing(now) {
@@ -1734,10 +1760,12 @@ impl SessionRuntime {
             if let Err(error) = self.process_incoming(registry, now, callbacks, rng) {
                 failure = Some(error);
             }
-        } else if matches!(
-            failure,
-            Some(ConnectionError::Closed) | Some(ConnectionError::Io(_)) | Some(ConnectionError::WebSocket(_))
-        ) && let Err(error) = self.process_incoming(registry, now, callbacks, rng)
+        } else if !processing_failed
+            && matches!(
+                failure,
+                Some(ConnectionError::Closed) | Some(ConnectionError::Io(_)) | Some(ConnectionError::WebSocket(_))
+            )
+            && let Err(error) = self.process_incoming(registry, now, callbacks, rng)
         {
             failure = Some(error);
         }
@@ -1797,20 +1825,18 @@ impl SessionRuntime {
         more_readable
     }
 
+    /// A partial frame is arriving fast enough to count as the connection being alive. The grace runs
+    /// from the first partial frame after the last packet that proved anything (a fresh packet, a
+    /// matched quick ack, a handshake step): frames that complete without one (empty frames, unknown
+    /// quick acks, packets of another session replayed) do not start it again, or a chain of them
+    /// would hold a dead connection for ever.
     fn frame_is_progressing(&mut self, now: Now) -> bool {
-        let Some((length, received)) = self
-            .connection
-            .as_ref()
-            .and_then(Connection::pending_frame_head)
-            .map(|(length, head)| (length, head.len()))
+        let Some(received) =
+            self.connection.as_ref().and_then(Connection::pending_frame_head).map(|(_, head)| head.len())
         else {
-            self.frame_watch = None;
             return false;
         };
-        let watch = self.frame_watch.get_or_insert(FrameWatch { length, started_at: now.mono });
-        if watch.length != length {
-            *watch = FrameWatch { length, started_at: now.mono };
-        }
+        let watch = self.frame_watch.get_or_insert(FrameWatch { started_at: now.mono });
         let elapsed = now.mono - watch.started_at;
         elapsed <= FRAME_PROGRESS_GRACE || received as f64 >= elapsed * FRAME_MIN_RATE
     }
@@ -1886,11 +1912,11 @@ impl SessionRuntime {
                 break;
             };
             self.progress = None;
-            self.frame_watch = None;
             match incoming {
                 Incoming::Packet(packet) => {
                     if self.handshake.is_some() {
                         let installed = self.on_handshake_packet(&packet, now, callbacks, rng)?;
+                        self.frame_watch = None;
                         self.note_server_heard(now);
                         if installed && let Some(rpc) = &mut self.rpc {
                             rpc.connection_opened(now);
@@ -1907,6 +1933,7 @@ impl SessionRuntime {
                         connection.last_progress_at = now.mono;
                     }
                     if fresh {
+                        self.frame_watch = None;
                         self.clear_suspicion(registry);
                         if self.auto.on_websocket {
                             self.note_websocket_answered();
@@ -1927,7 +1954,8 @@ impl SessionRuntime {
                                 );
                             }
                             self.note_server_heard(now);
-                            if let Some(connection) = &mut self.connection
+                            if fresh
+                                && let Some(connection) = &mut self.connection
                                 && !connection.received_packet
                             {
                                 connection.received_packet = true;
@@ -1940,7 +1968,9 @@ impl SessionRuntime {
                                     self.drop_racer(registry);
                                 }
                             }
-                            self.timeout_fired = false;
+                            if fresh {
+                                self.timeout_fired = false;
+                            }
                         }
                         Err(SessionError::ForeignSession)
                         | Err(SessionError::TooOld)
@@ -1959,6 +1989,7 @@ impl SessionRuntime {
                         if let Some(connection) = &mut self.connection {
                             connection.last_progress_at = now.mono;
                         }
+                        self.frame_watch = None;
                         self.clear_suspicion(registry);
                     }
                     self.pump_rpc_events(now, registry, callbacks);
@@ -1992,6 +2023,7 @@ impl SessionRuntime {
                 Ok(false)
             }
             Ok(HandshakeStep::Done(result)) => {
+                let dc_id = handshake.datacenter_id();
                 self.handshake = None;
                 self.handshake_started_at = None;
                 self.handshake_failures = 0;
@@ -2003,15 +2035,18 @@ impl SessionRuntime {
                 let expires_at = result.expires_at;
                 let server_time = now.unix + result.time_difference;
                 self.setup.time_difference = result.time_difference;
-                callbacks.on_event(
-                    self.handle,
-                    EngineEvent::AuthKeyCreated {
-                        key: result.auth_key.bytes().to_vec(),
-                        salt: result.server_salt,
-                        time_difference: result.time_difference,
-                        expires_at,
-                    },
-                );
+                if self.reports_created_key(expires_at.is_some()) {
+                    callbacks.on_event(
+                        self.handle,
+                        EngineEvent::AuthKeyCreated {
+                            key: result.auth_key.bytes().to_vec().into(),
+                            salt: result.server_salt,
+                            time_difference: result.time_difference,
+                            expires_at,
+                            dc_id,
+                        },
+                    );
+                }
                 let material = AuthKeyMaterial {
                     key: result.auth_key,
                     salts: vec![ServerSalt {
@@ -2064,12 +2099,20 @@ impl SessionRuntime {
                 }
                 self.key_rejections = 0;
                 let key_id = self.rpc.as_ref().map(|rpc| rpc.session().auth_key_id());
-                if !self.forget_temporary_key(now) {
+                if self.forget_temporary_key(now) {
+                    if let Some(key_id) = key_id {
+                        self.drop_temporary_key(key_id, callbacks);
+                    }
+                } else if self.check_permanent_key_with_pfs() {
+                    self.log(
+                        callbacks,
+                        LogLevel::Warning,
+                        "-404 again on a fresh connection; checking the permanent key by binding a temporary key to it",
+                    );
+                } else {
                     callbacks.on_event(self.handle, EngineEvent::AuthKeyInvalid { code });
-                } else if let Some(key_id) = key_id {
-                    self.drop_temporary_key(key_id, callbacks);
                 }
-                self.retire_rpc();
+                self.retire_rpc(now);
                 self.close_reason = Some(CloseReason::ServerRejected);
             }
             TransportErrorKind::Flood => {
@@ -2118,7 +2161,37 @@ impl SessionRuntime {
         }
     }
 
+    fn log_query_trace(&mut self, callbacks: &Arc<dyn EngineCallbacks>) {
+        let Some(rpc) = &mut self.rpc else {
+            return;
+        };
+        let trace = rpc.session_mut().take_trace();
+        for entry in trace {
+            let line = match entry {
+                QueryTrace::Sent { id, msg_id, seq_no, container_id, previous_msg_id, again } => {
+                    let container = if container_id != 0 { format!(" in {container_id:#x}") } else { String::new() };
+                    let history = if again {
+                        " again".to_string()
+                    } else if previous_msg_id != 0 {
+                        format!(" (was {previous_msg_id:#x})")
+                    } else {
+                        String::new()
+                    };
+                    format!("msg #{} msg_id={msg_id:#x} seq={seq_no}{container}{history}", id.0)
+                }
+                QueryTrace::Answered { id, msg_id, response_msg_id, error: Some((code, message)) } => {
+                    format!("#{} msg_id={msg_id:#x} -> {code} {message} (answer {response_msg_id:#x})", id.0)
+                }
+                QueryTrace::Answered { id, msg_id, response_msg_id, error: None } => {
+                    format!("#{} msg_id={msg_id:#x} -> result (answer {response_msg_id:#x})", id.0)
+                }
+            };
+            self.log(callbacks, LogLevel::Info, &line);
+        }
+    }
+
     fn pump_rpc_events(&mut self, now: Now, registry: &Registry, callbacks: &Arc<dyn EngineCallbacks>) {
+        self.log_query_trace(callbacks);
         let mut reset_connection = false;
         let mut events = std::mem::take(&mut self.undelivered);
         events.extend(self.rpc.as_mut().map(RpcClient::drain_events).unwrap_or_default());
@@ -2136,6 +2209,7 @@ impl SessionRuntime {
             }
             if let (RpcEvent::TemporaryKeyBound, Some(key_id), Some(pfs)) = (&event, current_key, self.pfs.as_ref())
                 && let Some(expires_at) = pfs.temp_expires_at
+                && self.reports_created_key(true)
             {
                 callbacks.on_event(
                     self.handle,
@@ -2156,6 +2230,9 @@ impl SessionRuntime {
                     }
                     RpcEvent::TimeDifferenceUpdated { difference } => {
                         self.setup.time_difference = *difference;
+                        if self.setup.role == SessionRole::Cdn {
+                            continue;
+                        }
                         if self
                             .reported_time_difference
                             .is_some_and(|reported| (difference - reported).abs() < TIME_DIFFERENCE_REPORT_THRESHOLD)
@@ -2179,6 +2256,7 @@ impl SessionRuntime {
                     RpcEvent::Completed { .. } | RpcEvent::Failed { .. } => {
                         self.last_activity_at = now.mono;
                         self.deliveries = self.deliveries.wrapping_add(1);
+                        self.note_drain_answer(now);
                     }
                     RpcEvent::Update { .. } => self.deliveries = self.deliveries.wrapping_add(1),
                     _ => {}
@@ -2218,6 +2296,9 @@ impl SessionRuntime {
         callbacks: &Arc<dyn EngineCallbacks>,
         rng: &mut OsRandom,
     ) {
+        if self.drive_drain(now, registry, callbacks) {
+            return;
+        }
         if self.rpc.is_none()
             && self.setup.key_generation.is_none()
             && self.pfs.as_ref().is_none_or(PfsState::awaits_permanent_key)
@@ -2500,11 +2581,14 @@ impl SessionRuntime {
     }
 
     pub fn next_deadline(&mut self, now: Now, config: &EngineConfig) -> Option<f64> {
+        if self.closed {
+            return (!self.undelivered.is_empty()).then_some(now.mono);
+        }
         self.refresh_uploads(now);
         if self.http.is_some() {
             return self.next_http_deadline(now, config);
         }
-        let mut deadline = f64::INFINITY;
+        let mut deadline = self.drain_deadline().unwrap_or(f64::INFINITY);
         let wants = self.wants_connection(now);
         if wants && self.connection.is_none() {
             deadline = deadline.min(self.next_attempt_at.max(now.mono));
@@ -2564,6 +2648,9 @@ impl SessionRuntime {
 
     fn next_http_deadline(&mut self, now: Now, config: &EngineConfig) -> Option<f64> {
         let mut deadline = self.http_deadline(now, config).unwrap_or(f64::INFINITY);
+        if let Some(at) = self.drain_deadline() {
+            deadline = deadline.min(at);
+        }
         if !self.network_available
             && !self.has_link()
             && self.http_route_possible()

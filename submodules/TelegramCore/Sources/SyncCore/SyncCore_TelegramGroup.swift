@@ -106,6 +106,8 @@ public enum TelegramGroupMembership: Int32 {
 }
 
 public struct TelegramGroupFlags: OptionSet {
+    // Client-only: retained excluded chat, never a server membership/permission.
+    public static let jerkgramRetainedExcluded = TelegramGroupFlags(rawValue: 1 << 30)
     public var rawValue: Int32
     
     public init() {

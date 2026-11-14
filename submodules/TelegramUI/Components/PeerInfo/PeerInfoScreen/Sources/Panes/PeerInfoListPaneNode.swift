@@ -30,7 +30,9 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
     
     weak var parentController: ViewController?
     
-    private let ghostBaseGlassEnabled: Bool
+    private var ghostBaseGlassEnabled: Bool
+    private var jerkgramVisualRevision: UInt64 = 0
+    private var ghostBaseGlassMaterialIsDark: Bool?
     private let glassBackgroundView: UIView
     private let listNode: ChatHistoryListNode
     
@@ -210,6 +212,15 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
         }
     }
     
+    func updateJerkgramVisualState(glassEnabled: Bool, revision: UInt64) {
+        guard self.ghostBaseGlassEnabled != glassEnabled || self.jerkgramVisualRevision != revision else {
+            return
+        }
+        self.ghostBaseGlassEnabled = glassEnabled
+        self.jerkgramVisualRevision = revision
+        self.ghostBaseGlassMaterialIsDark = nil
+    }
+
     func update(size: CGSize, topInset: CGFloat, sideInset: CGFloat, bottomInset: CGFloat, deviceMetrics: DeviceMetrics, visibleHeight: CGFloat, isScrollingLockedAtTop: Bool, expandProgress: CGFloat, navigationHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition) {
         self.currentParams = (size, topInset, sideInset, bottomInset, deviceMetrics, visibleHeight, isScrollingLockedAtTop, expandProgress, navigationHeight, presentationData)
         // Links already owns a luminance-aware row surface. Never place its
@@ -236,8 +247,8 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
         // layer darkens the whole profile; the material belongs only behind
         // the loaded Links list, exactly like Groups in Common.
         if self.jerkgramLinksReadabilityEnabled {
-            self.backgroundColor = .clear
-            self.listNode.backgroundColor = .clear
+            self.backgroundColor = self.ghostBaseGlassEnabled ? .clear : presentationData.theme.list.blocksBackgroundColor
+            self.listNode.backgroundColor = self.ghostBaseGlassEnabled ? .clear : presentationData.theme.list.blocksBackgroundColor
             if self.ghostBaseGlassEnabled {
                 let effectView: UIVisualEffectView
                 if let current = self.glassBackgroundView.subviews.first as? UIVisualEffectView {
@@ -248,7 +259,17 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
                     self.glassBackgroundView.addSubview(created)
                     effectView = created
                 }
-                effectView.effect = UIBlurEffect(style: presentationData.theme.overallDarkAppearance ? .systemMaterialDark : .systemMaterialLight)
+                if GhostBaseGlassStyle.allowsMaterial {
+                    let isDark = presentationData.theme.overallDarkAppearance
+                    if self.ghostBaseGlassMaterialIsDark != isDark || effectView.effect == nil {
+                        self.ghostBaseGlassMaterialIsDark = isDark
+                        JerkgramWave1Instrumentation.add("materialEffectCreations")
+                        effectView.effect = UIBlurEffect(style: isDark ? .systemMaterialDark : .systemMaterialLight)
+                    }
+                } else {
+                    self.ghostBaseGlassMaterialIsDark = nil
+                    effectView.effect = nil
+                }
                 effectView.frame = self.glassBackgroundView.bounds
 
                 var distanceToTop: CGFloat = -100.0
@@ -272,6 +293,8 @@ final class PeerInfoListPaneNode: ASDisplayNode, PeerInfoPaneNode {
                 self.glassBackgroundView.isHidden = false
             } else {
                 self.glassBackgroundView.isHidden = true
+                self.ghostBaseGlassMaterialIsDark = nil
+                (self.glassBackgroundView.subviews.first as? UIVisualEffectView)?.effect = nil
             }
         }
         

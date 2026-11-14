@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
 func addMessageMediaResourceIdsToRemove(media: Media, resourceIds: inout [MediaResourceId]) {
     if let image = media as? TelegramMediaImage {
@@ -39,7 +39,10 @@ func _internal_deleteEphemeralReplacements(transaction: Transaction, anchorIds: 
     }
 }
 
-public func _internal_deleteMessages(transaction: Transaction, mediaBox: MediaBox, ids: [MessageId], deleteMedia: Bool = true, manualAddMessageThreadStatsDifference: ((MessageThreadKey, Int, Int) -> Void)? = nil) {
+public func _internal_deleteMessages(transaction: Transaction, mediaBox: MediaBox, ids: [MessageId], deleteMedia: Bool = true, localSavedTagsAlreadyRemoved: Bool = false, manualAddMessageThreadStatsDifference: ((MessageThreadKey, Int, Int) -> Void)? = nil) {
+    if !localSavedTagsAlreadyRemoved {
+        _internal_removeLocalSavedTagsMessages(transaction: transaction, ids: ids)
+    }
     var resourceIds: [MediaResourceId] = []
     if deleteMedia {
         for id in ids {
@@ -306,6 +309,7 @@ func _internal_deleteReaction(account: Account, messageId: MessageId, authorId: 
 }
 
 func _internal_clearHistory(transaction: Transaction, mediaBox: MediaBox, peerId: PeerId, threadId: Int64?, namespaces: MessageIdNamespaces) {
+    _internal_removeLocalSavedTagsRange(transaction: transaction, peerId: peerId, namespaces: namespaces, scope: LocalSavedTagsDeletionScope(threadId: threadId))
     if peerId.namespace == Namespaces.Peer.SecretChat {
         var resourceIds: [MediaResourceId] = []
         transaction.withAllMessages(peerId: peerId, { message in
@@ -321,6 +325,7 @@ func _internal_clearHistory(transaction: Transaction, mediaBox: MediaBox, peerId
 }
 
 func _internal_clearHistoryInRange(transaction: Transaction, mediaBox: MediaBox, peerId: PeerId, threadId: Int64?, minTimestamp: Int32, maxTimestamp: Int32, namespaces: MessageIdNamespaces) {
+    _internal_removeLocalSavedTagsRange(transaction: transaction, peerId: peerId, namespaces: namespaces, scope: LocalSavedTagsDeletionScope(threadId: threadId, minTimestamp: minTimestamp, maxTimestamp: maxTimestamp))
     if peerId.namespace == Namespaces.Peer.SecretChat {
         var resourceIds: [MediaResourceId] = []
         transaction.withAllMessages(peerId: peerId, { message in

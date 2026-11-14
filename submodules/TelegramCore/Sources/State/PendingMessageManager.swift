@@ -1,8 +1,29 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
+
+// Bots use zero instead of a missing/min hash, per Telegram's peer contract.
+// Authorize this conversion from the actual self peer inside the send transaction;
+// user accounts retain the native conversion and all existing send requests.
+private func botBridgeInputPeerForSending(transaction: Transaction, accountPeerId: PeerId, peer: Peer) -> Api.InputPeer? {
+    guard let own = transaction.getPeer(accountPeerId) as? TelegramUser, own.botInfo != nil else {
+        return apiInputPeer(peer)
+    }
+    func fullHash(_ value: TelegramPeerAccessHash?) -> Int64 {
+        if let value, case let .personal(hash) = value { return hash }
+        return 0
+    }
+    if let user = peer as? TelegramUser {
+        return .inputPeerUser(.init(userId: user.id.id._internalGetInt64Value(), accessHash: fullHash(user.accessHash)))
+    } else if let channel = peer as? TelegramChannel {
+        return .inputPeerChannel(.init(channelId: channel.id.id._internalGetInt64Value(), accessHash: fullHash(channel.accessHash)))
+    } else if let community = peer as? TelegramCommunity {
+        return .inputPeerChannel(.init(channelId: community.id.id._internalGetInt64Value(), accessHash: fullHash(community.accessHash)))
+    }
+    return apiInputPeer(peer)
+}
 
 public struct PendingMessageStatus: Equatable {
     public struct Progress: Equatable {
@@ -1206,7 +1227,8 @@ public final class PendingMessageManager {
                 }
                 
                 return .complete()
-            } else if let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
+            } else if let peer = transaction.getPeer(peerId), let inputPeer = botBridgeInputPeerForSending(transaction: transaction, accountPeerId: accountPeerId, peer: peer) {
+                let botBridgeContext = botBridgeOperationContext(network: network, peer: peer, attributes: messages[0].0.attributes, hasText: messages.contains { !$0.0.text.isEmpty })
                 var isForward = false
                 var hideSendersNames = false
                 var hideCaptions = false
@@ -1284,7 +1306,7 @@ public final class PendingMessageManager {
                     if messages.contains(where: { $0.0.groupingKey != nil }) {
                         flags |= (1 << 8)
                     }
-                    if hideSendersNames {
+                    if hideSendersNames && !messages.contains(where: { $0.0.media.contains(where: { $0 is TelegramMediaWidget }) }) {
                         flags |= (1 << 11)
                     }
                     if hideCaptions {
@@ -1375,7 +1397,7 @@ public final class PendingMessageManager {
                     } else if let inputSourcePeerId = forwardPeerIds.first, let inputSourcePeer = transaction.getPeer(inputSourcePeerId).flatMap(apiInputPeer) {
                         let dependencyTag = PendingMessageRequestDependencyTag(messageId: messages[0].0.id)
 
-                        sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: inputSourcePeer, id: forwardIds.map { $0.0.id }, randomId: forwardIds.map { $0.1 }, toPeer: inputPeer, topMsgId: topMsgId, replyTo: replyTo, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: nil, videoTimestamp: videoTimestamp, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag)
+                        sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: inputSourcePeer, id: forwardIds.map { $0.0.id }, randomId: forwardIds.map { $0.1 }, toPeer: inputPeer, topMsgId: topMsgId, replyTo: replyTo, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: nil, videoTimestamp: videoTimestamp, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag, diagnosticContext: botBridgeContext)
                     } else {
                         assertionFailure()
                         sendMessageRequest = .fail(MTRpcError(errorCode: 400, errorDescription: "Invalid forward source"))
@@ -1463,33 +1485,8 @@ public final class PendingMessageManager {
                             replyFlags |= 1 << 1
                         }
                         
-                        var quoteText: String?
-                        var quoteEntities: [Api.MessageEntity]?
-                        var quoteOffset: Int32?
-                        if let replyQuote = replyQuote {
-                            replyFlags |= 1 << 2
-                            quoteText = replyQuote.text
-                            quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
-                            
-                            if !replyQuote.entities.isEmpty {
-                                replyFlags |= 1 << 3
-                                var associatedPeers = SimpleDictionary<PeerId, Peer>()
-                                for entity in replyQuote.entities {
-                                    for associatedPeerId in entity.associatedPeerIds {
-                                        if associatedPeers[associatedPeerId] == nil {
-                                            if let associatedPeer = transaction.getPeer(associatedPeerId) {
-                                                associatedPeers[associatedPeerId] = associatedPeer
-                                            }
-                                        }
-                                    }
-                                }
-                                quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
-                            }
-                            
-                            if quoteOffset != nil {
-                                replyFlags |= 1 << 4
-                            }
-                        }
+                        let quoteFields = apiReplyQuoteFields(replyQuote, peer: { transaction.getPeer($0) })
+                        replyFlags |= quoteFields.flags
                         
                         if let _ = replyTodoItemId {
                             replyFlags |= 1 << 6
@@ -1498,7 +1495,7 @@ public final class PendingMessageManager {
                             replyFlags |= 1 << 7
                         }
                         
-                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption))
+                        replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: replyToPeerId, quoteText: quoteFields.text, quoteEntities: quoteFields.entities, quoteOffset: quoteFields.offset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption, quoteRich: quoteFields.rich))
                     } else if let replyToStoryId {
                         if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                             flags |= 1 << 0
@@ -1529,7 +1526,7 @@ public final class PendingMessageManager {
                         flags |= 1 << 21
                     }
                     
-                    sendMessageRequest = network.request(Api.functions.messages.sendMultiMedia(flags: flags, peer: inputPeer, replyTo: replyTo, multiMedia: singleMedias, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId, allowPaidStars: allowPaidStars))
+                    sendMessageRequest = network.request(Api.functions.messages.sendMultiMedia(flags: flags, peer: inputPeer, replyTo: replyTo, multiMedia: singleMedias, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId, allowPaidStars: allowPaidStars), diagnosticContext: botBridgeContext)
                 }
                 
                 return sendMessageRequest
@@ -1731,7 +1728,8 @@ public final class PendingMessageManager {
             if messageId.peerId.namespace == Namespaces.Peer.SecretChat {
                 PendingMessageManager.sendSecretMessageContent(transaction: transaction, message: message, content: content)
                 return .complete()
-            } else if let peer = transaction.getPeer(messageId.peerId), let inputPeer = apiInputPeer(peer) {
+            } else if let peer = transaction.getPeer(messageId.peerId), let inputPeer = botBridgeInputPeerForSending(transaction: transaction, accountPeerId: accountPeerId, peer: peer) {
+                let botBridgeContext = botBridgeOperationContext(network: network, peer: peer, attributes: message.attributes, hasText: !message.text.isEmpty)
                 var uniqueId: Int64 = 0
                 var forwardSourceInfoAttribute: ForwardSourceInfoAttribute?
                 var messageEntities: [Api.MessageEntity]?
@@ -1820,7 +1818,7 @@ public final class PendingMessageManager {
                     } else if let attribute = attribute as? SuggestedPostMessageAttribute {
                         suggestedPost = attribute.apiSuggestedPost(fixMinTime: Int32(Date().timeIntervalSince1970 + 10))
                     } else if let attribute = attribute as? RichTextMessageAttribute {
-                        apiRichMessage = attribute.apiInputRichMessage()
+                        apiRichMessage = attribute.apiInputRichMessage(users: apiInputRichMessageUsers(attribute.instantPage, peer: { message.peers[$0] }))
                         flags |= Int32(1 << 23)
                     }
                 }
@@ -1875,33 +1873,8 @@ public final class PendingMessageManager {
                                 replyFlags |= 1 << 1
                             }
                             
-                            var quoteText: String?
-                            var quoteEntities: [Api.MessageEntity]?
-                            var quoteOffset: Int32?
-                            if let replyQuote = replyQuote {
-                                replyFlags |= 1 << 2
-                                quoteText = replyQuote.text
-                                quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
-                                
-                                if !replyQuote.entities.isEmpty {
-                                    replyFlags |= 1 << 3
-                                    var associatedPeers = SimpleDictionary<PeerId, Peer>()
-                                    for entity in replyQuote.entities {
-                                        for associatedPeerId in entity.associatedPeerIds {
-                                            if associatedPeers[associatedPeerId] == nil {
-                                                if let associatedPeer = transaction.getPeer(associatedPeerId) {
-                                                    associatedPeers[associatedPeerId] = associatedPeer
-                                                }
-                                            }
-                                        }
-                                    }
-                                    quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
-                                }
-                                
-                                if quoteOffset != nil {
-                                    replyFlags |= 1 << 4
-                                }
-                            }
+                            let quoteFields = apiReplyQuoteFields(replyQuote, peer: { transaction.getPeer($0) })
+                            replyFlags |= quoteFields.flags
                             
                             if let _ = replyTodoItemId {
                                 replyFlags |= 1 << 6
@@ -1909,7 +1882,7 @@ public final class PendingMessageManager {
                             if let _ = replyPollOption {
                                 replyFlags |= 1 << 7
                             }
-                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption))
+                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: replyToPeerId, quoteText: quoteFields.text, quoteEntities: quoteFields.entities, quoteOffset: quoteFields.offset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption, quoteRich: quoteFields.rich))
                         } else if let replyToStoryId = replyToStoryId {
                             if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                                 flags |= 1 << 0
@@ -1951,7 +1924,7 @@ public final class PendingMessageManager {
                             flags |= 1 << 22
                         }
                     
-                        sendMessageRequest = network.requestWithAdditionalInfo(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyTo: replyTo, message: message.text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost, richMessage: apiRichMessage), info: .acknowledgement, tag: dependencyTag)
+                        sendMessageRequest = network.requestWithAdditionalInfo(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyTo: replyTo, message: message.text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost, richMessage: apiRichMessage), info: .acknowledgement, tag: dependencyTag, diagnosticContext: botBridgeContext)
                     case let .media(inputMedia, text):
                         if bubbleUpEmojiOrStickersets {
                             flags |= Int32(1 << 15)
@@ -1976,33 +1949,8 @@ public final class PendingMessageManager {
                                 replyFlags |= 1 << 1
                             }
                             
-                            var quoteText: String?
-                            var quoteEntities: [Api.MessageEntity]?
-                            var quoteOffset: Int32?
-                            if let replyQuote = replyQuote {
-                                replyFlags |= 1 << 2
-                                quoteText = replyQuote.text
-                                
-                                quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
-                                if quoteOffset != nil {
-                                    replyFlags |= 1 << 4
-                                }
-                                
-                                if !replyQuote.entities.isEmpty {
-                                    replyFlags |= 1 << 3
-                                    var associatedPeers = SimpleDictionary<PeerId, Peer>()
-                                    for entity in replyQuote.entities {
-                                        for associatedPeerId in entity.associatedPeerIds {
-                                            if associatedPeers[associatedPeerId] == nil {
-                                                if let associatedPeer = transaction.getPeer(associatedPeerId) {
-                                                    associatedPeers[associatedPeerId] = associatedPeer
-                                                }
-                                            }
-                                        }
-                                    }
-                                    quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
-                                }
-                            }
+                            let quoteFields = apiReplyQuoteFields(replyQuote, peer: { transaction.getPeer($0) })
+                            replyFlags |= quoteFields.flags
 
                             if let _ = replyTodoItemId {
                                 replyFlags |= 1 << 6
@@ -2010,7 +1958,7 @@ public final class PendingMessageManager {
                             if let _ = replyPollOption {
                                 replyFlags |= 1 << 7
                             }
-                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption))
+                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: replyToPeerId, quoteText: quoteFields.text, quoteEntities: quoteFields.entities, quoteOffset: quoteFields.offset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption, quoteRich: quoteFields.rich))
                         } else if let replyToStoryId = replyToStoryId {
                             if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                                 flags |= 1 << 0
@@ -2053,7 +2001,7 @@ public final class PendingMessageManager {
                             flags |= 1 << 22
                         }
                     
-                        sendMessageRequest = network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyTo: replyTo, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag)
+                        sendMessageRequest = network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyTo: replyTo, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag, diagnosticContext: botBridgeContext)
                         |> map(NetworkRequestResult.result)
                     case let .forward(sourceInfo):
                         var topMsgId: Int32?
@@ -2101,8 +2049,8 @@ public final class PendingMessageManager {
                             flags |= 1 << 25
                         }
                     
-                        if let forwardSourceInfoAttribute = forwardSourceInfoAttribute, let sourcePeer = transaction.getPeer(forwardSourceInfoAttribute.messageId.peerId), let sourceInputPeer = apiInputPeer(sourcePeer) {
-                            sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: sourceInputPeer, id: [sourceInfo.messageId.id], randomId: [uniqueId], toPeer: inputPeer, topMsgId: topMsgId, replyTo: replyTo, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: nil, videoTimestamp: videoTimestamp, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag)
+                        if let forwardSourceInfoAttribute = forwardSourceInfoAttribute, let sourcePeer = transaction.getPeer(forwardSourceInfoAttribute.messageId.peerId), let sourceInputPeer = botBridgeInputPeerForSending(transaction: transaction, accountPeerId: accountPeerId, peer: sourcePeer) {
+                            sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: sourceInputPeer, id: [sourceInfo.messageId.id], randomId: [uniqueId], toPeer: inputPeer, topMsgId: topMsgId, replyTo: replyTo, scheduleDate: scheduleTime, scheduleRepeatPeriod: scheduleRepeatPeriod, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: nil, videoTimestamp: videoTimestamp, allowPaidStars: allowPaidStars, suggestedPost: suggestedPost), tag: dependencyTag, diagnosticContext: botBridgeContext)
                             |> map(NetworkRequestResult.result)
                         } else {
                             sendMessageRequest = .fail(MTRpcError(errorCode: 400, errorDescription: "internal"))
@@ -2131,33 +2079,8 @@ public final class PendingMessageManager {
                                 replyFlags |= 1 << 1
                             }
                             
-                            var quoteText: String?
-                            var quoteEntities: [Api.MessageEntity]?
-                            var quoteOffset: Int32?
-                            if let replyQuote = replyQuote {
-                                replyFlags |= 1 << 2
-                                quoteText = replyQuote.text
-                                
-                                quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
-                                if quoteOffset != nil {
-                                    replyFlags |= 1 << 4
-                                }
-                                
-                                if !replyQuote.entities.isEmpty {
-                                    replyFlags |= 1 << 3
-                                    var associatedPeers = SimpleDictionary<PeerId, Peer>()
-                                    for entity in replyQuote.entities {
-                                        for associatedPeerId in entity.associatedPeerIds {
-                                            if associatedPeers[associatedPeerId] == nil {
-                                                if let associatedPeer = transaction.getPeer(associatedPeerId) {
-                                                    associatedPeers[associatedPeerId] = associatedPeer
-                                                }
-                                            }
-                                        }
-                                    }
-                                    quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
-                                }
-                            }
+                            let quoteFields = apiReplyQuoteFields(replyQuote, peer: { transaction.getPeer($0) })
+                            replyFlags |= quoteFields.flags
 
                             if let _ = replyTodoItemId {
                                 replyFlags |= 1 << 6
@@ -2165,7 +2088,7 @@ public final class PendingMessageManager {
                             if let _ = replyPollOption {
                                 replyFlags |= 1 << 7
                             }
-                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: message.threadId.flatMap(Int32.init(clamping:)), replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption))
+                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: message.threadId.flatMap(Int32.init(clamping:)), replyToPeerId: replyToPeerId, quoteText: quoteFields.text, quoteEntities: quoteFields.entities, quoteOffset: quoteFields.offset, monoforumPeerId: monoforumPeerId, todoItemId: replyTodoItemId, pollOption: replyPollOption, quoteRich: quoteFields.rich))
                         } else if let replyToStoryId = replyToStoryId {
                             if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                                 flags |= 1 << 0
@@ -2190,28 +2113,28 @@ public final class PendingMessageManager {
                             flags |= 1 << 21
                         }
                     
-                        sendMessageRequest = network.request(Api.functions.messages.sendInlineBotResult(flags: flags, peer: inputPeer, replyTo: replyTo, randomId: uniqueId, queryId: chatContextResult.queryId, id: chatContextResult.id, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, allowPaidStars: allowPaidStars))
+                        sendMessageRequest = network.request(Api.functions.messages.sendInlineBotResult(flags: flags, peer: inputPeer, replyTo: replyTo, randomId: uniqueId, queryId: chatContextResult.queryId, id: chatContextResult.id, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, allowPaidStars: allowPaidStars), diagnosticContext: botBridgeContext)
                         |> map(NetworkRequestResult.result)
                     case .messageScreenshot:
                         let replyTo: Api.InputReplyTo
                     
                         if let replyMessageId = replyMessageId {
                             let replyFlags: Int32 = 0
-                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil))
+                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: nil, todoItemId: nil, pollOption: nil, quoteRich: nil))
                         } else if let replyToStoryId = replyToStoryId {
                             if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
                                 flags |= 1 << 0
                                 replyTo = .inputReplyToStory(.init(peer: inputPeer, storyId: replyToStoryId.id))
                             } else {
                                 let replyFlags: Int32 = 0
-                                replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil, pollOption: nil))
+                                replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil, pollOption: nil, quoteRich: nil))
                             }
                         } else {
                             let replyFlags: Int32 = 0
-                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil, pollOption: nil))
+                            replyTo = .inputReplyToMessage(.init(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil, pollOption: nil, quoteRich: nil))
                         }
                     
-                        sendMessageRequest = network.request(Api.functions.messages.sendScreenshotNotification(peer: inputPeer, replyTo: replyTo, randomId: uniqueId))
+                        sendMessageRequest = network.request(Api.functions.messages.sendScreenshotNotification(peer: inputPeer, replyTo: replyTo, randomId: uniqueId), diagnosticContext: botBridgeContext)
                         |> map(NetworkRequestResult.result)
                     case .secretMedia:
                         assertionFailure()

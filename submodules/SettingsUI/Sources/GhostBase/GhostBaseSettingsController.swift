@@ -16,18 +16,24 @@ import BuildConfig
 // Opt-in refresh callback owner. The existing capture owns the session lifetime.
 private final class JerkgramDiagnosticSettingsController: ItemListController {
     var diagnosticRoute = "settingsSubpage"
+    var refreshSettingsOnAppearance: (() -> Void)?
+    var aboutVisibilityChanged: ((Bool) -> Void)?
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        self.refreshSettingsOnAppearance?()
         JerkgramPerformanceDiagnostics.shared.setVisibleRoute(self.diagnosticRoute, owner: self)
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        self.aboutVisibilityChanged?(true)
         JerkgramPerformanceDiagnostics.shared.setVisibleRoute(self.diagnosticRoute, owner: self)
     }
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        self.aboutVisibilityChanged?(false)
         JerkgramPerformanceDiagnostics.shared.clearVisibleRoute(owner: self)
     }
+    deinit { self.aboutVisibilityChanged?(false) }
 }
 
 private final class JerkgramRefreshIntervalProbe: NSObject {
@@ -84,6 +90,7 @@ private enum GhostBaseKey {
     static let hideBlockedMessages = "jerkgram.Messages.HideBlockedMessages"
     static let hideBlockedReactions = "jerkgram.Messages.HideBlockedReactions"
 
+    static let settingsTranslucency = "jerkgram.Settings.Translucency"
     static let glassEnabled = "jerkgram.Glass.Enabled"
     static let profileAvatarBlur = "jerkgram.ProfileBlur.Avatar"
     static let profileAnimatedBackground = "jerkgram.ProfileBlur.Animated"
@@ -110,6 +117,8 @@ private enum GhostBaseKey {
     static let oneTimeScreenRecording = "jerkgram.ProtectedContent.OneTimeScreenRecording"
     static let oneTimeSave = "jerkgram.ProtectedContent.OneTimeSave"
     static let storySave = "jerkgram.Stories.Save"
+    static let localGramEnabled = JerkgramLocalGramBalance.enabledKey
+    static let localGramAmount = JerkgramLocalGramBalance.amountKey
     static let localStarsEnabled = "jerkgram.Stars.LocalBalance.Enabled"
     static let localStarsAmount = "jerkgram.Stars.LocalBalance.Amount"
     static let localStarsBaseAmount = "jerkgram.Stars.LocalBalance.BaseAmount"
@@ -435,56 +444,84 @@ private func jerkgramScopedSettingsKey(accountPeerId: Int64, key: String) -> Str
 private func jerkgramScopedBool(
     accountPeerId: Int64,
     key: String,
-    defaultValue: Bool
+    defaultValue: Bool,
+    allowLegacyFallback: Bool = false
 ) -> Bool {
     let scopedKey = jerkgramScopedSettingsKey(accountPeerId: accountPeerId, key: key)
     if let value = UserDefaults.standard.object(forKey: scopedKey) as? Bool {
         return value
     }
-    let migrated = ghostBaseBool(key, defaultValue: defaultValue)
-    UserDefaults.standard.set(migrated, forKey: scopedKey)
-    return migrated
+    return allowLegacyFallback ? ghostBaseBool(key, defaultValue: defaultValue) : defaultValue
 }
 
 private func jerkgramScopedString(
     accountPeerId: Int64,
     key: String,
-    defaultValue: String
+    defaultValue: String,
+    allowLegacyFallback: Bool = false
 ) -> String {
     let scopedKey = jerkgramScopedSettingsKey(accountPeerId: accountPeerId, key: key)
     if let value = UserDefaults.standard.object(forKey: scopedKey) as? String {
         return value
     }
-    let migrated = ghostBaseString(key, defaultValue: defaultValue)
-    UserDefaults.standard.set(migrated, forKey: scopedKey)
-    return migrated
+    return allowLegacyFallback ? ghostBaseString(key, defaultValue: defaultValue) : defaultValue
 }
 
 private enum JerkgramSettingValue: Equatable {
     case bool(Bool)
     case string(String)
 
+    var object: Any {
+        switch self {
+        case let .bool(value): return value
+        case let .string(value): return value
+        }
+    }
+
     func write(to defaults: UserDefaults, key: String) {
         switch self {
-        case let .bool(value): defaults.set(value, forKey: key)
-        case let .string(value): defaults.set(value, forKey: key)
+        case let .bool(value):
+            if JerkgramSettingsProjection.writeIfChanged(value, defaults: defaults, key: key) {
+                JerkgramWave1Instrumentation.add("projectionWrites")
+            }
+        case let .string(value):
+            if JerkgramSettingsProjection.writeIfChanged(value, defaults: defaults, key: key) {
+                JerkgramWave1Instrumentation.add("projectionWrites")
+            }
         }
     }
 }
 
-private enum JerkgramSettingsCommitQueue {
-    private static let queue = Queue(name: "JerkgramSettingsCommitQueue", qos: .utility)
-    static func enqueue(_ work: @escaping () -> Void) {
-        self.queue.async(work)
+// Foundation-only delta helper; extracted verbatim by the macOS regression fixture.
+enum JerkgramSettingsProjection {
+    static func equal(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return true
+        case let (lhs as NSObject, rhs as NSObject): return lhs.isEqual(rhs)
+        default: return false
+        }
+    }
+
+    @discardableResult
+    static func writeIfChanged(_ value: Any, defaults: UserDefaults, key: String) -> Bool {
+        guard !self.equal(defaults.object(forKey: key), value) else { return false }
+        defaults.set(value, forKey: key)
+        return true
     }
 }
+// End Foundation-only delta helper.
 
 private func jerkgramStateValues(_ state: GhostBaseSettingsState) -> [String: JerkgramSettingValue] {
     return [
+        JerkgramSponsoredContentPolicy.preferenceKey: .bool(state.removeSponsored),
+        JerkgramDownloadBoostSettings.preferenceKey: .string(state.downloadBoost),
+        JerkgramDefaultFolderSettings.preferenceKey: .bool(state.unlockDefaultChatFolder),
+        JerkgramTranslationSettings.preferenceKey: .bool(state.enhancedTranslation),
         GhostBaseKey.profileEnabled: .bool(state.profileEnabled),
         GhostBaseKey.showIds: .bool(state.showIds),
         GhostBaseKey.showDCs: .bool(state.showDCs),
         GhostBaseKey.showRegistration: .bool(state.showRegistration),
+        GhostBaseKey.settingsTranslucency: .bool(state.settingsTranslucency),
         GhostBaseKey.glassEnabled: .bool(state.glassEnabled),
         GhostBaseKey.profileAvatarBlur: .bool(state.profileAvatarBlur),
         GhostBaseKey.profileAnimatedBackground: .bool(state.profileAnimatedBackground),
@@ -524,6 +561,8 @@ private func jerkgramStateValues(_ state: GhostBaseSettingsState) -> [String: Je
         GhostBaseKey.oneTimeScreenRecording: .bool(state.oneTimeScreenRecording),
         GhostBaseKey.oneTimeSave: .bool(state.oneTimeSave),
         GhostBaseKey.storySave: .bool(state.storySave),
+        GhostBaseKey.localGramEnabled: .bool(state.localGramEnabled),
+        GhostBaseKey.localGramAmount: .string(state.localGramAmount),
         GhostBaseKey.localStarsEnabled: .bool(state.localStarsEnabled),
         GhostBaseKey.localStarsAmount: .string(state.localStarsAmount),
         GhostBaseKey.localStarsBaseAmount: .string(state.localStarsBaseAmount)
@@ -535,96 +574,88 @@ private func jerkgramPersistChangedSettings(
     previous: GhostBaseSettingsState?,
     current: GhostBaseSettingsState
 ) {
-    defer { JerkgramHotSettings.invalidate() }
     let oldValues = previous.map(jerkgramStateValues) ?? [:]
     let newValues = jerkgramStateValues(current)
     let changes = newValues.filter { oldValues[$0.key] != $0.value }
-    guard !changes.isEmpty else {
-    GhostBaseGlassStyle.setProfilePlaybackSettings(
-        glassEnabled: current.glassEnabled,
-        animatedBackgroundEnabled: current.profileAnimatedBackground,
-        avatarBlurInProfile: current.profileAvatarBlur,
-        tintEnabled: current.profileBlurTint,
-        reducedBlur: current.profileBlurReduced,
-        hideOwnPhone: current.hideOwnPhone
-    )
-        return
-    }
-
-    // These values are consumed synchronously outside Settings immediately
-    // before user-visible side effects. Leaving them behind the utility queue
-    // creates a real stale-state window: Scheduled Send can remain active after
-    // OFF, and protected one-time media can be replaced with expired content
-    // immediately after One-Time Save was switched ON.
-    //
-    // UserDefaults.set updates the in-process defaults domain; deliberately
-    // avoid any forced defaults/filesystem synchronization here.
-    let jerkgramSynchronousRuntimeSettingKeys: Set<String> = Set<String>([
-        // Only preference changes project here, never avatar transition ticks.
-        GhostBaseKey.glassEnabled,
-        GhostBaseKey.profileAnimatedBackground,
-        GhostBaseKey.profileAvatarBlur,
-        GhostBaseKey.profileBlurTint,
-        GhostBaseKey.profileBlurReduced,
-        GhostBaseKey.hideOwnPhone,
-        GhostBaseKey.scheduledSend,
-        GhostBaseKey.protectedEnabled,
-        GhostBaseKey.oneTimeSave,
-        GhostBaseKey.hideBlockedMessages,
-        GhostBaseKey.hideBlockedReactions,
-        GhostBaseKey.typingActions,
-        GhostBaseKey.recordingActions,
-        GhostBaseKey.uploadingActions,
-        GhostBaseKey.stickerActivity,
-        GhostBaseKey.gameActivity,
-        GhostBaseKey.emojiActivity,
-    ]).union(JerkgramHotSettings.keys)
+    guard !changes.isEmpty else { return }
     let defaults = UserDefaults.standard
-    for key in jerkgramSynchronousRuntimeSettingKeys {
-        guard let value = changes[key] else { continue }
-        value.write(
-            to: defaults,
-            key: jerkgramScopedSettingsKey(accountPeerId: accountPeerId, key: key)
-        )
-        // Legacy Telegram/Jerkgram runtime owners consume the active-account
-        // projection directly from UserDefaults.standard.
-        value.write(to: defaults, key: key)
-        if key == GhostBaseKey.scheduledSend {
-            let sharedDefaults = UserDefaults(suiteName: "group.com.jerkgram.ios") ?? defaults
-            value.write(to: sharedDefaults, key: key)
-        }
-    }
-    GhostBaseGlassStyle.setProfilePlaybackSettings(
-        glassEnabled: current.glassEnabled,
-        animatedBackgroundEnabled: current.profileAnimatedBackground,
-        avatarBlurInProfile: current.profileAvatarBlur,
-        tintEnabled: current.profileBlurTint,
-        reducedBlur: current.profileBlurReduced,
-        hideOwnPhone: current.hideOwnPhone
-    )
-    JerkgramActivityGhostRuntime.invalidate()
-
-    if changes[GhostBaseKey.hideBlockedMessages] != nil
-        || changes[GhostBaseKey.hideBlockedReactions] != nil {
-        JerkgramBlockedReactionPolicy.notifySettingsChanged()
-    }
-
-    let deferredChanges = changes.filter {
-        !jerkgramSynchronousRuntimeSettingKeys.contains($0.key)
-    }
-    guard !deferredChanges.isEmpty else { return }
-
-    JerkgramSettingsCommitQueue.enqueue {
-        let defaults = UserDefaults.standard
-        for (key, value) in deferredChanges {
-            value.write(to: defaults, key: jerkgramScopedSettingsKey(accountPeerId: accountPeerId, key: key))
-            // Non-critical compatibility projections stay off the caller thread.
+    var runtimeChangedKeys = Set<String>()
+    for (key, value) in changes {
+        // Compare each domain before its setter: migration can need only the
+        // scoped value, while an account switch can need only the runtime value.
+        value.write(to: defaults, key: jerkgramScopedSettingsKey(accountPeerId: accountPeerId, key: key))
+        if !JerkgramSettingsProjection.equal(defaults.object(forKey: key), value.object) {
+            runtimeChangedKeys.insert(key)
             value.write(to: defaults, key: key)
         }
+        if key == GhostBaseKey.scheduledSend {
+            value.write(to: UserDefaults(suiteName: "group.com.jerkgram.ios") ?? defaults, key: key)
+        }
+    }
+    // A committed snapshot is immediately ready for the next page. All 49
+    // compatibility values are committed before publication/account handoff;
+    // no queued write can later overwrite the next account's projection.
+    if changes[JerkgramSponsoredContentPolicy.preferenceKey] != nil {
+        JerkgramSponsoredContentPolicy.update(accountPeerId: accountPeerId, enabled: current.removeSponsored)
+    }
+    if changes[JerkgramDefaultFolderSettings.preferenceKey] != nil {
+        JerkgramDefaultFolderSettings.update(accountPeerId: accountPeerId, enabled: current.unlockDefaultChatFolder)
+    }
+    if changes[JerkgramTranslationSettings.preferenceKey] != nil {
+        JerkgramTranslationSettings.update(accountPeerId: accountPeerId, enabled: current.enhancedTranslation)
+    }
+    if changes[JerkgramDownloadBoostSettings.preferenceKey] != nil {
+        JerkgramDownloadBoostSettings.update(accountPeerId: accountPeerId, rawValue: current.downloadBoost)
+    }
+    if !runtimeChangedKeys.isDisjoint(with: JerkgramHotSettings.keys) {
+        JerkgramHotSettings.invalidate(changedKeys: runtimeChangedKeys)
+        JerkgramWave1Instrumentation.add("hotInvalidations")
+    }
+    let activityKeys: Set<String> = [GhostBaseKey.typingActions, GhostBaseKey.recordingActions,
+        GhostBaseKey.uploadingActions, GhostBaseKey.stickerActivity, GhostBaseKey.gameActivity, GhostBaseKey.emojiActivity]
+    if !runtimeChangedKeys.isDisjoint(with: activityKeys) {
+        JerkgramActivityGhostRuntime.invalidate()
+    }
+    if runtimeChangedKeys.contains(GhostBaseKey.hideBlockedMessages)
+        || runtimeChangedKeys.contains(GhostBaseKey.hideBlockedReactions) {
+        JerkgramBlockedReactionPolicy.notifySettingsChanged()
+    }
+    let playbackKeys: Set<String> = [GhostBaseKey.settingsTranslucency, GhostBaseKey.glassEnabled,
+        GhostBaseKey.profileAnimatedBackground, GhostBaseKey.profileAvatarBlur,
+        GhostBaseKey.profileBlurTint, GhostBaseKey.profileBlurReduced, GhostBaseKey.hideOwnPhone]
+    let metadataKeys: Set<String> = [GhostBaseKey.profileEnabled, GhostBaseKey.showIds,
+        GhostBaseKey.showDCs, GhostBaseKey.showRegistration]
+    let metadataChanged = !runtimeChangedKeys.isDisjoint(with: metadataKeys)
+    if !runtimeChangedKeys.isDisjoint(with: playbackKeys) || metadataChanged {
+        GhostBaseGlassStyle.setProfilePlaybackSettings(
+            glassEnabled: current.glassEnabled,
+            animatedBackgroundEnabled: current.profileAnimatedBackground,
+            avatarBlurInProfile: current.profileAvatarBlur,
+            tintEnabled: current.profileBlurTint,
+            reducedBlur: current.profileBlurReduced,
+            hideOwnPhone: current.hideOwnPhone,
+            settingsTranslucencyEnabled: current.settingsTranslucency,
+            forceVisualChange: metadataChanged
+        )
+    }
+    if runtimeChangedKeys.contains(GhostBaseKey.showRamUnderClock) {
+        NotificationCenter.default.post(name: Notification.Name("GhostBaseRamOverlayPreferenceChanged"), object: nil)
     }
 }
 
-private func jerkgramProjectActiveSettings(accountPeerId: Int64, state: GhostBaseSettingsState) {
+// Called by the existing account activation lifecycle, and after a committed
+// import. Initial migration preserves scoped > legacy > default precedence.
+// Once any account has projected, absent values on other accounts use defaults.
+public func jerkgramActivateAccountSettings(accountPeerId: Int64) {
+    let defaults = UserDefaults.standard
+    let markerKey = "jerkgram.Settings.ActiveProjectionAccount.V176"
+    let state = GhostBaseSettingsState.readStored(
+        accountPeerId: accountPeerId,
+        allowLegacyFallback: defaults.object(forKey: markerKey) == nil
+    )
+    if JerkgramSettingsProjection.writeIfChanged(NSNumber(value: accountPeerId), defaults: defaults, key: markerKey) {
+        JerkgramWave1Instrumentation.add("projectionWrites")
+    }
     jerkgramPersistChangedSettings(accountPeerId: accountPeerId, previous: nil, current: state)
 }
 
@@ -636,6 +667,7 @@ struct GhostBaseSettingsState: Equatable {
     var showIds: Bool
     var showDCs: Bool
     var showRegistration: Bool
+    var settingsTranslucency: Bool
     var glassEnabled: Bool
     var profileAvatarBlur: Bool
     var profileAnimatedBackground: Bool
@@ -658,6 +690,10 @@ struct GhostBaseSettingsState: Equatable {
     var showEditHistory: Bool
     var hideBlockedMessages: Bool
     var hideBlockedReactions: Bool
+    var removeSponsored: Bool = false
+    var downloadBoost: String = "off"
+    var unlockDefaultChatFolder: Bool = false
+    var enhancedTranslation: Bool = true
     var sendTextStyle: String
 
     var deletedPortableReplies: Bool
@@ -680,44 +716,56 @@ struct GhostBaseSettingsState: Equatable {
     var oneTimeScreenRecording: Bool
     var oneTimeSave: Bool
     var storySave: Bool
+    var localGramEnabled: Bool
+    var localGramAmount: String
     var localStarsEnabled: Bool
     var localStarsAmount: String
     var localStarsBaseAmount: String
     static func load(accountPeerId: Int64) -> GhostBaseSettingsState {
+        // Pure read, including when a controller is constructed before activation.
+        return self.readStored(accountPeerId: accountPeerId, allowLegacyFallback: false)
+    }
+
+    static func readStored(accountPeerId: Int64, allowLegacyFallback: Bool) -> GhostBaseSettingsState {
         return GhostBaseSettingsState(
-            profileEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileEnabled, defaultValue: true),
-            showIds: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showIds, defaultValue: true),
-            showDCs: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showDCs, defaultValue: true),
-            showRegistration: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showRegistration, defaultValue: true),
-            glassEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.glassEnabled, defaultValue: true),
-            profileAvatarBlur: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileAvatarBlur, defaultValue: true),
-            profileAnimatedBackground: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileAnimatedBackground, defaultValue: true),
-            profileBlurTint: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileBlurTint, defaultValue: true),
-            profileBlurReduced: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileBlurReduced, defaultValue: false),
-            readMessages: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.readMessages, defaultValue: false),
-            typingActions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.typingActions, defaultValue: false),
-            recordingActions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.recordingActions, defaultValue: false),
-            uploadingActions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.uploadingActions, defaultValue: false),
-            stickerActivity: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.stickerActivity, defaultValue: false),
-            gameActivity: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.gameActivity, defaultValue: false),
-            emojiActivity: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.emojiActivity, defaultValue: false),
-            presence: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.presence, defaultValue: false),
-            scheduledSend: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.scheduledSend, defaultValue: false),
-            saveDeleted: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.saveDeleted, defaultValue: true),
-            showDeleted: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showDeleted, defaultValue: true),
-            saveEditHistory: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.saveEditHistory, defaultValue: true),
-            showEditHistory: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showEditHistory, defaultValue: true),
-            hideBlockedMessages: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.hideBlockedMessages, defaultValue: true),
-            hideBlockedReactions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.hideBlockedReactions, defaultValue: true),
+            profileEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileEnabled, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            showIds: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showIds, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            showDCs: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showDCs, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            showRegistration: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showRegistration, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            settingsTranslucency: UserDefaults.standard.object(forKey: jerkgramScopedSettingsKey(accountPeerId: accountPeerId, key: GhostBaseKey.settingsTranslucency)) as? Bool ?? false,
+            glassEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.glassEnabled, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            profileAvatarBlur: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileAvatarBlur, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            profileAnimatedBackground: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileAnimatedBackground, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            profileBlurTint: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileBlurTint, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            profileBlurReduced: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.profileBlurReduced, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            readMessages: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.readMessages, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            typingActions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.typingActions, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            recordingActions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.recordingActions, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            uploadingActions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.uploadingActions, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            stickerActivity: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.stickerActivity, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            gameActivity: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.gameActivity, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            emojiActivity: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.emojiActivity, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            presence: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.presence, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            scheduledSend: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.scheduledSend, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            saveDeleted: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.saveDeleted, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            showDeleted: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showDeleted, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            saveEditHistory: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.saveEditHistory, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            showEditHistory: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.showEditHistory, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            hideBlockedMessages: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.hideBlockedMessages, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            hideBlockedReactions: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.hideBlockedReactions, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            removeSponsored: JerkgramSponsoredContentPolicy.readStoredValue(accountPeerId: accountPeerId),
+            downloadBoost: JerkgramDownloadBoostSettings.readStoredMode(accountPeerId: accountPeerId).rawValue,
+            unlockDefaultChatFolder: UserDefaults.standard.object(forKey: JerkgramDefaultFolderSettings.scopedKey(accountPeerId: accountPeerId)) as? Bool ?? false,
+            enhancedTranslation: UserDefaults.standard.object(forKey: JerkgramTranslationSettings.scopedKey(accountPeerId: accountPeerId)) as? Bool ?? true,
             sendTextStyle: jerkgramScopedString(accountPeerId: accountPeerId, key: 
                 ghostBaseSendTextStyleKey,
-                defaultValue: "normal"
+                defaultValue: "normal", allowLegacyFallback: allowLegacyFallback
             ),
             deletedPortableReplies: jerkgramScopedBool(accountPeerId: accountPeerId, key: 
 
                 GhostBaseKey.deletedPortableReplies,
 
-                defaultValue: true
+                defaultValue: true, allowLegacyFallback: allowLegacyFallback
 
             ),
 
@@ -725,7 +773,7 @@ struct GhostBaseSettingsState: Equatable {
 
                 GhostBaseKey.preserveDeletedMedia,
 
-                defaultValue: true
+                defaultValue: true, allowLegacyFallback: allowLegacyFallback
 
             ),
 
@@ -733,34 +781,36 @@ struct GhostBaseSettingsState: Equatable {
 
                 GhostBaseKey.showRamUnderClock,
 
-                defaultValue: false
+                defaultValue: false, allowLegacyFallback: allowLegacyFallback
 
             ),
 
             messageSeconds: jerkgramScopedBool(accountPeerId: accountPeerId, key: 
                 GhostBaseKey.messageSeconds,
-                defaultValue: false
+                defaultValue: false, allowLegacyFallback: allowLegacyFallback
             ),
             hideOwnPhone: jerkgramScopedBool(accountPeerId: accountPeerId, key: 
                 GhostBaseKey.hideOwnPhone,
-                defaultValue: false
+                defaultValue: false, allowLegacyFallback: allowLegacyFallback
             ),
-            protectedEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedEnabled, defaultValue: true),
-            protectedGalleryShare: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedGalleryShare, defaultValue: true),
-            protectedGallerySave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedGallerySave, defaultValue: true),
-            protectedGalleryCopy: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedGalleryCopy, defaultValue: true),
-            chatSave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.chatSave, defaultValue: true),
-            chatCopy: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.chatCopy, defaultValue: true),
-            chatForward: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.chatForward, defaultValue: true),
-            allowScreenshots: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.allowScreenshots, defaultValue: true),
-            allowScreenRecording: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.allowScreenRecording, defaultValue: true),
-            oneTimeScreenshots: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.oneTimeScreenshots, defaultValue: false),
-            oneTimeScreenRecording: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.oneTimeScreenRecording, defaultValue: false),
-            oneTimeSave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.oneTimeSave, defaultValue: false),
-            storySave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.storySave, defaultValue: false),
-            localStarsEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.localStarsEnabled, defaultValue: false),
-            localStarsAmount: jerkgramScopedString(accountPeerId: accountPeerId, key: GhostBaseKey.localStarsAmount, defaultValue: "0"),
-            localStarsBaseAmount: jerkgramScopedString(accountPeerId: accountPeerId, key: GhostBaseKey.localStarsBaseAmount, defaultValue: "0")
+            protectedEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedEnabled, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            protectedGalleryShare: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedGalleryShare, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            protectedGallerySave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedGallerySave, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            protectedGalleryCopy: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.protectedGalleryCopy, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            chatSave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.chatSave, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            chatCopy: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.chatCopy, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            chatForward: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.chatForward, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            allowScreenshots: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.allowScreenshots, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            allowScreenRecording: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.allowScreenRecording, defaultValue: true, allowLegacyFallback: allowLegacyFallback),
+            oneTimeScreenshots: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.oneTimeScreenshots, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            oneTimeScreenRecording: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.oneTimeScreenRecording, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            oneTimeSave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.oneTimeSave, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            storySave: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.storySave, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            localGramEnabled: JerkgramLocalGramBalance.enabled(accountPeerId: accountPeerId),
+            localGramAmount: JerkgramLocalGramBalance.amount(accountPeerId: accountPeerId),
+            localStarsEnabled: jerkgramScopedBool(accountPeerId: accountPeerId, key: GhostBaseKey.localStarsEnabled, defaultValue: false, allowLegacyFallback: allowLegacyFallback),
+            localStarsAmount: jerkgramScopedString(accountPeerId: accountPeerId, key: GhostBaseKey.localStarsAmount, defaultValue: "0", allowLegacyFallback: allowLegacyFallback),
+            localStarsBaseAmount: jerkgramScopedString(accountPeerId: accountPeerId, key: GhostBaseKey.localStarsBaseAmount, defaultValue: "0", allowLegacyFallback: allowLegacyFallback)
         )
     }
 
@@ -776,6 +826,10 @@ private func jerkgramSettingsMenuIcon(
     let background: UInt32
 
     switch name {
+    case "Item List/Icons/Gram":
+        return PresentationResourcesSettings.ton
+    case "Item List/Icons/Brush":
+        return PresentationResourcesSettings.yourColor
     case "Jerkgram/Settings/Airplane":
         background = 0x53606A
     case "Chat/Context Menu/Eye":
@@ -811,7 +865,9 @@ private func jerkgramSettingsMenuIcon(
 private enum GhostBaseSettingsPage: Equatable {
     case root
     case dataAndBackup
+    case localPremium
     case stars
+    case gram
     case home
     case ghostMode
     case messages
@@ -827,6 +883,10 @@ private enum GhostBaseSettingsPage: Equatable {
             return "Jerkgram"
         case .dataAndBackup:
             return "Data and Backup"
+        case .localPremium:
+            return "Local Premium"
+        case .gram:
+            return "GRAM"
         case .stars:
             return "Stars"
         case .home:
@@ -855,6 +915,10 @@ private enum GhostBaseSettingsPage: Equatable {
             return strings.settingsTitle
         case .dataAndBackup:
             return strings.dataAndBackup
+        case .localPremium:
+            return strings.localPremium
+        case .gram:
+            return strings.gramBalance
         case .stars:
             return strings.starsBalance
         case .home:
@@ -883,6 +947,7 @@ private final class GhostBaseSettingsArguments {
     let runResearchAction: (String) -> Void
     let updateBool: (String, Bool) -> Void
     let openPage: (GhostBaseSettingsPage) -> Void
+    let openDownloadBoost: () -> Void
     let openSendTextStyle: () -> Void
 
     init(
@@ -891,6 +956,7 @@ private final class GhostBaseSettingsArguments {
         runResearchAction: @escaping (String) -> Void,
         updateBool: @escaping (String, Bool) -> Void,
         openPage: @escaping (GhostBaseSettingsPage) -> Void,
+        openDownloadBoost: @escaping () -> Void,
         openSendTextStyle: @escaping () -> Void
     ) {
         self.context = context
@@ -898,6 +964,7 @@ private final class GhostBaseSettingsArguments {
         self.runResearchAction = runResearchAction
         self.updateBool = updateBool
         self.openPage = openPage
+        self.openDownloadBoost = openDownloadBoost
         self.openSendTextStyle = openSendTextStyle
     }
 }
@@ -952,10 +1019,11 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
     case aboutValue(Int32, Int32, String, String)
     case telemetryToggle(Int32, Int32, String, Bool)
     case header(Int32, String)
-    case toggle(Int32, Int32, String, String, Bool)
+    case toggle(Int32, Int32, String, String, Bool, enabled: Bool = true)
     case input(Int32, Int32, String, String, String)
     case disclosure(Int32, Int32, String, String, GhostBaseSettingsPage)
     case valueDisclosure(Int32, Int32, String, String, String?, GhostBaseSettingsPage)
+    case downloadBoost(Int32, Int32, String, enabled: Bool = true)
     case selector(Int32, Int32, String, String)
     case stylePreview(Int32, Int32, String)
     case aboutChannel(Int32, Int32, String, EnginePeer?, String, Bool)
@@ -971,13 +1039,15 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
             return section
         case let .telemetryToggle(section, _, _, _):
             return section
-        case let .toggle(section, _, _, _, _):
+        case let .toggle(section, _, _, _, _, _):
             return section
         case let .input(section, _, _, _, _):
             return section
         case let .disclosure(section, _, _, _, _):
             return section
         case let .valueDisclosure(section, _, _, _, _, _):
+            return section
+        case let .downloadBoost(section, _, _, _):
             return section
         case let .selector(section, _, _, _):
             return section
@@ -1002,13 +1072,15 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
             return section * 1000 + index
         case let .telemetryToggle(section, index, _, _):
             return section * 1000 + index
-        case let .toggle(section, index, _, _, _):
+        case let .toggle(section, index, _, _, _, _):
             return section * 1000 + index
         case let .input(section, index, _, _, _):
             return section * 1000 + index
         case let .disclosure(section, index, _, _, _):
             return section * 1000 + index
         case let .valueDisclosure(section, index, _, _, _, _):
+            return section * 1000 + index
+        case let .downloadBoost(section, index, _, _):
             return section * 1000 + index
         case let .selector(section, index, _, _):
             return section * 1000 + index
@@ -1042,9 +1114,9 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
                 return ls == rs && li == ri && lt == rt && lv == rv
             }
             return false
-        case let .toggle(ls, li, lk, lt, lv):
-            if case let .toggle(rs, ri, rk, rt, rv) = rhs {
-                return ls == rs && li == ri && lk == rk && lt == rt && lv == rv
+        case let .toggle(ls, li, lk, lt, lv, le):
+            if case let .toggle(rs, ri, rk, rt, rv, re) = rhs {
+                return ls == rs && li == ri && lk == rk && lt == rt && lv == rv && le == re
             }
             return false
         case let .input(ls, li, lk, lt, lv):
@@ -1061,6 +1133,9 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
                     && lIcon == rIcon
                     && lPage.title == rPage.title
             }
+            return false
+        case let .downloadBoost(ls, li, lv, le):
+            if case let .downloadBoost(rs, ri, rv, re) = rhs { return ls == rs && li == ri && lv == rv && le == re }
             return false
         case let .selector(ls, li, lt, lv):
             if case let .selector(rs, ri, rt, rv) = rhs {
@@ -1162,15 +1237,17 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
                 }
             )
 
-        case let .toggle(_, _, key, title, value):
+        case let .toggle(_, _, key, title, value, enabled):
             return ItemListSwitchItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
                 title: title,
                 value: value,
+                enabled: enabled,
                 sectionId: self.section,
                 style: .blocks,
                 updated: { updatedValue in
+                    guard enabled else { return }
                     arguments.updateBool(key, updatedValue)
                 }
             )
@@ -1190,6 +1267,11 @@ private enum GhostBaseSettingsEntry: ItemListNodeEntry {
                     arguments.openPage(page)
                 }
             )
+
+        case let .downloadBoost(_, _, value, enabled):
+            let strings = presentationData.strings.jerkgram
+            let label = value == "maximum" ? strings.downloadBoostMaximum : (value == "medium" ? strings.downloadBoostMedium : strings.downloadBoostOff)
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: strings.downloadBoost, enabled: enabled, label: label, labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: { arguments.openDownloadBoost() })
 
         case let .selector(_, _, title, value):
             return ItemListDisclosureItem(
@@ -1752,6 +1834,15 @@ private enum JerkgramAboutChannelState: Equatable {
     case unavailable
 }
 
+// Keep the initial list state ready before appearance. Hidden controllers retain
+// their last preview while mapToSignal disposes channel history and polling.
+private func jerkgramVisibleFeed<T>(visible: Signal<Bool, NoError>, initial: T, source: @escaping () -> Signal<T, NoError>) -> Signal<T, NoError> {
+    return .single(initial)
+    |> then(visible |> distinctUntilChanged |> mapToSignal { visible -> Signal<T, NoError> in
+        return visible ? source() : .never()
+    })
+}
+
 private func jerkgramAboutChannelState(
     context: AccountContext,
     enabled: Bool,
@@ -1848,10 +1939,13 @@ private func ghostBaseSettingsEntries(
     state: GhostBaseSettingsState,
     context: AccountContext,
     page: GhostBaseSettingsPage,
+    isBotAccount: Bool,
     strings: JerkgramStrings,
     aboutChannelState: JerkgramAboutChannelState,
     aboutCommunityState: JerkgramAboutChannelState
 ) -> [GhostBaseSettingsEntry] {
+    // A direct route must honor the same capability as the root destination.
+    if isBotAccount && page == .ghostMode { return [] }
     var entries: [GhostBaseSettingsEntry] = []
 
     let ghost = GhostBaseSettingsSection.ghostMode.rawValue
@@ -2043,10 +2137,9 @@ private func ghostBaseSettingsEntries(
     if page == .root {
         // Keep the agreed Telegram-native destination list. Presentation work
         // belongs inside destinations, not in a new root hero card.
-        return [
+        var rootEntries: [GhostBaseSettingsEntry] = [
             .header(0, strings.features),
             .disclosure(0, 1, strings.basicFunctions, "Jerkgram/Settings/Airplane", .home),
-            .disclosure(0, 2, strings.ghostMode, "Chat/Context Menu/Eye", .ghostMode),
             .disclosure(0, 3, strings.messages, "Chat/Context Menu/MessageBubble", .messages),
             .disclosure(0, 4, strings.protectedContent, "Premium/CopyProtection/NoForward", .protectedContent),
             .disclosure(0, 5, strings.mediaAndStories, "Item List/Icons/Stories", .mediaStories),
@@ -2055,6 +2148,10 @@ private func ghostBaseSettingsEntries(
             .disclosure(0, 8, strings.dataAndBackup, "Item List/Icons/Stories", .dataAndBackup),
             .disclosure(0, 9, strings.about, "Chat/Context Menu/Info", .about)
         ]
+        if !isBotAccount {
+            rootEntries.insert(.disclosure(0, 2, strings.ghostMode, "Chat/Context Menu/Eye", .ghostMode), at: 2)
+        }
+        return rootEntries
     }
 
     if page == .home {
@@ -2066,13 +2163,40 @@ private func ghostBaseSettingsEntries(
             .header(0, strings.profileInformation),
             .toggle(0, 1, GhostBaseKey.profileEnabled, strings.showProfileInformation, state.profileEnabled),
             .toggle(0, 2, GhostBaseKey.showIds, strings.telegramId, state.showIds),
-            .toggle(0, 3, GhostBaseKey.showDCs, strings.avatarDc, state.showDCs),
+            .toggle(0, 3, GhostBaseKey.showDCs, "DC", state.showDCs),
             .toggle(0, 4, GhostBaseKey.showRegistration, strings.registrationDate, state.showRegistration),
             .header(1, strings.basicFunctions),
             .valueDisclosure(1, 50, strings.starsBalance, strings.starsOverrideSummary(state.localStarsEnabled, balance), nil, .stars),
+            .valueDisclosure(1, 51, strings.gramBalance, strings.gramOverrideSummary(state.localGramEnabled, state.localGramAmount), "Item List/Icons/Gram", .gram),
             .header(2, strings.backup),
-            .disclosure(2, 1, strings.dataAndBackup, "Item List/Icons/Stories", .dataAndBackup)
+            .disclosure(2, 1, strings.dataAndBackup, "Item List/Icons/Stories", .dataAndBackup),
+            .disclosure(2, 2, strings.localPremium, "Item List/Icons/Gram", .localPremium)
         ]
+    }
+
+    if page == .localPremium {
+        let ru = strings.languageCode.hasPrefix("ru")
+        let masterEnabled = JerkgramLocalPremiumPolicy.enabled
+        let appearance = context.jerkgramLocalAppearance.snapshot
+        var result: [GhostBaseSettingsEntry] = [
+            .header(0, strings.localPremium),
+            .toggle(0, 1, JerkgramLocalPremiumPolicy.preferenceKey, ru ? "Разблокировать локальный Premium" : "Unlock Local Premium", JerkgramLocalPremiumPolicy.enabled),
+            .header(1, strings.appearance),
+            .toggle(1, 1, JerkgramAppIconAccess.preferenceKey, JerkgramAppIconAccess.title(languageCode: strings.languageCode), JerkgramAppIconAccess.storedUnlockEnabled, enabled: masterEnabled),
+            .header(2, strings.localPremiumMedia),
+            .downloadBoost(2, 1, state.downloadBoost, enabled: masterEnabled),
+            .info(2, strings.downloadBoostHint),
+            .header(3, strings.messages),
+            .toggle(3, 1, JerkgramSponsoredContentPolicy.preferenceKey, strings.removeSponsored, state.removeSponsored, enabled: masterEnabled),
+            .toggle(3, 2, JerkgramTranslationSettings.preferenceKey, strings.localTranslation, state.enhancedTranslation, enabled: masterEnabled),
+            .toggle(3, 3, JerkgramLocalPremiumPolicy.savedTagsKey, ru ? "Локальные теги Избранного" : "Local Saved Messages Tags", JerkgramLocalPremiumPolicy.storedTagsEnabled(accountPeerId: context.account.peerId.toInt64()), enabled: masterEnabled),
+            .info(3, strings.localPremiumScopeHint)
+        ]
+        if !isBotAccount {
+            result.insert(.toggle(1, 2, "jerkgram.LocalPremium.EmojiStatus", ru ? "Emoji Status" : "Emoji Status", appearance.settings.emojiEnabled, enabled: masterEnabled), at: 5)
+            result.insert(.toggle(1, 3, "jerkgram.LocalPremium.ProfileColors", ru ? "Цвета профиля, имени и фоновые эмодзи" : "Profile and name colors, background emoji", appearance.settings.colorsEnabled, enabled: masterEnabled), at: 6)
+        }
+        return result
     }
 
     if page == .stars {
@@ -2162,7 +2286,8 @@ private func ghostBaseSettingsEntries(
         
             .header(5, strings.blockedUsers),
             .toggle(5, 1, GhostBaseKey.hideBlockedMessages, strings.hideBlockedMessages, state.hideBlockedMessages),
-            .toggle(5, 2, GhostBaseKey.hideBlockedReactions, strings.hideBlockedReactions, state.hideBlockedReactions)]
+            .toggle(5, 2, GhostBaseKey.hideBlockedReactions, strings.hideBlockedReactions, state.hideBlockedReactions),
+        ]
     }
 
     if page == .protectedContent {
@@ -2186,7 +2311,7 @@ private func ghostBaseSettingsEntries(
             .toggle(0, 1, GhostBaseKey.oneTimeScreenshots, strings.oneTimeScreenshots, state.oneTimeScreenshots),
             .toggle(0, 2, GhostBaseKey.oneTimeScreenRecording, strings.oneTimeScreenRecording, state.oneTimeScreenRecording),
             .toggle(0, 3, GhostBaseKey.oneTimeSave, strings.oneTimeMedia, state.oneTimeSave),
-            .toggle(0, 4, GhostBaseKey.storySave, strings.storySave, state.storySave)
+            .toggle(0, 4, GhostBaseKey.storySave, strings.storySave, state.storySave),
         ]
     }
 
@@ -2199,6 +2324,7 @@ private func ghostBaseSettingsEntries(
             .toggle(0, 4, GhostBaseKey.profileBlurTint, strings.colorTint, state.profileBlurTint),
             .toggle(0, 5, GhostBaseKey.profileBlurReduced, strings.reducedBlur, state.profileBlurReduced),
             .header(1, strings.interface),
+            .toggle(1, 4, GhostBaseKey.settingsTranslucency, strings.translucentSettings, state.settingsTranslucency),
             .toggle(1, 5, GhostBaseKey.messageSeconds, strings.messageSeconds, state.messageSeconds),
             .toggle(1, 6, GhostBaseKey.hideOwnPhone, strings.hideMyPhone, state.hideOwnPhone),
             .toggle(
@@ -2234,7 +2360,7 @@ private func ghostBaseSettingsEntries(
             .aboutValue(1, 3, strings.telegramBase, JerkgramReleaseIdentity.telegramBase),
             .header(2, strings.privacy),
             .telemetryToggle(2, 1, strings.anonymousAnalytics, jerkgramTelemetryEnabled()),
-            .info(3, strings.anonymousAnalyticsDescription),
+            .info(2, strings.anonymousAnalyticsDescription),
         ]
     }
 
@@ -2868,29 +2994,58 @@ private func ghostBaseSendStylePageController(
     )
 }
 
+private func jerkgramDownloadBoostController(context: AccountContext, selected: String, select: @escaping (String) -> Void) -> ViewController {
+    let selectedPromise = ValuePromise(selected, ignoreRepeated: true)
+    let arguments = GhostBaseSendStylePageArguments(select: { value in
+        selectedPromise.set(value)
+        select(value)
+    })
+    let signal = combineLatest(context.sharedContext.presentationData, selectedPromise.get())
+    |> deliverOnMainQueue
+    |> map { presentationData, value -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let strings = presentationData.strings.jerkgram
+        let options = [("off", strings.downloadBoostOff), ("medium", strings.downloadBoostMedium), ("maximum", strings.downloadBoostMaximum)]
+        let entries: [GhostBaseSendStylePageEntry] = options.enumerated().map { index, option in
+            return .option(Int32(index), option.0, option.1, value == option.0)
+        }
+        let state = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(strings.downloadBoost), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
+        let list = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, ensureVisibleItemTag: nil, emptyStateItem: nil, animateChanges: false)
+        return (state, (list, arguments as Any))
+    }
+    return ItemListController(context: context, state: signal)
+}
+
 private func ghostBaseSettingsPageController(
     context: AccountContext,
     page: GhostBaseSettingsPage
 ) -> ViewController {
     let initialState = GhostBaseSettingsState.load(accountPeerId: context.account.peerId.toInt64())
 
-    jerkgramProjectActiveSettings(accountPeerId: context.account.peerId.toInt64(), state: initialState)
     let statePromise = ValuePromise(initialState, ignoreRepeated: false)
     let stateValue = Atomic(value: initialState)
     let accountPeerId = context.account.peerId.toInt64()
+    // Each pushed page owns a snapshot. Refresh it on appearance so retained
+    // aliases display current values after back navigation without publishing
+    // imports, polling, or writing settings merely by opening a page.
+    let reloadSettings: () -> Void = {
+        let refreshed = GhostBaseSettingsState.load(accountPeerId: accountPeerId)
+        _ = stateValue.modify { _ in refreshed }
+        statePromise.set(refreshed)
+    }
     let jerkgramImportRefreshSignal = jerkgramSettingsImportRefreshSignal(
         accountPeerId: accountPeerId,
-        reload: {
-            let refreshed = GhostBaseSettingsState.load(accountPeerId: accountPeerId)
-            _ = stateValue.modify { _ in refreshed }
-            statePromise.set(refreshed)
-        }
+        reload: reloadSettings
     )
     // Retain the import observer through the controller's existing state
     // subscription without changing the arity or closure shape of whatever
     // combineLatest the release chain already uses.
+    let premiumChanges: Signal<Void, NoError> = page == .localPremium ? Signal { subscriber in
+        let observer = NotificationCenter.default.addObserver(forName: JerkgramLocalPremiumPolicy.changed, object: nil, queue: .main) { _ in subscriber.putNext(()) }
+        subscriber.putNext(())
+        return ActionDisposable { NotificationCenter.default.removeObserver(observer) }
+    } : .single(())
     let jerkgramImportRefreshStateSignal = combineLatest(
-        statePromise.get(),
+        combineLatest(statePromise.get(), context.jerkgramLocalAppearance.updates, premiumChanges) |> map { state, _, _ in state },
         jerkgramImportRefreshSignal
     )
     |> map { (state: GhostBaseSettingsState, _: Void) -> GhostBaseSettingsState in state }
@@ -2899,27 +3054,11 @@ private func ghostBaseSettingsPageController(
         let updated = stateValue.modify { current in
             let next = f(current)
 
-            let ghostBaseVisualSettingsChanged =
-                current.glassEnabled != next.glassEnabled
-                || current.profileAvatarBlur != next.profileAvatarBlur
-                || current.profileAnimatedBackground != next.profileAnimatedBackground
-                || current.profileBlurTint != next.profileBlurTint
-                || current.profileBlurReduced != next.profileBlurReduced
-
             jerkgramPersistChangedSettings(
                 accountPeerId: context.account.peerId.toInt64(),
                 previous: current,
                 current: next
             )
-
-            if ghostBaseVisualSettingsChanged {
-                NotificationCenter.default.post(
-                    name: Notification.Name(
-                        "jerkgram.ProfileVisualSettingsDidChange.V11M"
-                    ),
-                    object: nil
-                )
-            }
 
             return next
         }
@@ -2929,6 +3068,7 @@ private func ghostBaseSettingsPageController(
 
     var pushController: ((ViewController) -> Void)?
 
+    var openDownloadBoostImpl: (() -> Void)?
     var openSendTextStyleImpl: (() -> Void)?
 
     let ghostBaseHiddenGiftsDisposable = MetaDisposable()
@@ -3314,16 +3454,15 @@ private func ghostBaseSettingsPageController(
         ))
     }
 
-    let aboutChannelSignal = jerkgramAboutChannelState(
-        context: context,
-        enabled: page == .about,
-        username: "JerkgramApp"
-    )
-    let aboutCommunitySignal = jerkgramAboutChannelState(
-        context: context,
-        enabled: page == .about,
-        username: "JerkgramCommunity"
-    )
+    let aboutVisibility = ValuePromise(false, ignoreRepeated: true)
+    func aboutFeed(_ username: String) -> Signal<JerkgramAboutChannelState, NoError> {
+        guard page == .about else { return .single(.unavailable) }
+        return jerkgramVisibleFeed(visible: aboutVisibility.get(), initial: .loading, source: {
+            jerkgramAboutChannelState(context: context, enabled: true, username: username)
+        })
+    }
+    let aboutChannelSignal = aboutFeed("JerkgramApp")
+    let aboutCommunitySignal = aboutFeed("JerkgramCommunity")
     var openAboutChannelImpl: ((EnginePeer) -> Void)?
     var sharePerformanceImpl: (() -> Void)?
 
@@ -3704,10 +3843,31 @@ private func ghostBaseSettingsPageController(
             }
         },
         updateBool: { key, value in
+        let premiumKeys: Set<String> = [JerkgramAppIconAccess.preferenceKey, JerkgramSponsoredContentPolicy.preferenceKey, JerkgramTranslationSettings.preferenceKey, JerkgramLocalPremiumPolicy.savedTagsKey, "jerkgram.LocalPremium.EmojiStatus", "jerkgram.LocalPremium.ProfileColors"]
+        guard !premiumKeys.contains(key) || JerkgramLocalPremiumPolicy.enabled else { return }
         updateState { state in
             var updated = state
 
             switch key {
+            case JerkgramLocalPremiumPolicy.preferenceKey:
+                UserDefaults.standard.set(value, forKey: JerkgramLocalPremiumPolicy.preferenceKey)
+                JerkgramLocalPremiumPolicy.update(masterEnabled: value)
+            case JerkgramLocalPremiumPolicy.savedTagsKey:
+                guard JerkgramLocalPremiumPolicy.enabled else { return updated }
+                UserDefaults.standard.set(value, forKey: JerkgramLocalPremiumPolicy.scopedTagsKey(accountPeerId: accountPeerId))
+                JerkgramLocalPremiumPolicy.updateTags(accountPeerId: accountPeerId, enabled: value)
+            case "jerkgram.LocalPremium.EmojiStatus":
+                guard JerkgramLocalPremiumPolicy.enabled else { return updated }
+                context.jerkgramLocalAppearance.update { $0.emojiEnabled = value }
+            case "jerkgram.LocalPremium.ProfileColors":
+                guard JerkgramLocalPremiumPolicy.enabled else { return updated }
+                context.jerkgramLocalAppearance.update { $0.colorsEnabled = value }
+            case JerkgramAppIconAccess.preferenceKey:
+                UserDefaults.standard.set(value, forKey: JerkgramAppIconAccess.preferenceKey)
+            case JerkgramDefaultFolderSettings.preferenceKey:
+                updated.unlockDefaultChatFolder = value
+            case JerkgramTranslationSettings.preferenceKey:
+                updated.enhancedTranslation = value
             case GhostBaseKey.profileEnabled:
                 updated.profileEnabled = value
             case GhostBaseKey.showIds:
@@ -3739,60 +3899,39 @@ private func ghostBaseSettingsPageController(
             case GhostBaseKey.hideBlockedReactions:
                 updated.hideBlockedReactions = value
 
+            case GhostBaseKey.settingsTranslucency:
+                updated.settingsTranslucency = value
             case GhostBaseKey.glassEnabled:
                 updated.glassEnabled = value
-                GhostBaseGlassStyle.setEnabled(value)
 
             case GhostBaseKey.profileAvatarBlur:
                 updated.profileAvatarBlur = value
-                UserDefaults.standard.set(value, forKey: GhostBaseKey.profileAvatarBlur)
 
             case GhostBaseKey.profileAnimatedBackground:
                 updated.profileAnimatedBackground = value
             case GhostBaseKey.profileBlurTint:
                 updated.profileBlurTint = value
-                UserDefaults.standard.set(value, forKey: GhostBaseKey.profileBlurTint)
 
             case GhostBaseKey.profileBlurReduced:
                 updated.profileBlurReduced = value
-                UserDefaults.standard.set(value, forKey: GhostBaseKey.profileBlurReduced)
 
             case GhostBaseKey.deletedPortableReplies:
                 updated.deletedPortableReplies = value
-                UserDefaults.standard.set(
-                    value,
-                    forKey: GhostBaseKey.deletedPortableReplies
-                )
 
             case GhostBaseKey.preserveDeletedMedia:
                 updated.preserveDeletedMedia = value
-                UserDefaults.standard.set(
-                    value,
-                    forKey: GhostBaseKey.preserveDeletedMedia
-                )
 
             case GhostBaseKey.showRamUnderClock:
                 updated.showRamUnderClock = value
-                UserDefaults.standard.set(
-                    value,
-                    forKey: GhostBaseKey.showRamUnderClock
-                )
-        NotificationCenter.default.post(name: Notification.Name("GhostBaseRamOverlayPreferenceChanged"), object: nil)
 
             case GhostBaseKey.messageSeconds:
                 updated.messageSeconds = value
-                UserDefaults.standard.set(
-                    value,
-                    forKey: GhostBaseKey.messageSeconds
-                )
 
             case GhostBaseKey.hideOwnPhone:
                 updated.hideOwnPhone = value
-                UserDefaults.standard.set(
-                    value,
-                    forKey: GhostBaseKey.hideOwnPhone
-                )
 
+            case JerkgramSponsoredContentPolicy.preferenceKey:
+                updated.removeSponsored = value
             case GhostBaseKey.chatSave:
                 updated.chatSave = value
             case GhostBaseKey.chatCopy:
@@ -3882,8 +4021,11 @@ private func ghostBaseSettingsPageController(
     }, openPage: { selectedPage in
         if selectedPage == .dataAndBackup {
             pushController?(jerkgramDataAndBackupController(context: context))
+        } else if selectedPage == .gram {
+            pushController?(jerkgramGramEditorController(context: context))
         } else if selectedPage == .stars {
             pushController?(jerkgramStarsEditorController(context: context))
+
         } else {
             pushController?(
                 ghostBaseSettingsPageController(
@@ -3892,6 +4034,8 @@ private func ghostBaseSettingsPageController(
                 )
             )
         }
+    }, openDownloadBoost: {
+        openDownloadBoostImpl?()
     }, openSendTextStyle: {
         openSendTextStyleImpl?()
     })
@@ -3907,11 +4051,19 @@ private func ghostBaseSettingsPageController(
         jerkgramImportRefreshStateSignal,
         aboutChannelSignal,
         aboutCommunitySignal,
-        performanceChanges
+        performanceChanges,
+        context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
     )
     |> deliverOnMainQueue
-    |> map { presentationData, state, aboutChannelState, aboutCommunityState, _
+    |> map { presentationData, state, aboutChannelState, aboutCommunityState, _, ownPeer
         -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let persistentBotAccount = UserDefaults.standard.bool(forKey: "jerkgram.BotAccount.\(context.account.peerId.toInt64())")
+        let isBotAccount: Bool
+        if case let .user(user)? = ownPeer {
+            isBotAccount = user.botInfo != nil || persistentBotAccount
+        } else {
+            isBotAccount = persistentBotAccount
+        }
         let controllerState = ItemListControllerState(
             presentationData: ItemListPresentationData(presentationData),
             title: .text(page.localizedTitle(presentationData.strings.jerkgram)),
@@ -3926,6 +4078,7 @@ private func ghostBaseSettingsPageController(
                 state: state,
                 context: context,
                 page: page,
+                isBotAccount: isBotAccount,
                 strings: presentationData.strings.jerkgram,
                 aboutChannelState: aboutChannelState,
                 aboutCommunityState: aboutCommunityState
@@ -3941,6 +4094,10 @@ private func ghostBaseSettingsPageController(
         context: context,
         state: signal
     )
+    controller.refreshSettingsOnAppearance = reloadSettings
+    if page == .about {
+        controller.aboutVisibilityChanged = { visible in aboutVisibility.set(visible) }
+    }
     controller.diagnosticRoute = page == .about ? "about" : "settingsSubpage"
     sharePerformanceImpl = { [weak controller] in
         guard let root = controller?.view.window?.rootViewController else { return }
@@ -3967,6 +4124,19 @@ private func ghostBaseSettingsPageController(
                 chatLocation: .peer(peer)
             )
         )
+    }
+
+    openDownloadBoostImpl = { [weak controller] in
+        guard JerkgramLocalPremiumPolicy.enabled else { return }
+        let picker = jerkgramDownloadBoostController(context: context, selected: stateValue.with { $0.downloadBoost }, select: { mode in
+            guard JerkgramLocalPremiumPolicy.enabled else { return }
+            updateState { current in
+                var updated = current
+                updated.downloadBoost = mode
+                return updated
+            }
+        })
+        controller?.push(picker)
     }
 
     openSendTextStyleImpl = { [weak controller] in

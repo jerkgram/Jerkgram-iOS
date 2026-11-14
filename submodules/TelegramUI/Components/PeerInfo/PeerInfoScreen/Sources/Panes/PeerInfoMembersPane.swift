@@ -285,7 +285,8 @@ final class PeerInfoMembersPaneNode: ASDisplayNode, PeerInfoPaneNode {
     
     weak var parentController: ViewController?
     
-    private let ghostBaseGlassEnabled: Bool
+    private var ghostBaseGlassEnabled: Bool
+    private var jerkgramVisualRevision: UInt64 = 0
     private let listBackgroundView: UIImageView
     private let listMaskView: UIImageView
 
@@ -346,6 +347,9 @@ final class PeerInfoMembersPaneNode: ASDisplayNode, PeerInfoPaneNode {
         self.ghostBaseGlassIsDark = nil
 
         self.listMaskView = UIImageView()
+        // The rounded list background and its mask are decoration.
+        self.listBackgroundView.accessibilityElementsHidden = true
+        self.listMaskView.accessibilityElementsHidden = true
         self.listMaskView.image = generateImage(CGSize(width: 16.0 + 26.0 * 2.0 + 16.0, height: 26.0 * 2.0), rotatedContext: { size, context in
             context.clear(CGRect(origin: CGPoint(), size: size))
             context.setFillColor(UIColor.white.cgColor)
@@ -422,6 +426,15 @@ final class PeerInfoMembersPaneNode: ASDisplayNode, PeerInfoPaneNode {
         }
     }
     
+    func updateJerkgramVisualState(glassEnabled: Bool, revision: UInt64) {
+        guard self.ghostBaseGlassEnabled != glassEnabled || self.jerkgramVisualRevision != revision else {
+            return
+        }
+        self.ghostBaseGlassEnabled = glassEnabled
+        self.jerkgramVisualRevision = revision
+        self.ghostBaseGlassIsDark = nil
+    }
+
     func update(size: CGSize, topInset: CGFloat, sideInset: CGFloat, bottomInset: CGFloat, deviceMetrics: DeviceMetrics, visibleHeight: CGFloat, isScrollingLockedAtTop: Bool, expandProgress: CGFloat, navigationHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition) {
         let isFirstLayout = self.currentParams == nil
         self.currentParams = (size, isScrollingLockedAtTop)
@@ -453,11 +466,17 @@ final class PeerInfoMembersPaneNode: ASDisplayNode, PeerInfoPaneNode {
             self.backgroundColor = .clear
             self.listNode.backgroundColor = .clear
 
-            if self.ghostBaseGlassIsDark != isDark {
-                self.ghostBaseGlassIsDark = isDark
-                self.ghostBaseGlassEffectView.effect = UIBlurEffect(
-                    style: isDark ? .systemUltraThinMaterialDark : .systemUltraThinMaterialLight
-                )
+            if GhostBaseGlassStyle.allowsMaterial {
+                if self.ghostBaseGlassIsDark != isDark {
+                    self.ghostBaseGlassIsDark = isDark
+                    JerkgramWave1Instrumentation.add("materialEffectCreations")
+                    self.ghostBaseGlassEffectView.effect = UIBlurEffect(
+                        style: isDark ? .systemUltraThinMaterialDark : .systemUltraThinMaterialLight
+                    )
+                }
+            } else {
+                self.ghostBaseGlassIsDark = nil
+                self.ghostBaseGlassEffectView.effect = nil
             }
 
             self.ghostBaseGlassEffectView.isHidden = false
@@ -469,6 +488,7 @@ final class PeerInfoMembersPaneNode: ASDisplayNode, PeerInfoPaneNode {
             self.listBackgroundView.isHidden = true
             self.listMaskView.isHidden = true
         } else {
+            self.ghostBaseGlassIsDark = nil
             self.ghostBaseGlassEffectView.isHidden = true
             self.ghostBaseGlassEffectView.effect = nil
             self.ghostBaseGlassTintView.backgroundColor = .clear
@@ -646,10 +666,10 @@ final class PeerInfoMemberExtractedContentSource: ContextExtractedContentSource 
     }
     
     func takeView() -> ContextControllerTakeViewInfo? {
-        return ContextControllerTakeViewInfo(containingItem: .node(self.sourceNode), contentAreaInScreenSpace: UIScreen.main.bounds)
+        return ContextControllerTakeViewInfo(containingItem: .node(self.sourceNode), contentAreaInScreenSpace: mainWindowScreenBounds)
     }
     
     func putBack() -> ContextControllerPutBackViewInfo? {
-        return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: UIScreen.main.bounds)
+        return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: mainWindowScreenBounds)
     }
 }

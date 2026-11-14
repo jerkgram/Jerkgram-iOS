@@ -710,10 +710,9 @@ private final class GhostBaseProfileReportCardNode: ASDisplayNode {
         width: CGFloat
     ) -> CGSize {
         let isDark = presentationData.theme.overallDarkAppearance
-        self.backgroundColor = UIColor(
-            white: isDark ? 0.0 : 1.0,
-            alpha: isDark ? 0.26 : 0.18
-        )
+        self.backgroundColor = GhostBaseGlassStyle.isEnabled && GhostBaseGlassStyle.allowsTransparentSurfaces
+            ? UIColor(white: isDark ? 0.0 : 1.0, alpha: isDark ? 0.26 : 0.18)
+            : presentationData.theme.list.itemBlocksBackgroundColor
         self.layer.borderWidth = 0.5
         self.layer.borderColor = presentationData.theme.list.itemPlainSeparatorColor
             .withAlphaComponent(isDark ? 0.30 : 0.20).cgColor

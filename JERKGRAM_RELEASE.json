@@ -4,24 +4,24 @@
   "project": "Jerkgram",
   "repository": "jerkgram/Jerkgram-iOS",
   "status": "stable",
-  "jerkgramVersion": "1.1.0",
-  "buildNumber": 163,
+  "jerkgramVersion": "1.2.0",
+  "buildNumber": 183,
   "upstream": {
     "repository": "TelegramMessenger/Telegram-iOS",
-    "tag": "release-13.0.0",
-    "commit": "f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838"
+    "tag": "release-13.2",
+    "commit": "24638bc69bd083981b178dd1e7f921eebbf7fc46"
   },
-  "publicSourceTag": "v1.1.0",
+  "publicSourceTag": "v1.2.0",
   "ipa": {
-    "filename": "Jerkgram-1.1.0.ipa",
-    "sha256": "9c20a01417784d92973d5ae862e35aec827484369ee1e8c2bc3e6997f74dc61a"
+    "filename": "Jerkgram-1.2.0.ipa",
+    "sha256": "4c520eb3cf8cade914903a1cdc08f54c7b0dc73c8916dbec6361bfe8f76254f1"
   },
   "sourceSnapshot": {
-    "filename": "Jerkgram-1.1.0-source.tar.xz",
-    "sha256": "c586808b1839e31e8805a1c4c3449619c3d0383c8221ac9ca9b9a1b07e475b8a"
+    "filename": "Jerkgram-1.2.0-source.tar.xz",
+    "sha256": "71ee50b4a664a21371ff03a816d9ef3a291b93192b4b99d72b92d482f7566ce5"
   },
   "sourceManifest": {
     "filename": "public-source-manifest.json",
-    "sha256": "9d3ba5c71a01dcbe01a0a160a6d460a8f7106429b3be8eb281968b473cb4ddb2"
+    "sha256": "d7db2e01f60736d5eb2c06af9cb22b334fdd1043e16397e6fa7c91bff1746809"
   }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Postbox
 import UIKit
 import AsyncDisplayKit
 import TelegramCore
@@ -12,6 +13,7 @@ import ChatTextInputPanelNode
 import RichTextEditorMediaView
 import RichTextEditorUIKit
 import InstantPageUI
+import BrowserUI
 
 func chatInputFormulaRenderResult(context: RichTextFormulaRenderContext) -> RichTextFormulaRenderResult? {
     guard let attachment = instantPageMathAttachment(
@@ -30,9 +32,27 @@ func chatInputFormulaRenderResult(context: RichTextFormulaRenderContext) -> Rich
     )
 }
 
+private func configureJerkgramLocalTagsPanel(_ panel: ChatMessageSelectionInputPanelNode, state: ChatPresentationInterfaceState, context: AccountContext, interaction: ChatControllerInteraction?) {
+    let strings = JerkgramSavedTagsStrings(state.strings)
+    panel.localTagsTitle = strings.title
+    panel.localTagsCaption = strings.text("Local", "Лок.")
+    if JerkgramLocalPremiumPolicy.savedTagsEnabled(accountPeerId: context.account.peerId.toInt64()), state.chatLocation.peerId == context.account.peerId, state.subject != .scheduledMessages {
+        panel.localTagsAction = { ids in
+            jerkgramPresentSavedTagsController(context: context, selectedMessageIds: ids)
+        }
+    } else {
+        panel.localTagsAction = nil
+    }
+}
+
 func inputPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, currentPanel: ChatInputPanelNode?, currentSecondaryPanel: ChatInputPanelNode?, textInputPanelNode: ChatTextInputPanelNode?, chatControllerInteraction: ChatControllerInteraction?, interfaceInteraction: ChatPanelInterfaceInteraction?) -> (primary: ChatInputPanelNode?, secondary: ChatInputPanelNode?) {
     if let renderedPeer = chatPresentationInterfaceState.renderedPeer, renderedPeer.peer?.restrictionText(platform: "ios", contentSettings: context.currentContentSettings.with { $0 }) != nil {
         return (nil, nil)
+    }
+    if jerkgramIsRetainedExcludedChat(chatPresentationInterfaceState.renderedPeer?.peer) && chatPresentationInterfaceState.interfaceState.selectionState == nil {
+        if let panel = currentPanel as? JerkgramExcludedChatInputPanelNode { return (panel, nil) }
+        let panel = JerkgramExcludedChatInputPanelNode()
+        return (panel, nil)
     }
     if chatPresentationInterfaceState.isNotAccessible && !canJoinInaccessibleCommunityChat(chatPresentationInterfaceState) {
         return (nil, nil)
@@ -75,10 +95,12 @@ func inputPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceState
                 currentPanel.selectedMessages = selectionState.selectedIds
                 currentPanel.chatControllerInteraction = chatControllerInteraction
                 currentPanel.interfaceInteraction = interfaceInteraction
+                configureJerkgramLocalTagsPanel(currentPanel, state: chatPresentationInterfaceState, context: context, interaction: chatControllerInteraction)
                 currentPanel.updateTheme(theme: chatPresentationInterfaceState.theme)
                 selectionPanel = currentPanel
             } else {
                 let panel = ChatMessageSelectionInputPanelNode(theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
+                configureJerkgramLocalTagsPanel(panel, state: chatPresentationInterfaceState, context: context, interaction: chatControllerInteraction)
                 panel.context = context
                 panel.selectedMessages = selectionState.selectedIds
                 panel.chatControllerInteraction = chatControllerInteraction
@@ -130,10 +152,12 @@ func inputPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceState
                 currentPanel.selectedMessages = selectionState.selectedIds
                 currentPanel.chatControllerInteraction = chatControllerInteraction
                 currentPanel.interfaceInteraction = interfaceInteraction
+                configureJerkgramLocalTagsPanel(currentPanel, state: chatPresentationInterfaceState, context: context, interaction: chatControllerInteraction)
                 currentPanel.updateTheme(theme: chatPresentationInterfaceState.theme)
                 return (currentPanel, nil)
             } else {
                 let panel = ChatMessageSelectionInputPanelNode(theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
+                configureJerkgramLocalTagsPanel(panel, state: chatPresentationInterfaceState, context: context, interaction: chatControllerInteraction)
                 panel.context = context
                 panel.selectedMessages = selectionState.selectedIds
                 panel.chatControllerInteraction = chatControllerInteraction
@@ -513,7 +537,7 @@ func inputPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceState
                 panel.interfaceInteraction = interfaceInteraction
                 panel.context = context
                 panel.pastedMarkdownParser = { context, text in
-                    return chatInputContentFromPastedMarkdown(context: context, plainText: text)
+                    return chatInputContentFromPastedMarkdown(context: context, plainText: text, keepsBlankLines: true)
                 }
                 return (panel, nil)
             }

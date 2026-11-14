@@ -340,7 +340,13 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
     var pushControllerImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
     
-    let filtersWithCountsSignal = context.engine.peers.updatedChatListFilters()
+    let presentationSnapshot = Promise<JerkgramChatListFilterSnapshot>()
+    presentationSnapshot.set(context.engine.peers.updatedJerkgramChatListFilters())
+    var latestSnapshot: JerkgramChatListFilterSnapshot?
+    var reorderProposal: JerkgramChatListFilterProposal?
+    var reorderSessionStarted = false
+    let filtersWithCountsSignal = presentationSnapshot.get()
+    |> map { $0.filters }
     |> distinctUntilChanged
     |> mapToSignal { filters -> Signal<[(ChatListFilter, Int)], NoError> in
         return .single(filters.map { filter -> (ChatListFilter, Int) in
@@ -592,7 +598,7 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
     let signal = combineLatest(queue: .mainQueue(),
         context.sharedContext.presentationData,
         statePromise.get(),
-        filtersWithCounts.get(),
+        presentationSnapshot.get(),
         preferences,
         updatedFilterOrder.get(),
         featuredFilters,
@@ -602,14 +608,16 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
             TelegramEngine.EngineData.Item.ChatList.FiltersDisplayTags()
         )
     )
-    |> map { presentationData, state, filtersWithCountsValue, preferences, updatedFilterOrderValue, suggestedFilters, peer, allLimits, displayTags -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    |> map { presentationData, state, snapshot, preferences, updatedFilterOrderValue, suggestedFilters, peer, allLimits, displayTags -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var presentationData = presentationData
 
         let updatedTheme = presentationData.theme.withModalBlocksBackground()
         presentationData = presentationData.withUpdated(theme: updatedTheme)
         
-        let isPremium = peer?.isPremium ?? false
-        let limits = allLimits.0
+        latestSnapshot = snapshot
+        let filtersWithCountsValue = snapshot.filters.map { ($0, 0) }
+        let isPremium = snapshot.isPremium ?? false
+        let limits = snapshot.limits
         let premiumLimits = allLimits.1
         
         let leftNavigationButton: ItemListNavigationButton?
@@ -623,11 +631,24 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
         }
         let rightNavigationButton: ItemListNavigationButton?
         if state.isEditing {
-            rightNavigationButton = ItemListNavigationButton(content: .icon(.done), style: .bold, enabled: true, action: { [updatedFilterOrder] in
+            rightNavigationButton = ItemListNavigationButton(content: .icon(.done), style: .bold, enabled: true, staysInRow: true, action: { [updatedFilterOrder] in
                 let _ = (updatedFilterOrder.get()
                 |> take(1)
                 |> deliverOnMainQueue).startStandalone(next: { [weak updatedFilterOrder] updatedFilterOrderValue in
-                    if let updatedFilterOrderValue = updatedFilterOrderValue {
+                    if let updatedFilterOrderValue = updatedFilterOrderValue, let proposal = reorderProposal {
+                        let _ = (context.engine.peers.updateJerkgramChatListFilterOrder(ids: updatedFilterOrderValue, proposal: proposal)
+                        |> deliverOnMainQueue).start(next: { _ in
+                            updatedFilterOrder?.set(.single(nil))
+                            reorderProposal = nil
+                            reorderSessionStarted = false
+                            filtersWithCounts.set(filtersWithCountsSignal)
+                            updateState { state in
+                                var state = state
+                                state.isEditing = false
+                                return state
+                            }
+                        })
+                    } else if let updatedFilterOrderValue = updatedFilterOrderValue {
                         let _ = (context.engine.peers.updateChatListFiltersInteractively { filters in
                             var updatedFilters: [ChatListFilter] = []
                             for id in updatedFilterOrderValue {
@@ -653,11 +674,14 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
                                 updateState { state in
                                     var state = state
                                     state.isEditing = false
+                                    reorderSessionStarted = false
                                     return state
                                 }
                             })
                         })
                     } else {
+                        reorderProposal = nil
+                        reorderSessionStarted = false
                         updateState { state in
                             var state = state
                             state.isEditing = false
@@ -684,7 +708,9 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
         }
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.ChatListFolderSettings_Title), leftNavigationButton: leftNavigationButton, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
-        let entries = chatListFilterPresetListControllerEntries(presentationData: presentationData, state: state, filters: filtersWithCountsValue, updatedFilterOrder: updatedFilterOrderValue, suggestedFilters: suggestedFilters, displayTags: displayTags, isPremium: isPremium, limits: limits, premiumLimits: premiumLimits)
+        // Revalidate tentative state on policy/hidden/count changes before native ordinal gates see it.
+        let effectiveUpdatedOrder = reorderProposal != nil ? updatedFilterOrderValue.map(snapshot.normalizedOrder) : updatedFilterOrderValue
+        let entries = chatListFilterPresetListControllerEntries(presentationData: presentationData, state: state, filters: filtersWithCountsValue, updatedFilterOrder: effectiveUpdatedOrder, suggestedFilters: suggestedFilters, displayTags: displayTags, isPremium: isPremium, limits: limits, premiumLimits: premiumLimits)
         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, ensureVisibleItemTag: focusOnItemTag, initialScrollToItem: scrollToTags ? ListViewScrollToItem(index: entries.count - 1, position: .center(.bottom), animated: true, curve: .Spring(duration: 0.4), directionHint: .Down) : nil, animateChanges: true)
         
         return (controllerState, (listState, arguments))
@@ -716,6 +742,10 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
         controller?.dismiss()
     }
     controller.setReorderEntry({ (fromIndex: Int, toIndex: Int, entries: [ChatListFilterPresetListEntry]) -> Signal<Bool, NoError> in
+        if !reorderSessionStarted {
+            reorderSessionStarted = true
+            reorderProposal = latestSnapshot?.proposal
+        }
         let fromEntry = entries[fromIndex]
         guard case let .preset(_, _, _, fromPreset, _, _, _, _, _, _) = fromEntry else {
             return .single(false)
@@ -771,7 +801,13 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
                 filters.append(fromPreset)
             }
             
-            let updatedOrder = filters.map { $0.id }
+            let proposedOrder = filters.map { $0.id }
+            let updatedOrder: [Int32]
+            if reorderProposal != nil, let snapshot = latestSnapshot {
+                updatedOrder = snapshot.normalizedOrder(proposedOrder)
+            } else {
+                updatedOrder = proposedOrder
+            }
             if initialOrder != updatedOrder {
                 updatedFilterOrder.set(.single(updatedOrder))
                 return .single(true)
@@ -787,7 +823,7 @@ public func chatListFilterPresetListController(context: AccountContext, mode: Ch
         )
         |> deliverOnMainQueue).start(next: { order, peer in
             let isPremium = peer?.isPremium ?? false
-            if !isPremium, let order = order, order.first != 0 {
+            if !isPremium, reorderProposal == nil, let order = order, order.first != 0 {
                 updatedFilterOrder.set(.single(previousOrder))
 
                 let presentationData = context.sharedContext.currentPresentationData.with { $0 }

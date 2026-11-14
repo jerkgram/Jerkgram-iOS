@@ -10,9 +10,20 @@ import LegacyMediaPickerUI
 import JerkgramCore
 import ZipArchive
 
+private func jerkgramLocalizedArchiveError(_ error: Error, context: AccountContext) -> String {
+    let strings = context.sharedContext.currentPresentationData.with { $0 }.strings.jerkgram
+    guard let error = error as? JerkgramArchiveValidationError else { return strings.archiveErrorGeneric }
+    switch error {
+    case .unavailableAccount: return strings.archiveErrorAccount
+    case .settingsConfirmationRequired: return strings.archiveErrorConfirmation
+    case .conflictsPresent: return strings.archiveErrorConflicts
+    default: return strings.archiveErrorInvalid
+    }
+}
+
 private let jerkgramPortableBooleanKeys: [String] = [
     "jerkgram.Profile.Enabled", "jerkgram.Profile.ShowIds", "jerkgram.Profile.ShowDCs",
-    "jerkgram.Profile.ShowRegistration", "jerkgram.Glass.Enabled",
+    "jerkgram.Profile.ShowRegistration", "jerkgram.Glass.Enabled", "jerkgram.Settings.Translucency",
     "jerkgram.ProfileBlur.Avatar", "jerkgram.ProfileBlur.Animated",
     "jerkgram.ProfileBlur.Tint", "jerkgram.ProfileBlur.Reduced",
     "jerkgram.GhostMode.ReadMessages", "jerkgram.GhostMode.TypingActions",
@@ -33,11 +44,13 @@ private let jerkgramPortableBooleanKeys: [String] = [
     "jerkgram.ProtectedContent.OneTimeScreenRecording",
     "jerkgram.ProtectedContent.OneTimeSave", "jerkgram.Stories.Save",
     "jerkgram.Stars.LocalBalance.Enabled",
+    "jerkgram.Gram.LocalBalance.Enabled",
 ]
 
 private let jerkgramPortableStringKeys = [
     "jerkgram.Messages.SendTextStyle",
     "jerkgram.Stars.LocalBalance.Amount",
+    "jerkgram.Gram.LocalBalance.Amount",
     "jerkgram.Stars.LocalBalance.BaseAmount",
 ]
 
@@ -59,7 +72,7 @@ private func jerkgramSettingsSnapshot(accountPeerId: Int64) -> JerkgramSettingsS
         let scoped = "jerkgram.account.\(accountPeerId).setting.\(key)"
         if let value = UserDefaults.standard.object(forKey: scoped) as? Bool {
             toggles[key] = value
-        } else if let value = UserDefaults.standard.object(forKey: key) as? Bool {
+        } else if key != JerkgramLocalGramBalance.enabledKey, let value = UserDefaults.standard.object(forKey: key) as? Bool {
             toggles[key] = value
         }
     }
@@ -67,7 +80,7 @@ private func jerkgramSettingsSnapshot(accountPeerId: Int64) -> JerkgramSettingsS
         let scoped = "jerkgram.account.\(accountPeerId).setting.\(key)"
         if let value = UserDefaults.standard.string(forKey: scoped) {
             strings[key] = value
-        } else if let value = UserDefaults.standard.string(forKey: key) {
+        } else if key != JerkgramLocalGramBalance.amountKey, let value = UserDefaults.standard.string(forKey: key) {
             strings[key] = value
         }
     }
@@ -229,7 +242,7 @@ public func jerkgramPresentArchiveExport(
             jerkgramPresentArchiveExportError(
                 context: context,
                 controller: controller,
-                text: String(describing: error)
+                text: jerkgramLocalizedArchiveError(error, context: context)
             )
         }
     }
@@ -251,45 +264,31 @@ private final class JerkgramUserDefaultsSnapshotStore: JerkgramSettingsSnapshotS
     }
 
     func replace(_ snapshot: JerkgramSettingsSnapshot) throws {
-        // Replacement is exact so a failed transaction can restore absence as
-        // well as values; otherwise newly introduced keys would leak past rollback.
+        // Exact replacement preserves absence for rollback, without rewriting
+        // equal values or removing keys immediately before setting them again.
+        let defaults = UserDefaults.standard
+        var values: [String: Any] = [:]
+        snapshot.toggles.forEach { values[$0.key] = $0.value }
+        snapshot.stringValues.forEach { values[$0.key] = $0.value }
+        snapshot.integerValues.forEach { values[$0.key] = $0.value }
         for key in jerkgramPortableBooleanKeys + jerkgramPortableStringKeys + jerkgramPortableIntegerKeys {
             let scoped = "jerkgram.account.\(snapshot.accountPeerId).setting.\(key)"
-            UserDefaults.standard.removeObject(forKey: scoped)
+            if values[key] == nil, defaults.object(forKey: scoped) != nil {
+                defaults.removeObject(forKey: scoped)
+                JerkgramWave1Instrumentation.add("projectionWrites")
+            }
         }
-        for (key, value) in snapshot.toggles {
-            UserDefaults.standard.set(value, forKey: "jerkgram.account.\(snapshot.accountPeerId).setting.\(key)")
-        }
-        for (key, value) in snapshot.stringValues {
-            UserDefaults.standard.set(value, forKey: "jerkgram.account.\(snapshot.accountPeerId).setting.\(key)")
-        }
-        for (key, value) in snapshot.integerValues {
-            UserDefaults.standard.set(value, forKey: "jerkgram.account.\(snapshot.accountPeerId).setting.\(key)")
+        for (key, value) in values {
+            let scoped = "jerkgram.account.\(snapshot.accountPeerId).setting.\(key)"
+            if JerkgramSettingsProjection.writeIfChanged(value, defaults: defaults, key: scoped) {
+                JerkgramWave1Instrumentation.add("projectionWrites")
+            }
         }
     }
 }
 
 private func jerkgramProjectImportedSettingsToActiveDefaults(_ snapshot: JerkgramSettingsSnapshot) {
-    defer {
-        JerkgramHotSettings.invalidate()
-        JerkgramActivityGhostRuntime.invalidate()
-        JerkgramBlockedReactionPolicy.notifySettingsChanged()
-        GhostBaseGlassStyle.reloadFromDefaults()
-        Queue.mainQueue().async {
-            NotificationCenter.default.post(name: Notification.Name("GhostBaseRamOverlayPreferenceChanged"), object: nil)
-        }
-    }
-    let defaults = UserDefaults.standard
-    for (key, value) in snapshot.toggles {
-        defaults.set(value, forKey: key)
-    }
-    for (key, value) in snapshot.stringValues {
-        defaults.set(value, forKey: key)
-    }
-    for (key, value) in snapshot.integerValues {
-        defaults.set(value, forKey: key)
-    }
-
+    jerkgramActivateAccountSettings(accountPeerId: snapshot.accountPeerId)
     // Archive v2 originally used Jerkgram-prefixed portable names while a few
     // Project both spellings for the three synchronous side-effect settings.
     let legacyRuntimeKeys: [String: String] = [
@@ -297,11 +296,30 @@ private func jerkgramProjectImportedSettingsToActiveDefaults(_ snapshot: Jerkgra
         "jerkgram.ProtectedContent.Enabled": "GhostBase.ProtectedContent.Enabled",
         "jerkgram.ProtectedContent.OneTimeSave": "GhostBase.ProtectedContent.OneTimeSave",
     ]
+    let defaults = UserDefaults.standard
+    // Preserve the full archive catalog, including portable values outside the
+    // Settings page's 49-key snapshot (retention limits and future archive keys).
+    var values: [String: Any] = [:]
+    snapshot.toggles.forEach { values[$0.key] = $0.value }
+    snapshot.stringValues.forEach { values[$0.key] = $0.value }
+    snapshot.integerValues.forEach { values[$0.key] = $0.value }
+    for (key, value) in values {
+        if JerkgramSettingsProjection.writeIfChanged(value, defaults: defaults, key: key) {
+            JerkgramWave1Instrumentation.add("projectionWrites")
+        }
+    }
     for (portableKey, legacyKey) in legacyRuntimeKeys {
         if let value = snapshot.toggles[portableKey] {
-            defaults.set(value, forKey: legacyKey)
+            if defaults.object(forKey: legacyKey) as? Bool != value {
+                defaults.set(value, forKey: legacyKey)
+                JerkgramWave1Instrumentation.add("projectionWrites")
+            }
             if legacyKey == "GhostBase.GhostMode.ScheduledSend" {
-                (UserDefaults(suiteName: "group.com.jerkgram.ios") ?? defaults).set(value, forKey: legacyKey)
+                let shared = UserDefaults(suiteName: "group.com.jerkgram.ios") ?? defaults
+                if shared.object(forKey: legacyKey) as? Bool != value {
+                    shared.set(value, forKey: legacyKey)
+                    JerkgramWave1Instrumentation.add("projectionWrites")
+                }
             }
         }
     }
@@ -443,8 +461,8 @@ public func jerkgramPresentArchiveImport(
                                                     settingsStore: settingsStore
                                                 )
                                                 try JerkgramRetentionRuntime.save(retention)
-                                                jerkgramProjectImportedSettingsToActiveDefaults(settings)
                                                 Queue.mainQueue().async {
+                                                    jerkgramProjectImportedSettingsToActiveDefaults(settings)
                                                     jerkgramNotifySettingsImported(accountPeerId: accountPeerId)
                                                 }
                                             } catch {
@@ -452,7 +470,7 @@ public func jerkgramPresentArchiveImport(
                                                     context: context,
                                                     controller: controller,
                                                     presentationData: presentationData,
-                                                    text: String(describing: error)
+                                                    text: jerkgramLocalizedArchiveError(error, context: context)
                                                 )
                                             }
                                         }
@@ -467,7 +485,7 @@ public func jerkgramPresentArchiveImport(
                         context: context,
                         controller: controller,
                         presentationData: presentationData,
-                        text: String(describing: error)
+                        text: jerkgramLocalizedArchiveError(error, context: context)
                     )
                 }
             }
@@ -586,7 +604,7 @@ private func jerkgramPresentArchiveImportPicker(
                                 let result = textAlertController(
                                     context: context,
                                     title: strings.importArchive,
-                                    text: String(describing: error),
+                                    text: jerkgramLocalizedArchiveError(error, context: context),
                                     actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
                                 )
                                 controller.present(result, in: .window(.root), with: nil)
@@ -599,7 +617,7 @@ private func jerkgramPresentArchiveImportPicker(
                 let alert = textAlertController(
                     context: context,
                     title: presentationData.strings.jerkgram.importArchive,
-                    text: String(describing: error),
+                    text: jerkgramLocalizedArchiveError(error, context: context),
                     actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
                 )
                 controller.present(alert, in: .window(.root), with: nil)
@@ -608,4 +626,44 @@ private func jerkgramPresentArchiveImportPicker(
         }
     )
     controller.present(picker, in: .window(.root), with: nil)
+}
+
+// Both picker callbacks and picker destruction release the single export slot.
+// This lease owns only a URL; it cannot retain a controller, Account or picker.
+private final class JerkgramBotBridgeDiagnosticExportLease {
+    let url: URL
+    init(_ url: URL) { self.url = url }
+    func release() { jerkgramReleaseBotBridgeDiagnosticExport(self.url) }
+    deinit { jerkgramReleaseBotBridgeDiagnosticExport(self.url) }
+}
+
+// Dedicated BOTBRIDGE1 redacted JSON only. The facade owns all I/O and export lifetime.
+public func jerkgramPresentBotBridgeDiagnosticExport(context: AccountContext, controller: ViewController) {
+    jerkgramExportBotBridgeDiagnostics { [weak controller] result in
+        Queue.mainQueue().async { [weak controller] in
+            guard let controller = controller else {
+                if case let .success(url) = result { jerkgramReleaseBotBridgeDiagnosticExport(url) }
+                return
+            }
+            switch result {
+            case let .success(url):
+                let lease = JerkgramBotBridgeDiagnosticExportLease(url)
+                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                let picker = legacyICloudFilePicker(theme: presentationData.theme, mode: .export, url: url, documentTypes: [], dismissed: {
+                    lease.release()
+                }, completion: { _ in
+                    lease.release()
+                })
+                controller.present(picker, in: .window(.root), with: nil)
+            case let .failure(error):
+                let isRussian = context.sharedContext.currentPresentationData.with { $0.strings.jerkgram.languageCode == "ru" }
+                let text: String
+                switch error {
+                case .busy: text = isRussian ? "Экспорт уже открыт." : "An export is already open."
+                case .storage: text = isRussian ? "Не удалось подготовить диагностику." : "Could not prepare diagnostics."
+                }
+                controller.present(textAlertController(context: context, title: "BOTBRIDGE1", text: text, actions: [TextAlertAction(type: .defaultAction, title: "OK", action: {})]), in: .window(.root))
+            }
+        }
+    }
 }

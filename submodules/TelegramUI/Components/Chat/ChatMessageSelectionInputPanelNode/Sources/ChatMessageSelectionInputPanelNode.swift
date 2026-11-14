@@ -123,8 +123,14 @@ private final class GlassButtonView: UIView {
         }
     }
     
+    /// The source for a context menu this button opens: its glass, which morphs into the menu.
+    var menuSourceView: UIView {
+        return self.backgroundView
+    }
+    
     override init(frame: CGRect) {
         self.backgroundView = GlassBackgroundView()
+        self.backgroundView.morphsIntoContextMenu = true
         
         self.iconView = GlassBackgroundView.ContentImageView()
         self.backgroundView.contentView.addSubview(self.iconView)
@@ -185,6 +191,16 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
     private let shareButton: GlassButtonView
     private let tagButton: GlassButtonView
     private let tagEditButton: GlassButtonView
+    private let localTagsButton: GlassButtonView
+    // TelegramUI supplies this typed local-domain action. Existing callers and
+    // native cloud tag/reaction actions keep their original behavior.
+    public var localTagsAction: (([EngineMessage.Id]) -> Void)?
+    public var localTagsTitle: String = "" {
+        didSet { self.localTagsButton.button.accessibilityLabel = self.localTagsTitle }
+    }
+    public var localTagsCaption: String = "" {
+        didSet { self.localTagsButton.button.setTitle(self.localTagsCaption, for: .normal) }
+    }
     
     private let reactionOverlayContainer: ChatMessageSelectionInputPanelNodeViewForOverlayContent
     
@@ -246,6 +262,12 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         self.tagEditButton.isAccessibilityElement = true
         self.tagEditButton.accessibilityLabel = strings.VoiceOver_MessageSelectionButtonTag
         
+        self.localTagsButton = GlassButtonView()
+        self.localTagsButton.isHidden = true
+        self.localTagsButton.button.isAccessibilityElement = true
+        self.localTagsButton.button.titleLabel?.font = UIFont.preferredFont(forTextStyle: .caption2)
+        self.localTagsButton.button.titleLabel?.adjustsFontForContentSizeCategory = true
+
         self.reactionOverlayContainer = ChatMessageSelectionInputPanelNodeViewForOverlayContent()
         
         super.init()
@@ -257,6 +279,7 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         self.view.addSubview(self.shareButton)
         self.view.addSubview(self.tagButton)
         self.view.addSubview(self.tagEditButton)
+        self.view.addSubview(self.localTagsButton)
         
         self.viewForOverlayContent = self.reactionOverlayContainer
         
@@ -269,6 +292,7 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         self.forwardButton.button.addTarget(self, action: #selector(self.forwardButtonPressed), for: .touchUpInside)
         self.forwardWithoutAuthorButton.button.addTarget(self, action: #selector(self.forwardWithoutAuthorButtonPressed), for: .touchUpInside)
         self.shareButton.button.addTarget(self, action: #selector(self.shareButtonPressed), for: .touchUpInside)
+        self.localTagsButton.button.addTarget(self, action: #selector(self.localTagsButtonPressed), for: .touchUpInside)
         self.tagButton.button.addTarget(self, action: #selector(self.tagButtonPressed), for: .touchUpInside)
         self.tagEditButton.button.addTarget(self, action: #selector(self.tagButtonPressed), for: .touchUpInside)
     }
@@ -277,6 +301,12 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
         self.canDeleteMessagesDisposable.dispose()
     }
     
+    @objc private func localTagsButtonPressed() {
+        // Complete selection, including offscreen messages and all album IDs.
+        // The local service validates the raw quota; never take a prefix.
+        self.localTagsAction?(Array(self.selectedMessages))
+    }
+
     private func updateActions() {
         self.forwardButton.isEnabled = self.selectedMessages.count != 0
         self.forwardWithoutAuthorButton.isEnabled = self.selectedMessages.count != 0
@@ -307,7 +337,7 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
     }
     
     @objc private func deleteButtonPressed() {
-        self.interfaceInteraction?.deleteSelectedMessages(self.deleteButton)
+        self.interfaceInteraction?.deleteSelectedMessages(self.deleteButton.menuSourceView)
     }
     
     @objc private func reportButtonPressed() {
@@ -566,7 +596,7 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
             tagButton = self.tagEditButton
         }
         
-        let buttons: [GlassButtonView]
+        var buttons: [GlassButtonView]
         if self.reportButton.isHidden {
             if let tagButton {
                 buttons = [
@@ -624,6 +654,13 @@ public final class ChatMessageSelectionInputPanelNode: ChatInputPanelNode {
             }
         }
         
+        self.localTagsButton.isHidden = self.localTagsAction == nil
+        self.localTagsButton.isEnabled = !self.selectedMessages.isEmpty
+        self.localTagsButton.button.setTitleColor(interfaceState.theme.chat.inputPanel.panelControlColor, for: .normal)
+        if !self.localTagsButton.isHidden {
+            buttons.insert(self.localTagsButton, at: min(1, buttons.count))
+        }
+
         let buttonSize = CGSize(width: 40.0, height: 40.0)
         
         let availableWidth = width - leftInset - rightInset

@@ -67,6 +67,18 @@ final class PeerInfoHeaderSingleLineTextFieldNode: ASDisplayNode, PeerInfoHeader
         }
     }
     
+    /// The field, then its clear button (the button's frame starts higher, so by frame it would read first).
+    override var accessibilityElements: [Any]? {
+        get {
+            var elements: [Any] = [self.textNode.textField]
+            if !self.clearButtonNode.isHidden {
+                elements.append(self.clearButtonNode.view)
+            }
+            return elements
+        } set(value) {
+        }
+    }
+    
     @objc private func clearButtonPressed() {
         self.textNode.textField.text = ""
         self.updateClearButtonVisibility()
@@ -84,24 +96,16 @@ final class PeerInfoHeaderSingleLineTextFieldNode: ASDisplayNode, PeerInfoHeader
         let isHidden = !self.textNode.textField.isFirstResponder || self.text.isEmpty
         self.clearIconNode.isHidden = isHidden
         self.clearButtonNode.isHidden = isHidden
-        self.clearButtonNode.isAccessibilityElement = isHidden
+        self.clearButtonNode.isAccessibilityElement = !isHidden
     }
     
-    func update(width: CGFloat, safeInset: CGFloat, isSettings: Bool, hasPrevious: Bool, hasNext: Bool, placeholder: String, isEnabled: Bool, presentationData: PresentationData, updateText: String?) -> CGFloat {
+    func update(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, isSettings: Bool, hasPrevious: Bool, hasNext: Bool, placeholder: String, isEnabled: Bool, presentationData: PresentationData, updateText: String?) -> CGFloat {
         let titleFont = Font.regular(presentationData.listsFontSize.itemListBaseFontSize)
         self.textNode.textField.font = titleFont
         
         if self.theme !== presentationData.theme {
             self.theme = presentationData.theme
             
-            // The fullscreen profile scene owns the blur. Editing rows only add
-            // a light readability tint; when Jerkgram Glass is off, preserve
-            // Telegram's stock opaque block background exactly.
-            self.backgroundNode.backgroundColor = GhostBaseGlassStyle.isEnabled
-                ? presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(
-                    presentationData.theme.overallDarkAppearance ? 0.26 : 0.18
-                )
-                : presentationData.theme.list.itemBlocksBackgroundColor
             
             self.textNode.textField.textColor = presentationData.theme.list.itemPrimaryTextColor
             self.textNode.textField.keyboardAppearance = presentationData.theme.rootController.keyboardColor.keyboardAppearance
@@ -110,11 +114,24 @@ final class PeerInfoHeaderSingleLineTextFieldNode: ASDisplayNode, PeerInfoHeader
             self.clearIconNode.image = PresentationResourcesItemList.itemListClearInputIcon(presentationData.theme)
         }
         
-        let attributedPlaceholderText = NSAttributedString(string: placeholder, font: titleFont, textColor: presentationData.theme.list.itemPlaceholderTextColor)
+        // Re-evaluate outside the theme identity gate: the glass preference
+        // can change without replacing PresentationTheme.
+        self.backgroundNode.backgroundColor = GhostBaseGlassStyle.isEnabled
+            ? UIColor(white: presentationData.theme.overallDarkAppearance ? 0.0 : 1.0,
+                      alpha: presentationData.theme.overallDarkAppearance ? 0.26 : 0.18)
+            : presentationData.theme.list.itemBlocksBackgroundColor
+
+        let placeholderColor = GhostBaseGlassStyle.isEnabled
+            ? (presentationData.theme.overallDarkAppearance ? UIColor.white.withAlphaComponent(0.60) : UIColor.black.withAlphaComponent(0.55))
+            : presentationData.theme.list.itemPlaceholderTextColor
+        let attributedPlaceholderText = NSAttributedString(string: placeholder, font: titleFont, textColor: placeholderColor)
         if self.textNode.textField.attributedPlaceholder == nil || !self.textNode.textField.attributedPlaceholder!.isEqual(to: attributedPlaceholderText) {
             self.textNode.textField.attributedPlaceholder = attributedPlaceholderText
-            self.textNode.textField.accessibilityHint = attributedPlaceholderText.string
         }
+        // The field is named by its placeholder ("First Name"), which is hidden once there is text.
+        self.textNode.textField.accessibilityLabel = placeholder
+        self.clearButtonNode.accessibilityLabel = presentationData.strings.WebSearch_RecentSectionClear
+        self.clearButtonNode.accessibilityTraits = .button
         
         if let updateText = updateText {
             self.textNode.textField.text = updateText
@@ -126,112 +143,45 @@ final class PeerInfoHeaderSingleLineTextFieldNode: ASDisplayNode, PeerInfoHeader
             self.topSeparator.isHidden = true
         }
         self.topSeparator.backgroundColor = presentationData.theme.list.itemBlocksSeparatorColor
-        let separatorX = safeInset + (hasPrevious ? 16.0 : 0.0)
-        self.topSeparator.frame = CGRect(origin: CGPoint(x: separatorX, y: 0.0), size: CGSize(width: width - separatorX - safeInset - separatorRightInset, height: UIScreenPixel))
+        let separatorX = leftInset + (hasPrevious ? 16.0 : 0.0)
+        self.topSeparator.frame = CGRect(origin: CGPoint(x: separatorX, y: 0.0), size: CGSize(width: width - separatorX - rightInset - separatorRightInset, height: UIScreenPixel))
         
         let measureText = "|"
         let attributedMeasureText = NSAttributedString(string: measureText, font: titleFont, textColor: .black)
         self.measureTextNode.attributedText = attributedMeasureText
-        let measureTextSize = self.measureTextNode.updateLayout(CGSize(width: width - safeInset * 2.0 - 16.0 * 2.0 - 38.0, height: .greatestFiniteMagnitude))
+        let measureTextSize = self.measureTextNode.updateLayout(CGSize(width: width - (leftInset + rightInset) - 16.0 * 2.0 - 38.0, height: .greatestFiniteMagnitude))
         
         let verticalInset: CGFloat = 15.0
         let height = measureTextSize.height + verticalInset * 2.0
         
         let buttonSize = CGSize(width: 38.0, height: height)
-        self.clearButtonNode.frame = CGRect(origin: CGPoint(x: width - safeInset - buttonSize.width, y: 0.0), size: buttonSize)
+        self.clearButtonNode.frame = CGRect(origin: CGPoint(x: width - rightInset - buttonSize.width, y: 0.0), size: buttonSize)
         if let image = self.clearIconNode.image {
-            self.clearIconNode.frame = CGRect(origin: CGPoint(x: width - safeInset - buttonSize.width + floor((buttonSize.width - image.size.width) / 2.0), y: floor((height - image.size.height) / 2.0)), size: image.size)
+            self.clearIconNode.frame = CGRect(origin: CGPoint(x: width - rightInset - buttonSize.width + floor((buttonSize.width - image.size.width) / 2.0), y: floor((height - image.size.height) / 2.0)), size: image.size)
         }
         
-        self.backgroundNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: max(1.0, width - safeInset * 2.0), height: height))
-        self.textNode.frame = CGRect(origin: CGPoint(x: safeInset + 16.0, y: floor((height - 40.0) / 2.0)), size: CGSize(width: max(1.0, width - safeInset * 2.0 - 16.0 * 2.0 - 38.0), height: 40.0))
+        self.backgroundNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 0.0), size: CGSize(width: max(1.0, width - (leftInset + rightInset)), height: height))
+        self.textNode.frame = CGRect(origin: CGPoint(x: leftInset + 16.0, y: floor((height - 40.0) / 2.0)), size: CGSize(width: max(1.0, width - (leftInset + rightInset) - 16.0 * 2.0 - 38.0), height: 40.0))
         
-        let hasCorners = safeInset > 0.0 && (!hasPrevious || !hasNext)
+        let hasCorners = (leftInset > 0.0 || rightInset > 0.0) && (!hasPrevious || !hasNext)
         let hasTopCorners = hasCorners && !hasPrevious
         let hasBottomCorners = hasCorners && !hasNext
         
-        // Edit-profile fields must follow the visible profile Glass setting,
-        // not a separate persisted flag which leaves the bio opaque.
-        let ghostBaseGlassEnabled = GhostBaseGlassStyle.isEnabled
-
-        if ghostBaseGlassEnabled {
-            // This is the actual final visual owner. Keep it visibly lighter
-            // than the legacy card so the profile backdrop remains readable.
-            // Keep this node as a tint only. `itemBlocksBackgroundColor`
-            // is an opaque list surface on Telegram 12.9.2 even after alpha is
-            // applied, which is why the bio still looked like a solid black card.
-            self.backgroundNode.isOpaque = false
-            self.backgroundNode.backgroundColor = presentationData.theme.overallDarkAppearance
-                ? UIColor.white.withAlphaComponent(0.025)
-                : UIColor.black.withAlphaComponent(0.018)
-
-            self.maskNode.image = nil
-            self.backgroundNode.cornerRadius =
-                hasCorners
-                ? 16.0
-                : 0.0
-            self.backgroundNode.clipsToBounds =
-                hasCorners
-
-            if hasTopCorners && hasBottomCorners {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = [
-                        .layerMinXMinYCorner,
-                        .layerMaxXMinYCorner,
-                        .layerMinXMaxYCorner,
-                        .layerMaxXMaxYCorner
-                    ]
-            } else if hasTopCorners {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = [
-                        .layerMinXMinYCorner,
-                        .layerMaxXMinYCorner
-                    ]
-            } else if hasBottomCorners {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = [
-                        .layerMinXMaxYCorner,
-                        .layerMaxXMaxYCorner
-                    ]
-            } else {
-                self.backgroundNode
-                    .layer
-                    .maskedCorners = []
-            }
-        } else {
-            self.backgroundNode.backgroundColor =
-                presentationData
-                    .theme
-                    .list
-                    .itemBlocksBackgroundColor
-
-            self.backgroundNode.cornerRadius = 0.0
-            self.backgroundNode.clipsToBounds = false
-
-            self.backgroundNode
-                .layer
-                .maskedCorners = [
-                    .layerMinXMinYCorner,
-                    .layerMaxXMinYCorner,
-                    .layerMinXMaxYCorner,
-                    .layerMaxXMaxYCorner
-                ]
-
-            self.maskNode.image =
-                hasCorners
-                ? PresentationResourcesItemList
-                    .cornersImage(
-                        presentationData.theme,
-                        top: hasTopCorners,
-                        bottom: hasBottomCorners,
-                        glass: true
-                    )
-                : nil
+        // JG169 field corners begin
+        // Clip the card itself: a theme-colored corner image paints black over the profile backdrop.
+        self.maskNode.image = nil
+        self.backgroundNode.cornerRadius = hasCorners ? 26.0 : 0.0
+        self.backgroundNode.clipsToBounds = hasCorners
+        var fieldCorners: CACornerMask = []
+        if hasTopCorners {
+            fieldCorners.formUnion([.layerMinXMinYCorner, .layerMaxXMinYCorner])
         }
-        self.maskNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: width - safeInset - safeInset, height: height))
+        if hasBottomCorners {
+            fieldCorners.formUnion([.layerMinXMaxYCorner, .layerMaxXMaxYCorner])
+        }
+        self.backgroundNode.layer.maskedCorners = fieldCorners
+        // JG169 field corners end
+        self.maskNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 0.0), size: CGSize(width: width - leftInset - rightInset, height: height))
         
         self.textNode.isUserInteractionEnabled = isEnabled
         self.textNode.alpha = isEnabled ? 1.0 : 0.6

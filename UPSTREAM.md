@@ -4,8 +4,8 @@ Jerkgram is based on **Telegram for iOS**.
 
 ```text
 Repository   TelegramMessenger/Telegram-iOS
-Tag          release-13.0.0
-Commit       f1dd7a2dbd02cbbf513e75d5695d8d36d1cf5838
+Tag          release-13.2
+Commit       24638bc69bd083981b178dd1e7f921eebbf7fc46
 ```
 
 ## Relationship to upstream
@@ -19,7 +19,7 @@ Jerkgram is an independent application. It must not present itself as the offici
 Each Stable Jerkgram source tag records the exact upstream Telegram tag and commit used as its base. The intended comparison is therefore:
 
 ```text
-Official Telegram release-13.0.0
+Official Telegram release-13.2
             ↕
 Jerkgram Stable source tag
             ↕

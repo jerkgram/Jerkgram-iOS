@@ -7,6 +7,7 @@ private final class LinkHelperClass: NSObject {
 }
 
 public func canSendMessagesToPeer(_ peer: EnginePeer, ignoreDefault: Bool = false) -> Bool {
+    if jerkgramIsRetainedExcludedChat(peer._asPeer()) { return false }
     if case let .user(user) = peer, user.addressName == "replies" {
         return false
     }
@@ -23,6 +24,7 @@ public func canSendMessagesToPeer(_ peer: EnginePeer, ignoreDefault: Bool = fals
 }
 
 public func canSendReactionsToPeer(_ peer: EnginePeer, ignoreDefault: Bool = false) -> Bool {
+    if jerkgramIsRetainedExcludedChat(peer._asPeer()) { return false }
     switch peer {
     case .user:
         return !peer.isDeleted

@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 
 private class AdMessagesHistoryContextImpl {
     final class CachedMessage: Equatable, Codable {
@@ -216,7 +216,8 @@ private class AdMessagesHistoryContextImpl {
             return true
         }
 
-        func toMessage(peerId: PeerId, transaction: Transaction) -> Message? {
+        func toMessage(peerId: PeerId, transaction: Transaction, removeSponsored: Bool) -> Message? {
+            guard JerkgramSponsoredContentPolicy.shouldDisplay(isSponsored: self.messageType == .sponsored, removeSponsored: removeSponsored) else { return nil }
             var attributes: [MessageAttribute] = []
 
             let mappedMessageType: AdMessageAttribute.MessageType
@@ -316,6 +317,9 @@ private class AdMessagesHistoryContextImpl {
     private let account: Account
     private let peerId: EnginePeer.Id
     private let messageId: EngineMessage.Id?
+    private var removeSponsored: Bool
+    private var premiumObserver: NSObjectProtocol?
+    private var policyGeneration: UInt64 = 0
 
     private let maskAsSeenDisposables = DisposableDict<Data>()
 
@@ -448,8 +452,23 @@ private class AdMessagesHistoryContextImpl {
         self.account = account
         self.peerId = peerId
         self.messageId = messageId
+        let removeSponsored = JerkgramSponsoredContentPolicy.removeSponsored(accountPeerId: account.peerId.toInt64())
+        self.removeSponsored = removeSponsored
 
         self.stateValue = State(interPostInterval: nil, messages: [])
+        self.premiumObserver = NotificationCenter.default.addObserver(forName: JerkgramLocalPremiumPolicy.changed, object: nil, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            self.queue.async { [weak self] in
+                guard let self else { return }
+                let enabled = JerkgramSponsoredContentPolicy.removeSponsored(accountPeerId: self.account.peerId.toInt64())
+                guard enabled != self.removeSponsored else { return }
+                self.removeSponsored = enabled
+                self.policyGeneration &+= 1
+                self.disposable.set(nil)
+                self.stateValue = State(interPostInterval: nil, messages: [])
+                if self.isActivated { self.isActivated = false; self.activate() }
+            }
+        }
 
         if messageId == nil {
             self.state.set(CachedState.getCached(postbox: account.postbox, peerId: peerId)
@@ -457,7 +476,7 @@ private class AdMessagesHistoryContextImpl {
                 if let cachedState = cachedState, cachedState.timestamp >= Int32(Date().timeIntervalSince1970) - 5 * 60 {
                     return account.postbox.transaction { transaction -> State in
                         return State(interPostInterval: cachedState.interPostInterval, messages: cachedState.messages.compactMap { message -> Message? in
-                            return message.toMessage(peerId: peerId, transaction: transaction)
+                            return message.toMessage(peerId: peerId, transaction: transaction, removeSponsored: JerkgramSponsoredContentPolicy.removeSponsored(accountPeerId: account.peerId.toInt64()))
                         })
                     }
                 } else {
@@ -472,6 +491,7 @@ private class AdMessagesHistoryContextImpl {
     }
     
     deinit {
+        if let premiumObserver { NotificationCenter.default.removeObserver(premiumObserver) }
         self.disposable.dispose()
         self.maskAsSeenDisposables.dispose()
     }
@@ -486,6 +506,7 @@ private class AdMessagesHistoryContextImpl {
         let accountPeerId = self.account.peerId
         let account = self.account
         let messageId = self.messageId
+        let policyGeneration = self.policyGeneration
         
         let signal: Signal<(interPostInterval: Int32?, startDelay: Int32?, betweenDelay: Int32?, messages: [Message]), NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
             return transaction.getPeer(peerId).flatMap(apiInputPeer)
@@ -571,7 +592,7 @@ private class AdMessagesHistoryContextImpl {
                         }
                         
                         return (postsBetween, startDelay, betweenDelay, parsedMessages.compactMap { message -> Message? in
-                            return message.toMessage(peerId: peerId, transaction: transaction)
+                            return message.toMessage(peerId: peerId, transaction: transaction, removeSponsored: JerkgramSponsoredContentPolicy.removeSponsored(accountPeerId: account.peerId.toInt64()))
                         })
                     case .sponsoredMessagesEmpty:
                         return (nil, nil, nil, [])
@@ -582,7 +603,7 @@ private class AdMessagesHistoryContextImpl {
         
         self.disposable.set((signal
         |> deliverOn(self.queue)).start(next: { [weak self] interPostInterval, startDelay, betweenDelay, messages in
-            guard let strongSelf = self else {
+            guard let strongSelf = self, strongSelf.policyGeneration == policyGeneration else {
                 return
             }
             strongSelf.stateValue = State(interPostInterval: interPostInterval, startDelay: startDelay, betweenDelay: betweenDelay, messages: messages)

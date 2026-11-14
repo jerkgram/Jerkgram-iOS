@@ -1556,11 +1556,11 @@ public extension PresentationThemeReference {
         switch self {
             case let .builtin(theme):
                 switch theme {
-                    case .day:
+                    case .day, .neutral:
                         return .builtin(.day)
                     case .dayClassic:
                         return .builtin(.dayClassic)
-                    case .night:
+                    case .night, .neutralNight:
                         return .builtin(.night)
                     case .nightAccent:
                         return .builtin(.nightAccent)
@@ -1654,6 +1654,10 @@ public final class PresentationTheme: Equatable {
         return PresentationTheme(name: self.name, index: self.index, referenceTheme: referenceTheme, overallDarkAppearance: self.overallDarkAppearance, intro: self.intro, passcode: self.passcode, rootController: self.rootController, list: self.list, chatList: self.chatList, chat: self.chat, actionSheet: self.actionSheet, contextMenu: self.contextMenu, inAppNotification: self.inAppNotification, chart: self.chart, preview: self.preview)
     }
     
+    public func withUpdated(chat: PresentationThemeChat) -> PresentationTheme {
+        return PresentationTheme(name: self.name, index: self.index, referenceTheme: self.referenceTheme, overallDarkAppearance: self.overallDarkAppearance, intro: self.intro, passcode: self.passcode, rootController: self.rootController, list: self.list, chatList: self.chatList, chat: chat, actionSheet: self.actionSheet, contextMenu: self.contextMenu, inAppNotification: self.inAppNotification, chart: self.chart, preview: self.preview)
+    }
+    
     public func withUpdated(preview: Bool) -> PresentationTheme {
         return PresentationTheme(name: self.name, index: self.index, referenceTheme: self.referenceTheme, overallDarkAppearance: self.overallDarkAppearance, intro: self.intro, passcode: self.passcode, rootController: self.rootController, list: self.list, chatList: self.chatList, chat: self.chat, actionSheet: self.actionSheet, contextMenu: self.contextMenu, inAppNotification: self.inAppNotification, chart: self.chart, preview: preview)
     }
@@ -1669,5 +1673,39 @@ public final class PresentationTheme: Equatable {
         } else {
             return self
         }
+    }
+}
+
+private enum JerkgramSettingsThemeCache {
+    static let lock = NSLock()
+    static weak var base: PresentationTheme?
+    static var reduced = false
+    static var transformed: PresentationTheme?
+}
+
+extension PresentationTheme {
+    public func jerkgramSettingsSurfaceTheme(enabled: Bool) -> PresentationTheme {
+        guard enabled && GhostBaseGlassStyle.allowsTransparentSurfaces else { return self }
+        let reduced = GhostBaseGlassStyle.usesReducedEffects
+        JerkgramSettingsThemeCache.lock.lock()
+        defer { JerkgramSettingsThemeCache.lock.unlock() }
+        if JerkgramSettingsThemeCache.base === self, JerkgramSettingsThemeCache.reduced == reduced, let cached = JerkgramSettingsThemeCache.transformed { return cached }
+        let alpha = CGFloat(JerkgramSettingsMaterialPolicy.itemAlpha(isDark: self.overallDarkAppearance))
+        let surfaceColor = self.overallDarkAppearance ? UIColor.black : UIColor.white
+        let list = self.list.withUpdated(
+            blocksBackgroundColor: .clear, modalBlocksBackgroundColor: .clear,
+            plainBackgroundColor: .clear, modalPlainBackgroundColor: .clear,
+            itemBlocksBackgroundColor: surfaceColor.withAlphaComponent(alpha),
+            itemModalBlocksBackgroundColor: surfaceColor.withAlphaComponent(alpha),
+            itemHighlightedBackgroundColor: self.list.itemHighlightedBackgroundColor.withAlphaComponent(max(alpha, 0.4))
+        )
+        let chatList = PresentationThemeChatList(backgroundColor: .clear, itemSeparatorColor: self.chatList.itemSeparatorColor, itemBackgroundColor: self.chatList.itemBackgroundColor.withAlphaComponent(alpha), pinnedItemBackgroundColor: self.chatList.pinnedItemBackgroundColor.withAlphaComponent(alpha), itemHighlightedBackgroundColor: self.chatList.itemHighlightedBackgroundColor, pinnedItemHighlightedBackgroundColor: self.chatList.pinnedItemHighlightedBackgroundColor, itemSelectedBackgroundColor: self.chatList.itemSelectedBackgroundColor, titleColor: self.chatList.titleColor, secretTitleColor: self.chatList.secretTitleColor, dateTextColor: self.chatList.dateTextColor, authorNameColor: self.chatList.authorNameColor, messageTextColor: self.chatList.messageTextColor, messageHighlightedTextColor: self.chatList.messageHighlightedTextColor, messageDraftTextColor: self.chatList.messageDraftTextColor, checkmarkColor: self.chatList.checkmarkColor, pendingIndicatorColor: self.chatList.pendingIndicatorColor, failedFillColor: self.chatList.failedFillColor, failedForegroundColor: self.chatList.failedForegroundColor, muteIconColor: self.chatList.muteIconColor, unreadBadgeActiveBackgroundColor: self.chatList.unreadBadgeActiveBackgroundColor, unreadBadgeActiveTextColor: self.chatList.unreadBadgeActiveTextColor, unreadBadgeInactiveBackgroundColor: self.chatList.unreadBadgeInactiveBackgroundColor, unreadBadgeInactiveTextColor: self.chatList.unreadBadgeInactiveTextColor, reactionBadgeActiveBackgroundColor: self.chatList.reactionBadgeActiveBackgroundColor, pinnedBadgeColor: self.chatList.pinnedBadgeColor, pinnedSearchBarColor: self.chatList.pinnedSearchBarColor, regularSearchBarColor: self.chatList.regularSearchBarColor, sectionHeaderFillColor: self.chatList.sectionHeaderFillColor.withAlphaComponent(alpha), sectionHeaderTextColor: self.chatList.sectionHeaderTextColor, verifiedIconFillColor: self.chatList.verifiedIconFillColor, verifiedIconForegroundColor: self.chatList.verifiedIconForegroundColor, secretIconColor: self.chatList.secretIconColor, pinnedArchiveAvatarColor: self.chatList.pinnedArchiveAvatarColor, unpinnedArchiveAvatarColor: self.chatList.unpinnedArchiveAvatarColor, onlineDotColor: self.chatList.onlineDotColor, storyUnseenColors: self.chatList.storyUnseenColors, storyUnseenPrivateColors: self.chatList.storyUnseenPrivateColors, storySeenColors: self.chatList.storySeenColors)
+        let theme = PresentationTheme(name: self.name, index: self.index, referenceTheme: self.referenceTheme, overallDarkAppearance: self.overallDarkAppearance, intro: self.intro, passcode: self.passcode, rootController: self.rootController, list: list, chatList: chatList, chat: self.chat, actionSheet: self.actionSheet, contextMenu: self.contextMenu, inAppNotification: self.inAppNotification, chart: self.chart, preview: self.preview)
+        theme.forceSync = self.forceSync
+        theme.starGift = self.starGift
+        JerkgramSettingsThemeCache.base = self
+        JerkgramSettingsThemeCache.reduced = reduced
+        JerkgramSettingsThemeCache.transformed = theme
+        return theme
     }
 }

@@ -65,6 +65,9 @@ public final class EmojiStatusSelectionComponent: Component {
     public let hideTopPanel: Bool
     public let disableTopPanel: Bool
     public let hideTopPanelUpdated: (Bool, ComponentTransition) -> Void
+    public let externalTintMaskContainer: UIView?
+    public let contentFadeHeight: CGFloat?
+    public let keepsTopPanelVisible: Bool
     
     public init(
         theme: PresentationTheme,
@@ -76,7 +79,10 @@ public final class EmojiStatusSelectionComponent: Component {
         separatorColor: UIColor,
         hideTopPanel: Bool,
         disableTopPanel: Bool,
-        hideTopPanelUpdated: @escaping (Bool, ComponentTransition) -> Void
+        hideTopPanelUpdated: @escaping (Bool, ComponentTransition) -> Void,
+        externalTintMaskContainer: UIView? = nil,
+        contentFadeHeight: CGFloat? = nil,
+        keepsTopPanelVisible: Bool = false
     ) {
         self.theme = theme
         self.strings = strings
@@ -88,6 +94,9 @@ public final class EmojiStatusSelectionComponent: Component {
         self.hideTopPanel = hideTopPanel
         self.disableTopPanel = disableTopPanel
         self.hideTopPanelUpdated = hideTopPanelUpdated
+        self.externalTintMaskContainer = externalTintMaskContainer
+        self.contentFadeHeight = contentFadeHeight
+        self.keepsTopPanelVisible = keepsTopPanelVisible
     }
     
     public static func ==(lhs: EmojiStatusSelectionComponent, rhs: EmojiStatusSelectionComponent) -> Bool {
@@ -118,12 +127,19 @@ public final class EmojiStatusSelectionComponent: Component {
         if lhs.disableTopPanel != rhs.disableTopPanel {
             return false
         }
+        if lhs.contentFadeHeight != rhs.contentFadeHeight {
+            return false
+        }
+        if lhs.keepsTopPanelVisible != rhs.keepsTopPanelVisible {
+            return false
+        }
         return true
     }
     
     public final class View: UIView {
         private let keyboardView: ComponentView<Empty>
         private let keyboardClippingView: UIView
+        private var contentFadeMask: CAGradientLayer?
         private let panelHostView: PagerExternalTopPanelContainer
         private let panelBackgroundView: BlurredBackgroundView
         private let panelSeparatorView: UIView
@@ -186,7 +202,7 @@ public final class EmojiStatusSelectionComponent: Component {
                     defaultToEmojiTab: true,
                     externalTopPanelContainer: self.panelHostView,
                     externalBottomPanelContainer: nil,
-                    externalTintMaskContainer: nil,
+                    externalTintMaskContainer: component.externalTintMaskContainer,
                     displayTopPanelBackground: .blur,
                     topPanelExtensionUpdated: { _, _ in },
                     topPanelScrollingOffset: { _, _ in },
@@ -210,7 +226,8 @@ public final class EmojiStatusSelectionComponent: Component {
                     clipContentToTopPanel: false,
                     useExternalSearchContainer: false,
                     hidePanels: component.disableTopPanel,
-                    customTintColor: component.color
+                    customTintColor: component.color,
+                    alwaysShowsTopPanel: component.keepsTopPanelVisible
                 )),
                 environment: {},
                 forceUpdate: forceUpdate, 
@@ -221,10 +238,31 @@ public final class EmojiStatusSelectionComponent: Component {
                     self.keyboardClippingView.addSubview(keyboardComponentView)
                 }
                 
-                if panelBackgroundColor.alpha < 0.01 {
-                    self.keyboardClippingView.clipsToBounds = true
-                } else {
+                if panelBackgroundColor.alpha < 0.01, let fadeHeight = component.contentFadeHeight {
                     self.keyboardClippingView.clipsToBounds = false
+                    let fadeMask: CAGradientLayer
+                    if let current = self.contentFadeMask {
+                        fadeMask = current
+                    } else {
+                        fadeMask = CAGradientLayer()
+                        fadeMask.colors = [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor]
+                        fadeMask.startPoint = CGPoint(x: 0.5, y: 0.0)
+                        fadeMask.endPoint = CGPoint(x: 0.5, y: 1.0)
+                        self.contentFadeMask = fadeMask
+                        self.keyboardClippingView.layer.mask = fadeMask
+                    }
+                    let maskHeight = max(1.0, availableSize.height - topPanelHeight)
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    fadeMask.frame = CGRect(origin: CGPoint(), size: CGSize(width: availableSize.width, height: maskHeight))
+                    fadeMask.locations = [0.0, NSNumber(value: Double(min(1.0, fadeHeight / maskHeight))), 1.0]
+                    CATransaction.commit()
+                } else {
+                    if self.contentFadeMask != nil {
+                        self.contentFadeMask = nil
+                        self.keyboardClippingView.layer.mask = nil
+                    }
+                    self.keyboardClippingView.clipsToBounds = panelBackgroundColor.alpha < 0.01
                 }
                 
                 transition.setFrame(view: self.keyboardClippingView, frame: CGRect(origin: CGPoint(x: 0.0, y: topPanelHeight), size: CGSize(width: availableSize.width, height: availableSize.height - topPanelHeight)))
@@ -253,6 +291,9 @@ public final class EmojiStatusSelectionComponent: Component {
 }
 
 public final class EmojiStatusSelectionController: ViewController {
+    // This anchored popup keeps the presenting settings screen visible.
+    override public var jerkgramAcceptsSettingsSurface: Bool { return false }
+
     private final class Node: ViewControllerTracingNode {
         private struct EmojiSearchResult {
             var groups: [EmojiPagerContentComponent.ItemGroup]
@@ -461,7 +502,7 @@ public final class EmojiStatusSelectionController: ViewController {
                             }
                         })
                     },
-                    clearGroup: { groupId in
+                    clearGroup: { groupId, _, _ in
                     },
                     editAction: { _ in },
                     pushController: { c in
@@ -510,14 +551,17 @@ public final class EmojiStatusSelectionController: ViewController {
                                     }
                                 }
 
-                                let hasPremium = context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
-                                |> map { peer -> Bool in
-                                    guard case let .user(user) = peer else {
-                                        return false
+                                let hasPremium: Signal<Bool, NoError>
+                                if self.controller?.localAppearance == true {
+                                    hasPremium = .single(true)
+                                } else {
+                                    hasPremium = context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
+                                    |> map { peer -> Bool in
+                                        guard case let .user(user) = peer else { return false }
+                                        return user.isPremium
                                     }
-                                    return user.isPremium
+                                    |> distinctUntilChanged
                                 }
-                                |> distinctUntilChanged
 
                                 let resultSignal = combineLatest(
                                     signal,
@@ -761,6 +805,7 @@ public final class EmojiStatusSelectionController: ViewController {
                     stateContext: nil,
                     addImage: nil
                 )
+                emojiContent.inputInteractionHolder.inputInteraction?.exposesItemsToAccessibility = true
                 
                 strongSelf.refreshLayout(transition: .immediate)
             })
@@ -1052,7 +1097,11 @@ public final class EmojiStatusSelectionController: ViewController {
                 transition = ComponentTransition(animation: .curve(duration: 0.4, curve: .spring)).withUserData(contentAnimation)
             }
             
-            var componentWidth = layout.size.width - sideInset * 2.0
+            // iPhone Duo: the panel fits the band beside the side strip, clear of the strip's status corner. With equal
+            // side insets the band is the whole width, as before.
+            let stripInsetLeft: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.safeInsets.left : 0.0
+            let stripInsetRight: CGFloat = layout.safeInsets.left != layout.safeInsets.right ? layout.safeInsets.right : 0.0
+            var componentWidth = layout.size.width - stripInsetLeft - stripInsetRight - sideInset * 2.0
             let nativeItemSize: CGFloat = 40.0
             let minSpacing: CGFloat = 9.0
             let itemsPerRow = Int((componentWidth + minSpacing) / (nativeItemSize + minSpacing))
@@ -1104,13 +1153,22 @@ public final class EmojiStatusSelectionController: ViewController {
                     sourceOrigin = CGPoint(x: layout.size.width / 2.0, y: floor(layout.size.height / 2.0 - componentSize.height))
                 }
                 
+                // Centred on the screen while that keeps it in the band (iPhone Duo: beside the side strip).
+                var componentX = floor((layout.size.width - componentSize.width) / 2.0)
+                if componentX + componentSize.width > layout.size.width - stripInsetRight - sideInset {
+                    componentX = layout.size.width - stripInsetRight - sideInset - componentSize.width
+                }
+                if componentX < stripInsetLeft + sideInset {
+                    componentX = stripInsetLeft + sideInset
+                }
+                
                 var componentFrame: CGRect
                 let pointsToTop: Bool
                 if sourceOrigin.y + 5.0 + componentSize.height > layout.size.height - layout.insets(options: []).bottom {
-                    componentFrame = CGRect(origin: CGPoint(x: floor((layout.size.width - componentSize.width) / 2.0), y: sourceOrigin.y - 25.0 - componentSize.height), size: componentSize)
+                    componentFrame = CGRect(origin: CGPoint(x: componentX, y: sourceOrigin.y - 25.0 - componentSize.height), size: componentSize)
                     pointsToTop = false
                 } else {
-                    componentFrame = CGRect(origin: CGPoint(x: floor((layout.size.width - componentSize.width) / 2.0), y: sourceOrigin.y + 5.0), size: componentSize)
+                    componentFrame = CGRect(origin: CGPoint(x: componentX, y: sourceOrigin.y + 5.0), size: componentSize)
                     pointsToTop = true
                 }
                 if componentFrame.minY < layout.insets(options: [.statusBar]).top {
@@ -1218,7 +1276,7 @@ public final class EmojiStatusSelectionController: ViewController {
                         strings: self.presentationData.strings,
                         dateTimeFormat: self.presentationData.dateTimeFormat,
                         bottomInset: layout.insets(options: []).bottom,
-                        screenCornerRadius: layout.deviceMetrics.screenCornerRadius,
+                        screenCornerRadii: layout.screenCornerRadii,
                         item: EmojiStatusComponent(
                             context: self.context,
                             animationCache: self.context.animationCache,
@@ -1241,6 +1299,12 @@ public final class EmojiStatusSelectionController: ViewController {
                             
                             if let result, let previewItem = strongSelf.previewItem {
                                 let expirationDate: Int32? = result.timestamp
+                                if strongSelf.controller?.completeLocalSelection(file: previewItem.item.itemFile?._parse(), expirationDate: expirationDate) == true {
+                                    if let destinationView = strongSelf.controller?.destinationItemView() {
+                                        strongSelf.animateOutToStatus(item: previewItem.item, sourceLayer: result.sourceView.layer, customEffectFile: nil, destinationView: destinationView, fromBackground: true)
+                                    } else { strongSelf.controller?.dismiss() }
+                                    return
+                                }
                                 if let itemGift = previewItem.item.itemGift {
                                     let _ = (strongSelf.context.engine.accountData.setStarGiftStatus(starGift: itemGift, expirationDate: expirationDate)
                                     |> deliverOnMainQueue).start()
@@ -1348,6 +1412,7 @@ public final class EmojiStatusSelectionController: ViewController {
                 return
             }
             
+            if controller.localAppearance, item?.itemGift != nil { return }
             if isPreview {
                 guard let item = item else {
                     return
@@ -1357,8 +1422,9 @@ public final class EmojiStatusSelectionController: ViewController {
                 self.refreshLayout(transition: .immediate)
             } else {
                 self.freezeUpdates = true
+                let completedLocally = controller.completeLocalSelection(file: item?.itemFile?._parse(), expirationDate: nil)
                 
-                if case .statusSelection = controller.mode, let item = item, let currentSelection = self.currentSelection, item.itemFile?.fileId.id == currentSelection {
+                if !completedLocally, case .statusSelection = controller.mode, let item = item, let currentSelection = self.currentSelection, item.itemFile?.fileId.id == currentSelection {
                     let _ = (self.context.engine.accountData.setEmojiStatus(file: nil, expirationDate: nil)
                     |> deliverOnMainQueue).start()
                     controller.dismiss()
@@ -1375,6 +1441,7 @@ public final class EmojiStatusSelectionController: ViewController {
                     animateOutToView = true
                 }
                                 
+                if !completedLocally {
                 switch controller.mode {
                 case .statusSelection:
                     if let gift = item?.itemGift {
@@ -1426,6 +1493,7 @@ public final class EmojiStatusSelectionController: ViewController {
                     completion()
                 }
                 
+                }
                 if animateOutToView, item != nil, let destinationView = controller.destinationItemView() {
                     if let snapshotView = destinationView.snapshotView(afterScreenUpdates: false) {
                         snapshotView.frame = destinationView.frame
@@ -1497,6 +1565,8 @@ public final class EmojiStatusSelectionController: ViewController {
     private let currentSelection: Int64?
     private let color: UIColor?
     private let mode: Mode
+    private let localAppearance: Bool
+    private let localAppearanceGeneration: Int64?
     private let destinationItemView: () -> UIView?
         
     fileprivate let _ready = Promise<Bool>()
@@ -1510,8 +1580,13 @@ public final class EmojiStatusSelectionController: ViewController {
     
     public var pushController: ((ViewController) -> Void)?
     
-    public init(context: AccountContext, mode: Mode, sourceView: UIView, emojiContent: Signal<EmojiPagerContentComponent, NoError>, currentSelection: Int64?, color: UIColor? = nil, destinationItemView: @escaping () -> UIView?) {
+    public init(context: AccountContext, mode: Mode, sourceView: UIView, emojiContent: Signal<EmojiPagerContentComponent, NoError>, currentSelection: Int64?, color: UIColor? = nil, localAppearance: Bool = false, destinationItemView: @escaping () -> UIView?) {
         self.context = context
+        switch mode {
+        case .statusSelection, .customStatusSelection, .backgroundSelection: self.localAppearance = localAppearance
+        default: self.localAppearance = false
+        }
+        self.localAppearanceGeneration = localAppearance ? context.jerkgramLocalAppearance.snapshot.activityGeneration : nil
         self.mode = mode
         self.sourceView = sourceView
         self.emojiContent = emojiContent
@@ -1526,6 +1601,27 @@ public final class EmojiStatusSelectionController: ViewController {
         self.statusBar.statusBarStyle = .Ignore
     }
     
+    // Local-only callback routing; all ordinary callers retain native behavior.
+    private func completeLocalSelection(file: TelegramMediaFile?, expirationDate: Int32?) -> Bool {
+        guard self.localAppearance else { return false }
+        switch self.mode {
+        case .statusSelection:
+            let store = self.context.jerkgramLocalAppearance
+            // Always consume a local session, including revoked/stale sessions.
+            // A rejected local save must never fall through to native API setters.
+            guard store.snapshot.emojiUnlocked else { return true }
+            store.update(expectedGeneration: self.localAppearanceGeneration) { settings in
+                let id = file?.fileId.id
+                settings.emojiFileId = id == self.currentSelection && expirationDate == nil ? nil : id
+                settings.emojiExpiration = settings.emojiFileId == nil ? nil : expirationDate
+            }
+        case let .customStatusSelection(completion): completion(file, expirationDate)
+        case let .backgroundSelection(completion): completion(file)
+        default: return false
+        }
+        return true
+    }
+
     required public init(coder: NSCoder) {
         preconditionFailure()
     }

@@ -25,13 +25,15 @@ private struct GroupsInCommonListTransaction {
 private struct GroupsInCommonListEntry: Comparable, Identifiable {
     var index: Int
     var peer: EnginePeer
+    var visualRevision: UInt64
+    var glassEnabled: Bool
 
     var stableId: EnginePeer.Id {
         return self.peer.id
     }
 
     static func ==(lhs: GroupsInCommonListEntry, rhs: GroupsInCommonListEntry) -> Bool {
-        return lhs.peer == rhs.peer
+        return lhs.peer == rhs.peer && lhs.visualRevision == rhs.visualRevision && lhs.glassEnabled == rhs.glassEnabled
     }
     
     static func <(lhs: GroupsInCommonListEntry, rhs: GroupsInCommonListEntry) -> Bool {
@@ -69,7 +71,9 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
     
     weak var parentController: ViewController?
 
-    private let ghostBaseGlassEnabled: Bool
+    private var ghostBaseGlassEnabled: Bool
+    private var jerkgramVisualRevision: UInt64 = 0
+    private var jerkgramVisualStateDirty = true
     private let listBackgroundView: UIImageView
     private let listMaskView: UIImageView
 
@@ -136,6 +140,9 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
         self.ghostBaseGlassIsDark = nil
 
         self.listMaskView = UIImageView()
+        // The rounded list background and its mask are decoration.
+        self.listBackgroundView.accessibilityElementsHidden = true
+        self.listMaskView.accessibilityElementsHidden = true
         self.listMaskView.image = generateImage(CGSize(width: 16.0 + 26.0 * 2.0 + 16.0, height: 2.0 * 2.0 + 26.0 * 2.0), rotatedContext: { size, context in
             context.clear(CGRect(origin: CGPoint(), size: size))
             context.setFillColor(UIColor.white.cgColor)
@@ -208,6 +215,15 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
         }
     }
     
+    func updateJerkgramVisualState(glassEnabled: Bool, revision: UInt64) {
+        guard self.ghostBaseGlassEnabled != glassEnabled || self.jerkgramVisualRevision != revision else {
+            return
+        }
+        self.ghostBaseGlassEnabled = glassEnabled
+        self.jerkgramVisualRevision = revision
+        self.jerkgramVisualStateDirty = true
+    }
+
     func update(size: CGSize, topInset: CGFloat, sideInset: CGFloat, bottomInset: CGFloat, deviceMetrics: DeviceMetrics, visibleHeight: CGFloat, isScrollingLockedAtTop: Bool, expandProgress: CGFloat, navigationHeight: CGFloat, presentationData: PresentationData, synchronous: Bool, transition: ContainedViewLayoutTransition) {
         let isFirstLayout = self.currentParams == nil
         self.currentParams = (size, isScrollingLockedAtTop, presentationData)
@@ -278,7 +294,8 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
         }
 
 
-        if isFirstLayout, let state = self.state {
+        if isFirstLayout || self.jerkgramVisualStateDirty, let state = self.state {
+            self.jerkgramVisualStateDirty = false
             self.updatePeers(state: state, presentationData: presentationData)
         }
     }
@@ -287,7 +304,7 @@ final class PeerInfoGroupsInCommonPaneNode: ASDisplayNode, PeerInfoPaneNode {
         var entries: [GroupsInCommonListEntry] = []
         for peer in state.peers {
             if let peer = peer.peer {
-                entries.append(GroupsInCommonListEntry(index: entries.count, peer: EnginePeer(peer)))
+                entries.append(GroupsInCommonListEntry(index: entries.count, peer: EnginePeer(peer), visualRevision: self.jerkgramVisualRevision, glassEnabled: self.ghostBaseGlassEnabled))
             }
         }
         let transaction = preparedTransition(from: self.currentEntries, to: entries, context: self.context, presentationData: presentationData, ghostBaseGlassEnabled: self.ghostBaseGlassEnabled, openPeer: { [weak self] peer in

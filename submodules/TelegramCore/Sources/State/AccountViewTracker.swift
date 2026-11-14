@@ -1,7 +1,7 @@
 import Foundation
 import Postbox
 import SwiftSignalKit
-import TelegramApi
+internal import TelegramApi
 import MtProtoKit
 
 
@@ -235,12 +235,20 @@ private final class ChannelPollingContext {
     let isUpdated = Promise<Bool>(false)
 
     private(set) var isUpdatedValue: Bool = false
+    /// Whether a history view already replaced the channel's known history with one full hole during
+    /// the current unpolled period. A chat re-subscribes its view after every fill, and each
+    /// re-subscription must not wipe what the fill just stored (measured 2026-10-13: four fills for
+    /// one open). Cleared when the poll lands, so the next unpolled period starts with a fresh hole.
+    var addedHoleWhileStale: Bool = false
     private var isUpdatedDisposable: Disposable?
 
     init(queue: Queue) {
         self.isUpdatedDisposable = (self.isUpdated.get()
         |> deliverOn(queue)).start(next: { [weak self] value in
             self?.isUpdatedValue = value
+            if value {
+                self?.addedHoleWhileStale = false
+            }
         })
     }
     
@@ -339,6 +347,13 @@ public final class AccountViewTracker {
     
     let chatHistoryPreloadManager: ChatHistoryPreloadManager
     
+    let recentDiscussionMessageFetches = RecentDiscussionMessageFetches()
+    
+    /// Reply targets and stories a history fill is fetching; layout draws them as skeletons.
+    public let pendingMessageReferences = PendingMessageReferences()
+    /// widget-sandbox v0.2: the shared states of message widgets watched on screen (`messages.getWidgetPublicData`).
+    let widgetPublicDataPolling: WidgetPublicDataPolling
+    
     private let historyViewStateValidationContexts: HistoryViewStateValidationContexts
     
     public var orderedPreloadMedia: Signal<[ChatHistoryPreloadMediaItem], NoError> {
@@ -368,6 +383,7 @@ public final class AccountViewTracker {
         self.accountPeerId = account.peerId
         
         self.historyViewStateValidationContexts = HistoryViewStateValidationContexts(queue: self.queue, postbox: account.postbox, network: account.network, accountPeerId: account.peerId)
+        self.widgetPublicDataPolling = WidgetPublicDataPolling(queue: self.queue, postbox: account.postbox, network: account.network)
         
         self.chatHistoryPreloadManager = ChatHistoryPreloadManager(postbox: account.postbox, network: account.network, accountPeerId: account.peerId, networkState: account.networkState, preloadItemsSignal: self.chatListPreloadItems.get() |> distinctUntilChanged |> map { Array($0) })
         
@@ -872,6 +888,11 @@ public final class AccountViewTracker {
                                         return .complete()
                                     }
                                     return account.postbox.transaction { transaction -> Void in
+                                        // The users and chats carry the top paid reactors: a sender who reached the
+                                        // leaderboard after the message was stored is known only from here.
+                                        let parsedPeers = AccumulatedPeers(transaction: transaction, chats: apiUpdatesGroups(updates), users: updates.users)
+                                        updatePeers(transaction: transaction, accountPeerId: account.peerId, peers: parsedPeers)
+                                        
                                         let updateList: [Api.Update]
                                         switch updates {
                                         case let .updates(updatesData):
@@ -2022,73 +2043,40 @@ public final class AccountViewTracker {
                 self.queue.async {
                     let polled = self.polledChannel(peerId: peerId).start()
 
+                    // A channel outside the chat list gets its read state reset and a full hole
+                    // until it has been polled in this context. The poll itself no longer gates
+                    // the view (spec 2026-10-13): a joined channel never waited for it either,
+                    // and the fill learns the top of the history from the server's own reply.
+                    // A channel the account is not a member of gets a read state with nothing
+                    // unread and nothing counted (NonMemberChannelReadState.swift).
                     var addHole = false
-                    var pollingCompleted: Signal<Bool, NoError>
                     if let context = self.channelPollingContexts[peerId] {
-                        if !context.isUpdatedValue {
+                        if !context.isUpdatedValue && !context.addedHoleWhileStale {
                             addHole = true
+                            context.addedHoleWhileStale = true
                         }
-                        pollingCompleted = context.isUpdated.get()
                     } else {
                         addHole = true
-                        pollingCompleted = .single(true)
                     }
-                    
-                    /*#if DEBUG
-                    if "".isEmpty {
-                        addHole = false
-                        pollingCompleted = .single(true)
-                    }
-                    #endif*/
                     
                     let resetPeerHoleManagement = self.resetPeerHoleManagement
-                    let isAutomaticallyTracked = self.account!.postbox.transaction { transaction -> Bool in
-                        if transaction.getPeerChatListIndex(peerId) == nil {
+                    let prepared = self.account!.postbox.transaction { transaction -> Void in
+                        if transaction.getPeerChatListIndex(peerId) == nil && !jerkgramIsRetainedExcludedChat(transaction.getPeer(peerId)) {
                             if isPeerHiddenByCollapsedCommunity(transaction: transaction, peerId: peerId) {
-                                return true
+                                return
                             }
-                            transaction.resetIncomingReadStates([peerId: [Namespaces.Message.Cloud : PeerReadState.idBased(
-                                maxIncomingReadId: 1, maxOutgoingReadId: 1, maxKnownId: 1, count: 0, markedUnread: false)]])
+                            transaction.resetIncomingReadStates([peerId: [Namespaces.Message.Cloud: channelReadStateOnOpenOutsideChatList(peer: transaction.getPeer(peerId))]])
                             if addHole {
                                 resetPeerHoleManagement?(peerId)
                                 transaction.addHole(peerId: peerId, threadId: nil, namespace: Namespaces.Message.Cloud, space: .everywhere, range: 1 ... (Int32.max - 1))
                             }
-                            return false
-                        } else {
-                            return true
                         }
                     }
 
-                    let historyIsValid = combineLatest(queue: self.queue,
-                        pollingCompleted,
-                        isAutomaticallyTracked
-                    )
-                    |> map { lhs, rhs -> Bool in
-                        return lhs || rhs
-                    }
-
-                    var loaded = false
-                    let validHistory = historyIsValid
-                    |> distinctUntilChanged
-                    |> take(until: { next in
-                        if next {
-                            return SignalTakeAction(passthrough: true, complete: true)
-                        } else {
-                            return SignalTakeAction(passthrough: true, complete: false)
-                        }
-                    })
-                    |> mapToSignal { isValid -> Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError> in
-                        if isValid {
-                            assert(!loaded)
-                            loaded = true
-                            return history
-                        } else {
-                            let view = MessageHistoryView(tag: nil, namespaces: .all, entries: [], holeEarlier: true, holeLater: true, isLoading: true)
-                            return .single((view, .Initial, nil))
-                        }
-                    }
-
-                    let disposable = validHistory.start(next: { next in
+                    let disposable = (prepared
+                    |> mapToSignal { _ -> Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError> in
+                        return history
+                    }).start(next: { next in
                         subscriber.putNext(next)
                     }, completed: {
                         subscriber.putCompletion()
@@ -2203,6 +2191,21 @@ public final class AccountViewTracker {
         return account.postbox.aroundMessageHistoryViewForLocation(chatLocation, anchor: .upperBound, ignoreMessagesInTimestampRange: nil, ignoreMessageIds: Set(), count: 20, fixedCombinedReadStates: nil, topTaggedMessageIdNamespaces: [], tag: nil, appendMessagesFromTheSameGroup: false, namespaces: .just(Namespaces.Message.allWelcomeMessages), orderStatistics: [], additionalData: [])
     }
     
+    // Decide from this account's stored self peer, never a global bot flag or
+    // the destination's botInfo. The normal signal is retained for user accounts.
+    private func jerkgramBotHistoryView(_ chatLocation: ChatLocationInput, anchor: HistoryViewInputAnchor, ignoreMessagesInTimestampRange: ClosedRange<Int32>?, ignoreMessageIds: Set<MessageId>, count: Int, ignoreRelatedChats: Bool, fixedCombinedReadStates: MessageHistoryViewReadState?, tag: HistoryViewInputTag?, appendMessagesFromTheSameGroup: Bool, orderStatistics: MessageHistoryViewOrderStatistics, additionalData: [AdditionalMessageHistoryViewData], useRootInterfaceStateForThread: Bool, native: Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError>) -> Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError> {
+        guard let account = self.account else { return .never() }
+        return account.postbox.transaction { transaction -> Bool in
+            guard let user = transaction.getPeer(account.peerId) as? TelegramUser else { return false }
+            return user.botInfo != nil
+        }
+        |> mapToSignal { isBot -> Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError> in
+            guard isBot else { return native }
+            let local = account.postbox.aroundMessageHistoryViewForLocation(chatLocation, anchor: anchor, ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, trackHoles: false, ignoreRelatedChats: ignoreRelatedChats, fixedCombinedReadStates: fixedCombinedReadStates, topTaggedMessageIdNamespaces: [Namespaces.Message.Cloud], tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, namespaces: .not(Namespaces.Message.allNonRegular), orderStatistics: orderStatistics, additionalData: wrappedHistoryViewAdditionalData(chatLocation: chatLocation, additionalData: additionalData), useRootInterfaceStateForThread: useRootInterfaceStateForThread, locallyAvailableOnly: true)
+            return self.wrappedMessageHistorySignal(chatLocation: chatLocation, signal: local, fixedCombinedReadStates: fixedCombinedReadStates, addHoleIfNeeded: false)
+        }
+    }
+
     public func aroundMessageOfInterestHistoryViewForLocation(_ chatLocation: ChatLocationInput, ignoreMessagesInTimestampRange: ClosedRange<Int32>? = nil, ignoreMessageIds: Set<MessageId> = Set(), count: Int, trackHoles: Bool = true, tag: HistoryViewInputTag? = nil, appendMessagesFromTheSameGroup: Bool = false, orderStatistics: MessageHistoryViewOrderStatistics = [], additionalData: [AdditionalMessageHistoryViewData] = [], useRootInterfaceStateForThread: Bool = false) -> Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError> {
         if let account = self.account {
             let signal: Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError>
@@ -2284,16 +2287,16 @@ public final class AccountViewTracker {
             } else {
                 signal = account.postbox.aroundMessageOfInterestHistoryViewForChatLocation(chatLocation, ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, trackHoles: trackHoles, topTaggedMessageIdNamespaces: [Namespaces.Message.Cloud], tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, namespaces: .not(Namespaces.Message.allNonRegular), orderStatistics: orderStatistics, customUnreadMessageId: nil, additionalData: wrappedHistoryViewAdditionalData(chatLocation: chatLocation, additionalData: additionalData), useRootInterfaceStateForThread: useRootInterfaceStateForThread)
             }
-            return wrappedMessageHistorySignal(chatLocation: chatLocation, signal: signal, fixedCombinedReadStates: nil, addHoleIfNeeded: true)
+            return self.jerkgramBotHistoryView(chatLocation, anchor: .upperBound, ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, ignoreRelatedChats: false, fixedCombinedReadStates: nil, tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, orderStatistics: orderStatistics, additionalData: additionalData, useRootInterfaceStateForThread: useRootInterfaceStateForThread, native: wrappedMessageHistorySignal(chatLocation: chatLocation, signal: signal, fixedCombinedReadStates: nil, addHoleIfNeeded: true))
         } else {
             return .never()
         }
     }
     
-    public func aroundIdMessageHistoryViewForLocation(_ chatLocation: ChatLocationInput, ignoreMessagesInTimestampRange: ClosedRange<Int32>? = nil, ignoreMessageIds: Set<MessageId> = Set(), count: Int, trackHoles: Bool = true, ignoreRelatedChats: Bool, messageId: MessageId, tag: HistoryViewInputTag? = nil, appendMessagesFromTheSameGroup: Bool = false, orderStatistics: MessageHistoryViewOrderStatistics = [], additionalData: [AdditionalMessageHistoryViewData] = [], useRootInterfaceStateForThread: Bool = false) -> Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError> {
+    public func aroundIdMessageHistoryViewForLocation(_ chatLocation: ChatLocationInput, ignoreMessagesInTimestampRange: ClosedRange<Int32>? = nil, ignoreMessageIds: Set<MessageId> = Set(), count: Int, trackHoles: Bool = true, ignoreRelatedChats: Bool, messageId: MessageId, tag: HistoryViewInputTag? = nil, appendMessagesFromTheSameGroup: Bool = false, orderStatistics: MessageHistoryViewOrderStatistics = [], additionalData: [AdditionalMessageHistoryViewData] = [], useRootInterfaceStateForThread: Bool = false, includeAnchorWhileLoading: Bool = false) -> Signal<(MessageHistoryView, ViewUpdateType, InitialMessageHistoryData?), NoError> {
         if let account = self.account {
-            let signal = account.postbox.aroundIdMessageHistoryViewForLocation(chatLocation, ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, trackHoles: trackHoles, ignoreRelatedChats: ignoreRelatedChats, messageId: messageId, topTaggedMessageIdNamespaces: [Namespaces.Message.Cloud], tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, namespaces: .not(Namespaces.Message.allNonRegular), orderStatistics: orderStatistics, additionalData: wrappedHistoryViewAdditionalData(chatLocation: chatLocation, additionalData: additionalData), useRootInterfaceStateForThread: useRootInterfaceStateForThread)
-            return wrappedMessageHistorySignal(chatLocation: chatLocation, signal: signal, fixedCombinedReadStates: nil, addHoleIfNeeded: false)
+            let signal = account.postbox.aroundIdMessageHistoryViewForLocation(chatLocation, ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, trackHoles: trackHoles, ignoreRelatedChats: ignoreRelatedChats, messageId: messageId, topTaggedMessageIdNamespaces: [Namespaces.Message.Cloud], tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, namespaces: .not(Namespaces.Message.allNonRegular), orderStatistics: orderStatistics, additionalData: wrappedHistoryViewAdditionalData(chatLocation: chatLocation, additionalData: additionalData), useRootInterfaceStateForThread: useRootInterfaceStateForThread, includeAnchorWhileLoading: includeAnchorWhileLoading)
+            return self.jerkgramBotHistoryView(chatLocation, anchor: .message(messageId), ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, ignoreRelatedChats: ignoreRelatedChats, fixedCombinedReadStates: nil, tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, orderStatistics: orderStatistics, additionalData: additionalData, useRootInterfaceStateForThread: useRootInterfaceStateForThread, native: wrappedMessageHistorySignal(chatLocation: chatLocation, signal: signal, fixedCombinedReadStates: nil, addHoleIfNeeded: false))
         } else {
             return .never()
         }
@@ -2311,7 +2314,7 @@ public final class AccountViewTracker {
                     inputAnchor = .index(index)
             }
             let signal = account.postbox.aroundMessageHistoryViewForLocation(chatLocation, anchor: inputAnchor, ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, clipHoles: clipHoles, ignoreRelatedChats: ignoreRelatedChats, fixedCombinedReadStates: fixedCombinedReadStates, topTaggedMessageIdNamespaces: [Namespaces.Message.Cloud], tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, namespaces: .not(Namespaces.Message.allNonRegular), orderStatistics: orderStatistics, additionalData: wrappedHistoryViewAdditionalData(chatLocation: chatLocation, additionalData: additionalData), useRootInterfaceStateForThread: useRootInterfaceStateForThread)
-            return wrappedMessageHistorySignal(chatLocation: chatLocation, signal: signal, fixedCombinedReadStates: fixedCombinedReadStates, addHoleIfNeeded: false)
+            return self.jerkgramBotHistoryView(chatLocation, anchor: inputAnchor, ignoreMessagesInTimestampRange: ignoreMessagesInTimestampRange, ignoreMessageIds: ignoreMessageIds, count: count, ignoreRelatedChats: ignoreRelatedChats, fixedCombinedReadStates: fixedCombinedReadStates, tag: tag, appendMessagesFromTheSameGroup: appendMessagesFromTheSameGroup, orderStatistics: orderStatistics, additionalData: additionalData, useRootInterfaceStateForThread: useRootInterfaceStateForThread, native: wrappedMessageHistorySignal(chatLocation: chatLocation, signal: signal, fixedCombinedReadStates: fixedCombinedReadStates, addHoleIfNeeded: false))
         } else {
             return .never()
         }

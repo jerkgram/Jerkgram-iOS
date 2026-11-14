@@ -47,6 +47,7 @@ public struct BotUserInfoFlags: OptionSet {
     public static let canManageBots = BotUserInfoFlags(rawValue: (1 << 10))
     public static let isGuestChat = BotUserInfoFlags(rawValue: (1 << 11))
     public static let isGuardBot = BotUserInfoFlags(rawValue: (1 << 12))
+    public static let displayForumAsSidebar = BotUserInfoFlags(rawValue: (1 << 13))
 }
 
 public struct BotUserInfo: PostboxCoding, Equatable {
@@ -551,6 +552,11 @@ public final class TelegramUser: Peer, Equatable {
         return true
     }
     
+    // Preserve every current field while hydrating only a missing replay hash.
+    func withUpdatedAccessHash(_ accessHash: TelegramPeerAccessHash) -> TelegramUser {
+        return TelegramUser(id: self.id, accessHash: accessHash, firstName: self.firstName, lastName: self.lastName, username: self.username, phone: self.phone, photo: self.photo, botInfo: self.botInfo, restrictionInfo: self.restrictionInfo, flags: self.flags, emojiStatus: self.emojiStatus, usernames: self.usernames, storiesHidden: self.storiesHidden, nameColor: self.nameColor, backgroundEmojiId: self.backgroundEmojiId, profileColor: self.profileColor, profileBackgroundEmojiId: self.profileBackgroundEmojiId, subscriberCount: self.subscriberCount, verificationIconFileId: self.verificationIconFileId, linkedCommunityId: self.linkedCommunityId)
+    }
+
     public func withUpdatedUsername(_ username: String?) -> TelegramUser {
         return TelegramUser(id: self.id, accessHash: self.accessHash, firstName: self.firstName, lastName: self.lastName, username: username, phone: self.phone, photo: self.photo, botInfo: self.botInfo, restrictionInfo: self.restrictionInfo, flags: self.flags, emojiStatus: self.emojiStatus, usernames: self.usernames, storiesHidden: self.storiesHidden, nameColor: self.nameColor, backgroundEmojiId: self.backgroundEmojiId, profileColor: self.profileColor, profileBackgroundEmojiId: self.profileBackgroundEmojiId, subscriberCount: self.subscriberCount, verificationIconFileId: self.verificationIconFileId, linkedCommunityId: self.linkedCommunityId)
     }

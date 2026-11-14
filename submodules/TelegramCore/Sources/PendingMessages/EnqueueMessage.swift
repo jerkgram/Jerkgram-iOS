@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 import Postbox
-import TelegramApi
+internal import TelegramApi
 import SwiftSignalKit
 import Emoji
 
@@ -51,18 +51,30 @@ public struct EngineMessageReplyQuote: Codable, Equatable {
         case entities = "e"
         case media = "m"
         case offset = "o"
+        case richText = "r"
     }
     
     public var text: String
     public var offset: Int?
     public var entities: [MessageTextEntity]
     public var media: Media?
+    /// The fragments of a quote of a rich message, one per quoted text node, as sent in
+    /// `quote_rich`. `text` and `entities` are then their flat form (`richReplyQuoteTextAndEntities`),
+    /// which is what every display and search path reads.
+    public var richText: [RichText]?
     
-    public init(text: String, offset: Int?, entities: [MessageTextEntity], media: Media?) {
-        self.text = text
+    public init(text: String, offset: Int?, entities: [MessageTextEntity], media: Media?, richText: [RichText]? = nil) {
+        if text.isEmpty, let richText {
+            let flat = richReplyQuoteTextAndEntities(richText)
+            self.text = flat.text
+            self.entities = entities.isEmpty ? flat.entities : entities
+        } else {
+            self.text = text
+            self.entities = entities
+        }
         self.offset = offset
-        self.entities = entities
         self.media = media
+        self.richText = richText
     }
     
     public init(from decoder: Decoder) throws {
@@ -77,6 +89,22 @@ public struct EngineMessageReplyQuote: Codable, Equatable {
         } else {
             self.media = nil
         }
+        
+        if let richTextData = try container.decodeIfPresent(Data.self, forKey: .richText) {
+            let richText = PostboxDecoder(buffer: MemoryBuffer(data: richTextData)).decodeObjectArrayWithDecoderForKey("f") as [RichText]
+            // Beta builds of 2026-10-16..18 stored the fragments under "r", which reads here as an empty array. An empty
+            // quote_rich would be sent in place of the quote's text, so such a quote is a flat one.
+            self.richText = richText.isEmpty ? nil : richText
+        } else {
+            self.richText = nil
+        }
+        if self.text.isEmpty, let richText = self.richText {
+            let flat = richReplyQuoteTextAndEntities(richText)
+            self.text = flat.text
+            if self.entities.isEmpty {
+                self.entities = flat.entities
+            }
+        }
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -90,6 +118,11 @@ public struct EngineMessageReplyQuote: Codable, Equatable {
             mediaEncoder.encodeRootObject(media)
             try container.encode(mediaEncoder.makeData(), forKey: .media)
         }
+        if let richText = self.richText {
+            let richTextEncoder = PostboxEncoder()
+            richTextEncoder.encodeObjectArray(richText, forKey: "f")
+            try container.encode(richTextEncoder.makeData(), forKey: .richText)
+        }
     }
     
     public static func ==(lhs: EngineMessageReplyQuote, rhs: EngineMessageReplyQuote) -> Bool {
@@ -100,6 +133,9 @@ public struct EngineMessageReplyQuote: Codable, Equatable {
             return false
         }
         if lhs.entities != rhs.entities {
+            return false
+        }
+        if lhs.richText != rhs.richText {
             return false
         }
         if let lhsMedia = lhs.media, let rhsMedia = rhs.media {
@@ -125,6 +161,13 @@ public struct EngineMessageReplySubject: Codable, Equatable {
         self.quote = quote
         self.innerSubject = innerSubject
     }
+}
+
+/// The reply a resend asks for: the stored attribute's, keeping its quote only if the original asked
+/// for one. A cross-chat reply stores the replied message's text as a display-only quote
+/// (`isQuote == false`), which the original send never sent.
+func resentReplySubject(_ attribute: ReplyMessageAttribute) -> EngineMessageReplySubject {
+    return EngineMessageReplySubject(messageId: attribute.messageId, quote: attribute.isQuote ? attribute.quote : nil, innerSubject: attribute.innerSubject)
 }
 
 public enum EnqueueMessage {
@@ -221,6 +264,21 @@ private extension EnqueueMessage {
             return []
         }
     }
+}
+
+/// A forward's local echo of `media` (widget-sandbox v0.2, design §4 call 10): a widget as the copy the server will make
+/// (`TelegramMediaWidget.forwardedCopy`), anything else as it is.
+func forwardedMediaForLocalEcho(_ media: Media) -> Media {
+    if let widget = media as? TelegramMediaWidget {
+        return widget.forwardedCopy()
+    }
+    return media
+}
+
+/// Whether a forward keeps its sender's header even under "hide sender names" (widget-sandbox v0.2, tgw-format.md: a
+/// widget is never forwarded without its author; the server keeps the header): a message with a widget.
+func forwardKeepsSenderHeader(media: [Media]) -> Bool {
+    return media.contains(where: { $0 is TelegramMediaWidget })
 }
 
 func augmentMediaWithReference(_ mediaReference: AnyMediaReference) -> Media {
@@ -523,7 +581,13 @@ private func replyMessageAttributeForEphemeralOutgoingMessage(transaction: Trans
                     break
                 }
             }
-            quote = EngineMessageReplyQuote(text: replyMessage.text, offset: nil, entities: messageTextEntitiesInRange(entities: replyMessage.textEntitiesAttribute?.entities ?? [], range: NSRange(location: 0, length: nsText.length), onlyQuoteable: true), media: replyMedia)
+            if let richText = replyMessage.richText {
+                // A rich message has no `text`: show the head of its page instead. Display only, like the
+                // flat quote below: `isQuote` was settled above and only `isQuote` quotes are sent.
+                quote = richText.instantPage.wholeRichReplyQuote(maxLength: quoteMaxLength(appConfig: currentAppConfiguration(transaction: transaction)), media: replyMedia)
+            } else {
+                quote = EngineMessageReplyQuote(text: replyMessage.text, offset: nil, entities: messageTextEntitiesInRange(entities: replyMessage.textEntitiesAttribute?.entities ?? [], range: NSRange(location: 0, length: nsText.length), onlyQuoteable: true), media: replyMedia)
+            }
         }
     }
 
@@ -2230,7 +2294,7 @@ private func ghostBaseBuildProtectedForward(outgoing: EnqueueMessage, source: Me
         correlationId: correlationId, bubbleUpEmojiOrStickersets: [])
 }
 
-private func ghostBaseProtectedLocalMedia(account: Account, source: Message, canSendPolls: Bool, canSendTodos: Bool) -> Signal<AnyMediaReference?, NoError> {
+private func ghostBaseProtectedLocalMedia(account: Account, source: Message, canSendPolls: Bool, canSendTodos: Bool, localOnly: Bool = false) -> Signal<AnyMediaReference?, NoError> {
     guard let media = source.media.first, source.media.count == 1 else { return .single(nil) }
     if let structured = ghostBaseStaticDeletedMedia(media: media) { return .single(structured) }
     if media is TelegramMediaPoll || media is TelegramMediaTodo {
@@ -2272,6 +2336,8 @@ private func ghostBaseProtectedLocalMedia(account: Account, source: Message, can
     |> take(1)
     |> mapToSignal { cached -> Signal<AnyMediaReference?, NoError> in
         if cached.complete { return .single(localCopy(cached)) }
+        // A retained source is inaccessible: copy received bytes only, without fetching it again.
+        if localOnly { return .single(nil) }
         return Signal { subscriber in
             let disposables = DisposableSet()
             disposables.add(mediaBox.resourceData(resource, option: .complete(waitUntilFetchStatus: true)).start(next: { data in
@@ -2292,8 +2358,7 @@ private func ghostBaseProtectedLocalMedia(account: Account, source: Message, can
 private func ghostBaseResolveProtectedForwards(account: Account, peerId: PeerId, messages: [EnqueueMessage]) -> Signal<[EnqueueMessage]?, NoError> {
     let enabled = (JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.Enabled") as? Bool) ?? true
     let chatForward = (JerkgramHotSettings.object(forKey: "jerkgram.ProtectedContent.ChatForward") as? Bool) ?? true
-    guard enabled && chatForward,
-        (peerId.namespace == Namespaces.Peer.CloudUser || peerId.namespace == Namespaces.Peer.CloudGroup || peerId.namespace == Namespaces.Peer.CloudChannel),
+    guard (peerId.namespace == Namespaces.Peer.CloudUser || peerId.namespace == Namespaces.Peer.CloudGroup || peerId.namespace == Namespaces.Peer.CloudChannel),
         messages.contains(where: { if case .forward = $0 { return true }; return false }) else { return .single(messages) }
     return account.postbox.transaction { transaction -> [(EnqueueMessage, Message?, Int64?, UserLimitsConfiguration, Bool, Bool, Peer?)] in
         let config = transaction.getPreferencesEntry(key: PreferencesKeys.appConfiguration)?.get(AppConfiguration.self) ?? .defaultValue
@@ -2321,7 +2386,11 @@ private func ghostBaseResolveProtectedForwards(account: Account, peerId: PeerId,
             let protected = ghostBaseProtectedForwardEnabled(enabled: enabled, chatForward: chatForward,
                 messageProtected: source.isCopyProtected(), peerProtected: actualPeer?.isCopyProtectionEnabled == true,
                 dmProtected: dmProtected, myDmProtected: false, channelRestricted: channelRestricted)
-            guard protected else { return (outgoing, nil, nil, limits, polls, todos, nil) }
+            // Forwarding OUT of retained history uses the existing portable copy transport.
+            // Keep the source kicked/removed and send a new message to the chosen target.
+            let hasCopyRestriction = source.isCopyProtected() || actualPeer?.isCopyProtectionEnabled == true || dmProtected || channelRestricted
+            let retainedCopy = id.peerId != peerId && jerkgramIsRetainedExcludedChat(actualPeer) && !hasCopyRestriction
+            guard protected || retainedCopy else { return (outgoing, nil, nil, limits, polls, todos, nil) }
             return (outgoing, source, forwardGroupingKey(grouping: grouping, sourceGroupingKey: source.groupingKey, generatedKeys: &groupingKeys), limits, polls, todos, actualPeer)
         }
     }
@@ -2334,7 +2403,7 @@ private func ghostBaseResolveProtectedForwards(account: Account, peerId: PeerId,
                 if source.media.isEmpty {
                     return .single(ghostBaseBuildProtectedForward(outgoing: outgoing, source: source, mediaReference: nil, groupingKey: grouping, limits: limits, languageCode: languageCode, sourcePeer: sourcePeer))
                 }
-                return ghostBaseProtectedLocalMedia(account: account, source: source, canSendPolls: polls, canSendTodos: todos)
+                return ghostBaseProtectedLocalMedia(account: account, source: source, canSendPolls: polls, canSendTodos: todos, localOnly: jerkgramIsRetainedExcludedChat(sourcePeer))
                 |> map { media -> EnqueueMessage? in
                     guard media != nil || ghostBaseProtectedForwardAllowsTextFallback(source.media.first) else { return nil }
                     return ghostBaseBuildProtectedForward(outgoing: outgoing, source: source, mediaReference: media, groupingKey: grouping, limits: limits, languageCode: languageCode, sourcePeer: sourcePeer)
@@ -2400,7 +2469,7 @@ public func resendMessages(account: Account, messageIds: [MessageId]) -> Signal<
                     var forwardSource: MessageId?
                     inner: for attribute in message.attributes {
                         if let attribute = attribute as? ReplyMessageAttribute {
-                            replyToMessageId = EngineMessageReplySubject(messageId: attribute.messageId, quote: attribute.quote, innerSubject: attribute.innerSubject)
+                            replyToMessageId = resentReplySubject(attribute)
                         } else if let attribute = attribute as? ReplyStoryAttribute {
                             replyToStoryId = attribute.storyId
                         } else if let attribute = attribute as? OutgoingMessageInfoAttribute {
@@ -2431,6 +2500,10 @@ public func resendMessages(account: Account, messageIds: [MessageId]) -> Signal<
 }
 
 func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId, messages: [(Bool, EnqueueMessage)], disableAutoremove: Bool = false, transformGroupingKeysWithPeerId: Bool = false) -> [MessageId?] {
+    // All callers, including share/forward pickers, must respect the retained target boundary.
+    if jerkgramIsRetainedExcludedChat(transaction.getPeer(peerId)) {
+        return Array<MessageId?>(repeating: nil, count: messages.count)
+    }
     /**
      * If it is a support account, mark messages as read here as they are
      * not marked as read when chat is opened.
@@ -2445,6 +2518,19 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
         if let index = transaction.getTopPeerMessageIndex(peerId: peerId, namespace: namespace) {
             let _ = transaction.applyInteractiveReadMaxIndex(index)
         }
+    }
+    
+    // Sending to a user whose chat still shows the report/block panel ends its suspicious state
+    // (`CachedUserData.isSuspiciousPeer`): only the report and block flags go, so an Add Contact
+    // offer stays. A scheduled message reaches no one yet and changes nothing.
+    if peerId.namespace == Namespaces.Peer.CloudUser, messages.contains(where: { !$0.1.attributes.contains(where: { $0 is OutgoingScheduleInfoMessageAttribute }) }) {
+        transaction.updatePeerCachedData(peerIds: Set([peerId]), update: { _, current in
+            guard let current = current as? CachedUserData, current.isSuspiciousPeer, var peerStatusSettings = current.peerStatusSettings else {
+                return current
+            }
+            peerStatusSettings.flags.subtract(.suspiciousPeer)
+            return current.withUpdatedPeerStatusSettings(peerStatusSettings)
+        })
     }
     
     var forwardedMessageIds = Set<MessageId>()
@@ -2632,7 +2718,13 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                                         break
                                     }
                                 }
-                                quote = EngineMessageReplyQuote(text: replyMessage.text, offset: nil, entities: messageTextEntitiesInRange(entities: replyMessage.textEntitiesAttribute?.entities ?? [], range: NSRange(location: 0, length: nsText.length), onlyQuoteable: true), media: replyMedia)
+                                if let richText = replyMessage.richText {
+                                    // A rich message has no `text`: show the head of its page instead. Display only, like the
+                                    // flat quote below: `isQuote` was settled above and only `isQuote` quotes are sent.
+                                    quote = richText.instantPage.wholeRichReplyQuote(maxLength: quoteMaxLength(appConfig: currentAppConfiguration(transaction: transaction)), media: replyMedia)
+                                } else {
+                                    quote = EngineMessageReplyQuote(text: replyMessage.text, offset: nil, entities: messageTextEntitiesInRange(entities: replyMessage.textEntitiesAttribute?.entities ?? [], range: NSRange(location: 0, length: nsText.length), onlyQuoteable: true), media: replyMedia)
+                                }
                             }
                         }
                         attributes.append(ReplyMessageAttribute(messageId: replyToMessageId.messageId, threadMessageId: threadMessageId, quote: quote, isQuote: isQuote, innerSubject: replyToMessageId.innerSubject))
@@ -2861,6 +2953,9 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                             }
                         }
                         
+                        if sourceMessage.media.contains(where: { $0 is TelegramMediaWidget }) {
+                            hideSendersNames = false
+                        }
                         var hidesCaption = false
                         if hideCaptions {
                             for media in sourceMessage.media {
@@ -2925,7 +3020,7 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                                 }
                             }
                             
-                            if hideSendersNames {
+                            if hideSendersNames && !forwardKeepsSenderHeader(media: sourceMessage.media) {
                                 
                             } else if sourceMessage.id.namespace == Namespaces.Message.EphemeralLocal {
                                 forwardInfo = StoreMessageForwardInfo(authorId: ephemeralParams?.authorId ?? author.id, sourceId: nil, sourceMessageId: nil, date: sourceMessage.timestamp, authorSignature: nil, psaType: nil, flags: [])
@@ -3024,7 +3119,7 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
                         let localGroupingKey = forwardGroupingKey(grouping: grouping, sourceGroupingKey: sourceMessage.groupingKey, generatedKeys: &localGroupingKeyBySourceKey)
                         
                         var augmentedMediaList = sourceMessage.media.map { media -> Media in
-                            return augmentMediaWithReference(.message(message: MessageReference(sourceMessage), media: media))
+                            return forwardedMediaForLocalEcho(augmentMediaWithReference(.message(message: MessageReference(sourceMessage), media: media)))
                         }
                         
                         if peerId.namespace == Namespaces.Peer.SecretChat {
